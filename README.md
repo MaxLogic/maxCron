@@ -3,7 +3,11 @@
 # maxCron 
 Flexible, lightweight CRON compliant scheduler written in Delphi. 
 
-Main features:
+Homepage: https://maxlogic.eu/portfolio/maxcron-scheduler-for-delphi/
+
+
+
+## Main features:
 
 - Compatible with most of what CRON is offering
 - Setting the CRON is as simple as setting one string. Example below.
