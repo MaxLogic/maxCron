@@ -232,7 +232,7 @@ function MakePreview(const SchedulePlan: string; out Dates: TDates; Limit: integ
 implementation
 
 uses
-  dateUtils, math, dialogs, messages, controls, pawel1;
+  dateUtils, math, dialogs, messages, controls;
 
 const
   OneMinute = 1 / 24 / 60;
