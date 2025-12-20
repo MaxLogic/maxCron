@@ -553,7 +553,8 @@ begin
 
   // OR mode and both are restricted: accept if either matches.
   lDom := DayOf(NextDate);
-  lDow := DayOfTheWeek(NextDate);
+  // Cron-compatible: 0 = Sunday, 1 = Monday, ... 6 = Saturday.
+  lDow := DayOfTheWeek(NextDate) mod 7;
   lDomOk := (FDayOfTheMonth.NextVal(lDom) = lDom);
   lDowOk := (FDayOfTheWeek.NextVal(lDow) = lDow);
   if lDomOk or lDowOk then
@@ -726,8 +727,9 @@ begin
       end;
     ckDayOfTheWeek:
       begin
-        FValidFrom := 1; // Manday
-        FValidTo := 7;
+        // Cron-compatible: 0 = Sunday, 1 = Monday, ... 6 = Saturday. We also accept 7 as Sunday (normalized to 0).
+        FValidFrom := 0;
+        FValidTo := 6;
       end;
     ckYear:
       begin
@@ -811,6 +813,14 @@ var
 begin
   Clear;
 
+  if Trim(FData) = '' then
+  begin
+    fFullrange := True;
+    fRange := NIL;
+    FCount := 0;
+    Exit;
+  end;
+
   if FData = '*' then
   begin
     fFullrange := True;
@@ -841,11 +851,33 @@ end;
 procedure TCronPart.ParsePart(const Value: string);
 var
   iR: integer;
-  RangeTo: word;
-  RangeFrom: word;
-  i: integer;
+  RangeTo: Integer;
+  RangeFrom: Integer;
+  i: Integer;
   s: string;
   Repeater: integer;
+  iS: Integer;
+
+  function NormalizeDow(const aValue: Integer): Integer;
+  begin
+    if fPartKind <> ckDayOfTheWeek then
+      Exit(aValue);
+    if aValue = 7 then
+      Exit(0);
+    Exit(aValue);
+  end;
+
+  procedure AddRange(const aFrom, aTo, aStep: Integer);
+  var
+    v: Integer;
+  begin
+    v := aFrom;
+    while v <= aTo do
+    begin
+      Add2Range(v);
+      Inc(v, aStep);
+    end;
+  end;
 begin
 
   s := Trim(Value);
@@ -858,36 +890,54 @@ begin
       s := ReplaceDaynames(s);
   end;
 
-  iR := Pos('-', s);
-  if (iR > 1) or (s[1] = '*') then
+  iS := Pos('/', s);
+  if iS > 0 then
   begin
-    i := Pos('/', s);
-    if i > 1 then
-    begin
-      Repeater := StrToInt(copy(s, i + 1, length(s)));
-      s := copy(s, 1, i - 1);
-    end
+    Repeater := StrToInt(Copy(s, iS + 1, MaxInt));
+    if Repeater <= 0 then
+      raise Exception.Create('Invalid cron step');
+    s := Copy(s, 1, iS - 1);
+  end else
+    Repeater := 1;
+
+  iR := Pos('-', s);
+  if s = '*' then
+  begin
+    RangeFrom := FValidFrom;
+    RangeTo := FValidTo;
+  end else if iR > 0 then
+  begin
+    RangeFrom := StrToInt(Copy(s, 1, iR - 1));
+    RangeTo := StrToInt(Copy(s, iR + 1, MaxInt));
+  end else
+  begin
+    RangeFrom := StrToInt(s);
+    if iS > 0 then
+      RangeTo := FValidTo // n/k => n..max
     else
-      Repeater := 1;
+      RangeTo := RangeFrom;
+  end;
 
-    if iR > 0 then
+  RangeFrom := NormalizeDow(RangeFrom);
+  RangeTo := NormalizeDow(RangeTo);
+
+  if (RangeFrom < FValidFrom) or (RangeFrom > FValidTo) then
+    raise Exception.Create('Cron value out of range');
+  if (RangeTo < FValidFrom) or (RangeTo > FValidTo) then
+    raise Exception.Create('Cron value out of range');
+
+  if (iR > 0) and (RangeTo < RangeFrom) then
+  begin
+    if fPartKind = ckDayOfTheWeek then
     begin
-      RangeFrom := StrToInt(copy(s, 1, iR - 1));
-      RangeTo := StrToInt(copy(s, iR + 1, length(s)));
-    end else begin
-      RangeFrom := FValidFrom;
-      RangeTo := FValidTo;
+      AddRange(RangeFrom, FValidTo, Repeater);
+      AddRange(FValidFrom, RangeTo, Repeater);
+      Exit;
     end;
+    raise Exception.Create('Invalid cron range');
+  end;
 
-    i := RangeFrom;
-    repeat
-      self.Add2Range(i);
-      inc(i, Repeater);
-    until i > RangeTo;
-
-  end
-  else
-    Add2Range(StrToInt(s));
+  AddRange(RangeFrom, RangeTo, Repeater);
 end;
 
 function TCronPart.PushDayOfMonth(var NextDate: TDateTime): boolean;
@@ -927,7 +977,8 @@ begin
   Result := True;
   if not Fullrange then
   begin
-    v := DayOfTheWeek(NextDate);
+    // Cron-compatible: 0 = Sunday, 1 = Monday, ... 6 = Saturday.
+    v := DayOfTheWeek(NextDate) mod 7;
     i := NextVal(v);
     if i <> v then
     begin
@@ -1064,7 +1115,13 @@ var
 begin
   s := Value;
   for x := 1 to 7 do
-    s := StringReplace(s, DayNames[x], IntToStr(x), [rfReplaceAll, rfIgnorecase]);
+  begin
+    // Cron-compatible: Sun = 0 (also accept 7 as Sunday numerically in ParsePart)
+    if x = 7 then
+      s := StringReplace(s, DayNames[x], '0', [rfReplaceAll, rfIgnorecase])
+    else
+      s := StringReplace(s, DayNames[x], IntToStr(x), [rfReplaceAll, rfIgnorecase]);
+  end;
   Result := s;
 end;
 

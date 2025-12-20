@@ -172,7 +172,7 @@ The following graph shows what the format that maxCron uses consists of:
 | | | | | | | +-- ExecutionLimit    (range 0 - 0xffffffff. Default 0 = unlimited)
 | | | | | | +---- Seconds           (range 0 - 59. Default 0)
 | | | | | +------ Year              (range: 1900-3000)
-| | | | +-------- Day of the Week   (range: 1-7, 1 standing for Monday)
+| | | | +-------- Day of the Week   (range: 0-7, 0/7 standing for Sunday; 1=Monday..6=Saturday)
 | | | +---------- Month of the Year (range: 1-12)
 | | +------------ Day of the Month  (range: 1-31)
 | +-------------- Hour              (range: 0-23)

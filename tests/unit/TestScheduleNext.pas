@@ -24,6 +24,9 @@ type
 
     [Test]
     procedure Next_DomDow_OrVsAnd;
+
+    [Test]
+    procedure Next_Dow_Sunday_ZeroOrSeven;
   end;
 
 implementation
@@ -102,6 +105,35 @@ begin
     Plan.DayMatchMode := dmAnd;
     Assert.IsTrue(Plan.FindNextScheduleDate(Base, NextDt));
     Assert.AreEqual(EncodeDateTime(2025, 9, 1, 0, 0, 0, 0), NextDt, 0.0);
+  finally
+    Plan.Free;
+  end;
+end;
+
+procedure TTestScheduleNext.Next_Dow_Sunday_ZeroOrSeven;
+var
+  Plan: TCronSchedulePlan;
+  Next0: TDateTime;
+  Next7: TDateTime;
+  NextName: TDateTime;
+  Base: TDateTime;
+begin
+  Base := EncodeDateTime(2025, 1, 1, 0, 0, 0, 0); // Wednesday
+
+  Plan := TCronSchedulePlan.Create;
+  try
+    Plan.Parse('0 0 * * 0 * 0 0'); // Sunday = 0
+    Assert.IsTrue(Plan.FindNextScheduleDate(Base, Next0));
+
+    Plan.Parse('0 0 * * 7 * 0 0'); // Sunday = 7 (alias)
+    Assert.IsTrue(Plan.FindNextScheduleDate(Base, Next7));
+
+    Plan.Parse('0 0 * * Sun * 0 0'); // Sunday by name
+    Assert.IsTrue(Plan.FindNextScheduleDate(Base, NextName));
+
+    Assert.AreEqual(Next0, Next7, 0.0);
+    Assert.AreEqual(Next0, NextName, 0.0);
+    Assert.AreEqual(EncodeDateTime(2025, 1, 5, 0, 0, 0, 0), Next0, 0.0); // next Sunday
   finally
     Plan.Free;
   end;
