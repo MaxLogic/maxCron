@@ -1,4 +1,4 @@
-program maxCronTests;
+program maxCronStressTests;
 
 {$APPTYPE CONSOLE}
 
@@ -10,16 +10,7 @@ uses
   DUnitX.Loggers.Console,
   DUnitX.RunResults,
   maxCron in '..\maxCron.pas',
-  TestCronInvalidCorpus in 'unit\TestCronInvalidCorpus.pas',
-  TestCronParsing in 'unit\TestCronParsing.pas',
-  TestCronUtilsCorpus in 'unit\TestCronUtilsCorpus.pas',
-  TestExecutionLimit in 'unit\TestExecutionLimit.pas',
-  TestInvokeModes in 'unit\TestInvokeModes.pas',
-  TestLifecycle in 'unit\TestLifecycle.pas',
-  TestMaxCron in 'unit\TestMaxCron.pas',
-  TestScheduleNext in 'unit\TestScheduleNext.pas',
-  TestStress in 'unit\TestStress.pas',
-  TestValidRange in 'unit\TestValidRange.pas';
+  TestHeavyStress in 'unit\TestHeavyStress.pas';
 
 var
   Runner: ITestRunner;
@@ -42,3 +33,4 @@ begin
     end;
   end;
 end.
+

@@ -2365,7 +2365,8 @@ begin
   // preprocess the string
   s := StringReplace(s, '*', ' *', [rfReplaceAll]);
   s := StringReplace(s, ', ', ',', [rfReplaceAll]);
-  s := StringReplace(s, '  ', ' ', [rfReplaceAll]);
+  while Pos('  ', s) > 0 do
+    s := StringReplace(s, '  ', ' ', [rfReplaceAll]);
   s := Trim(s);
 
   l := TStringList.Create;
@@ -2373,6 +2374,11 @@ begin
     l.Delimiter := ' ';
     l.StrictDelimiter := True;
     l.DelimitedText := s;
+
+    if l.Count < 5 then
+      raise Exception.Create('Cron plan must have at least 5 fields');
+    if l.Count > Length(parts) then
+      raise Exception.Create('Cron plan has too many fields');
 
     for x := 0 to Min(Length(parts), l.Count) - 1 do
       parts[x] := l[x];

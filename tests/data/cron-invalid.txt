@@ -1,0 +1,30 @@
+# Negative cron corpus (expected to fail parsing in maxCron).
+# Format: one cron expression per line. Lines starting with # are comments.
+
+# Empty token / trailing comma
+1,2, * * * * *
+
+# Bad range syntax
+1- * * * * *
+- * * * * *
+
+# Out-of-range values
+0 0 32 * * * 0 0
+0 0 0 * * * 0 0
+0 0 31 13 * * 0 0
+0 0 * 0 * * 0 0
+0 0 * * 8 * 0 0
+0 0 * * -1 * 0 0
+
+# Invalid step
+*/0 * * * * *
+0/0 * * * * *
+0/-1 * * * * *
+
+# Too few / too many fields
+0 0 1 *
+0 0 1 * * * * * *
+
+# Unsupported quartz tokens
+0 0 0 25 12 ?
+0 0 0 L 12 ?

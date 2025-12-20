@@ -109,6 +109,11 @@ NewSchedule.DayMatchMode := dmOr;
 
 DUnitX tests live under `tests/` (runner: `tests/maxCronTests.dpr`).
 Our upstream-derived cron corpus used by tests is stored in `tests/data/cron-utils-unix-5field.txt`.
+Negative corpus (expected to fail parse) is stored in `tests/data/cron-invalid.txt`.
+
+Optional runners:
+- `tests/maxCronVclTests.dpr` (GUI/VCL message pump; tests `ctVcl` / `ctAuto` behavior)
+- `tests/maxCronStressTests.dpr` (heavier concurrency stress tests; ~30s)
 
 # using the TCronSchedulePlan:
 The TPlan is a small class that allows you to specify the parts in a more friendly way and then convert them to a cron string
