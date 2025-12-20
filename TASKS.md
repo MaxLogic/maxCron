@@ -2,6 +2,16 @@
 
 ## In Progress
 
+## Next – Today
+
+## Next – This Week
+
+## Next – Later
+
+## Blocked
+
+## Done
+
 ### T-001 Expand maxCron test coverage
 Summary: Add parser, schedule, invoke-mode, lifecycle, and range tests to cover our new execution/overlap features.
 
@@ -15,16 +25,6 @@ Details:
 - Ranges: ValidFrom/ValidTo and ExecutionLimit semantics.
 
 Likely files to touch/read: `tests/`, `maxCron.pas`, `README.md`
-
-## Next – Today
-
-## Next – This Week
-
-## Next – Later
-
-## Blocked
-
-## Done
 
 ### T-000 Add initial DUnitX runner + overlap tests
 Summary: Added DUnitX runner and initial overlap tests (serialize vs serialize-coalesce) plus basic MakePreview check.
