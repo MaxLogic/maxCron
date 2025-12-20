@@ -7,8 +7,13 @@ unit maxCron;
 
 interface
 
+// TThread.ForceQueue is not available in XE8 and older
+{$IF CompilerVersion <= 29.0}
+{$DEFINE ForceQueueNotAvailable}
+{$ENDIF}
+
 uses
-  System.Classes, System.Generics.Collections, System.SysUtils;
+  System.Classes, System.Generics.Collections, System.SysUtils, System.SyncObjs;
 
 Type
   // forward declarations
@@ -18,6 +23,26 @@ Type
 
   TmaxCronNotifyEvent = procedure(Sender: TmaxCronEvent) of object;
   TmaxCronNotifyProc = reference to procedure(Sender: TmaxCronEvent);
+
+  TmaxCronInvokeMode = (
+    imDefault,    // use scheduler DefaultInvokeMode
+    imMainThread, // execute on VCL main thread (ForceQueue/Queue when needed)
+    imMaxAsync,   // execute via MaxLogicFoundation maxAsync.SimpleAsyncCall
+    imTTask,      // execute via System.Threading.TTask.Run
+    imThread      // execute via TThread.CreateAnonymousThread
+    );
+
+  TmaxCronOverlapMode = (
+    omAllowOverlap,    // schedule fires can overlap
+    omSkipIfRunning,   // if previous execution is still running, skip this fire
+    omSerialize,       // queue fires and run them one-by-one (per event)
+    omSerializeCoalesce // like omSerialize, but coalesces backlog to max 1
+    );
+
+  // How to combine Day-of-Month (DOM) and Day-of-Week (DOW) when both are restricted (not '*').
+  // - dmAnd: both must match (legacy maxCron behavior)
+  // - dmOr:  either may match (crontab/Vixie-style behavior)
+  TmaxCronDayMatchMode = (dmDefault, dmAnd, dmOr);
 
   TmaxCronTimerBackend = (ctAuto, ctVcl, ctPortable);
 
@@ -32,16 +57,29 @@ Type
   private
     fRequestedTimerBackend: TmaxCronTimerBackend;
     fActiveTimerBackend: TmaxCronTimerBackend;
+    fDefaultInvokeMode: TmaxCronInvokeMode;
+    fDefaultDayMatchMode: TmaxCronDayMatchMode;
+    procedure SetDefaultDayMatchMode(const Value: TmaxCronDayMatchMode);
     fTimer: ICronTimer;
     fItems: TObjectList<TmaxCronEvent>;
+    fItemsLock: TCriticalSection;
+    fPendingFree: TList<TmaxCronEvent>;
+    fTickDepth: Integer;
     fTickQueued: Integer;
     fQueueToken: IInterface;
+    fAsyncKeepAlive: TList<IInterface>;
+    fAsyncLock: TCriticalSection;
     function GetCount: integer;
     function GetEvents(index: integer): TmaxCronEvent;
     procedure TimerTimer(Sender: TObject);
     procedure CreateTimer(const aRequestedBackend: TmaxCronTimerBackend);
     procedure DoTick;
+    procedure DoTickAt(const aNow: TDateTime);
     procedure QueueTick;
+    procedure KeepAsyncAlive(const aAsync: IInterface);
+    procedure ReleaseAsyncAlive(const aAsync: IInterface);
+    procedure FlushPendingFree;
+    procedure FlushPendingFreeLocked;
 
   public
     constructor Create; overload;
@@ -62,10 +100,18 @@ Type
     property Events[index: integer]: TmaxCronEvent read GetEvents;
     property RequestedTimerBackend: TmaxCronTimerBackend read fRequestedTimerBackend;
     property ActiveTimerBackend: TmaxCronTimerBackend read fActiveTimerBackend;
+    property DefaultInvokeMode: TmaxCronInvokeMode read fDefaultInvokeMode write fDefaultInvokeMode;
+    property DefaultDayMatchMode: TmaxCronDayMatchMode read fDefaultDayMatchMode write SetDefaultDayMatchMode;
+
+    {$IFDEF MAXCRON_TESTS}
+    procedure TickAt(const aNow: TDateTime);
+    {$ENDIF}
   end;
 
   TmaxCronEvent = class(TObject)
   private
+    fCron: TmaxCron;
+    fCronToken: IInterface;
     fScheduler: TCronSchedulePlan;
     FEventPlan: string;
 
@@ -83,6 +129,15 @@ Type
     FOnScheduleProc: TmaxCronNotifyProc;
     fNumOfExecutions: uint64;
     fLastExecutionTime: TDateTime;
+    fInvokeMode: TmaxCronInvokeMode;
+    fLock: TCriticalSection;
+    fEventToken: IInterface;
+    fOverlapMode: TmaxCronOverlapMode;
+    fDayMatchMode: TmaxCronDayMatchMode;
+    fRunning: Integer;
+    fPendingRuns: Integer;
+    fExecDepth: Integer;
+    fPendingDestroy: Boolean;
     procedure SetName(const Value: string);
     procedure SetOnScheduleEvent(const Value: TmaxCronNotifyEvent);
     procedure SetTag(const Value: integer);
@@ -94,9 +149,26 @@ Type
     procedure SetValidTo(const Value: TDateTime);
     procedure SetUserDataInterface(const Value: iInterface);
     procedure SetOnScheduleProc(const Value: TmaxCronNotifyProc);
+    procedure SetInvokeMode(const Value: TmaxCronInvokeMode);
+    procedure SetOverlapMode(const Value: TmaxCronOverlapMode);
+    procedure SetDayMatchMode(const Value: TmaxCronDayMatchMode);
+    function GetEnabled: boolean;
+    function GetNextSchedule: TDateTime;
+    function GetLastExecution: TDateTime;
+    function GetNumOfExecutionsPerformed: uint64;
+    function GetEffectiveInvokeMode: TmaxCronInvokeMode;
+    function GetOverlapMode: TmaxCronOverlapMode;
+    function GetDayMatchMode: TmaxCronDayMatchMode;
+    procedure DispatchCallbacks(const aInvokeMode: TmaxCronInvokeMode;
+      const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
+      const aOverlapMode: TmaxCronOverlapMode);
+    function TryAcquireExecution: Boolean;
+    procedure ReleaseExecution;
+    procedure MarkPendingDestroy;
+    function CanFreeNow: Boolean;
 
     // this is the main function that will be called by the TmaxCron in a timer
-    procedure checkTimer;
+    procedure checkTimer(const aNow: TDateTime);
     procedure ResetSchedule;
   public
     constructor Create;
@@ -106,9 +178,9 @@ Type
     procedure Stop;
 
     property EventPlan: string read FEventPlan write SetEventPlan;
-    property NextSchedule: TDateTime read fNextSchedule;
+    property NextSchedule: TDateTime read GetNextSchedule;
     property Name: string read FName write SetName;
-    property LastExecution: TDateTime read fLastExecutionTime;
+    property LastExecution: TDateTime read GetLastExecution;
 
     // User data
     property Tag: integer read FTag write SetTag;
@@ -119,10 +191,13 @@ Type
     // you can use an anonymous method as well
     property OnScheduleProc: TmaxCronNotifyProc read FOnScheduleProc write SetOnScheduleProc;
 
-    property Enabled: boolean read FEnabled write SetEnabled;
+    property Enabled: boolean read GetEnabled write SetEnabled;
+    property InvokeMode: TmaxCronInvokeMode read fInvokeMode write SetInvokeMode;
+    property OverlapMode: TmaxCronOverlapMode read GetOverlapMode write SetOverlapMode;
+    property DayMatchMode: TmaxCronDayMatchMode read GetDayMatchMode write SetDayMatchMode;
 
     // tels how many times this event was executed
-    property NumOfExecutionsPerformed: uint64 read fNumOfExecutions;
+    property NumOfExecutionsPerformed: uint64 read GetNumOfExecutionsPerformed;
 
     Property ValidFrom: TDateTime read FValidFrom write SetValidFrom;
     property ValidTo: TDateTime read FValidTo write SetValidTo;
@@ -210,6 +285,7 @@ Type
     FDayOfTheWeek: TCronPart;
     FYear: TCronPart;
     fExecutionLimit: LongWord;
+    fDayMatchMode: TmaxCronDayMatchMode;
 
     function GetParts(PartKind: TPartKind): TCronPart;
     procedure SetDayOfTheMonth(const Value: TCronPart);
@@ -220,6 +296,7 @@ Type
     procedure SetParts(PartKind: TPartKind; const Value: TCronPart);
     procedure SetSecond(const Value: TCronPart);
     procedure SetYear(const Value: TCronPart);
+    function PushDomDow(var NextDate: TDateTime): boolean;
   public
     Constructor Create;
     Destructor Destroy; override;
@@ -241,6 +318,7 @@ Type
     property Year: TCronPart read FYear write SetYear;
     property parts[PartKind: TPartKind]: TCronPart read GetParts write SetParts;
     property ExecutionLimit: LongWord read fExecutionLimit;
+    property DayMatchMode: TmaxCronDayMatchMode read fDayMatchMode write fDayMatchMode;
   end;
 
   TDates = array of TDateTime;
@@ -251,9 +329,9 @@ function MakePreview(const SchedulePlan: string; out Dates: TDates; Limit: integ
 implementation
 
 uses
-  System.DateUtils, System.Math, System.SyncObjs,
+  System.DateUtils, System.Math, System.SyncObjs, System.Threading,
   Vcl.ExtCtrls,
-  MaxLogic.PortableTimer;
+  MaxLogic.PortableTimer, maxAsync;
 
 type
   ICronQueueToken = interface
@@ -293,6 +371,23 @@ type
     procedure Start(const aIntervalMs: Cardinal);
     procedure Stop;
     procedure SetOnTimer(const aValue: TNotifyEvent);
+  end;
+
+  ICronEventToken = interface
+    ['{1AD0B7CE-0C85-4490-9B3E-3E0E1C6115E6}']
+    procedure Detach;
+    function TryGetEvent(out aEvent: TmaxCronEvent): Boolean;
+  end;
+
+  TCronEventToken = class(TInterfacedObject, ICronEventToken)
+  private
+    fLock: TCriticalSection;
+    fEvent: TmaxCronEvent;
+  public
+    constructor Create(aEvent: TmaxCronEvent);
+    destructor Destroy; override;
+    procedure Detach;
+    function TryGetEvent(out aEvent: TmaxCronEvent): Boolean;
   end;
 
 const
@@ -368,7 +463,8 @@ var
 begin
   inherited;
 
-  for pk := low(pk) to High(pk) do
+  fDayMatchMode := TmaxCronDayMatchMode.dmAnd;
+  for pk := Low(TPartKind) to High(TPartKind) do
     parts[pk] := TCronPart.Create(pk);
 end;
 
@@ -376,7 +472,7 @@ destructor TCronSchedulePlan.Destroy;
 var
   pk: TPartKind;
 begin
-  for pk := low(pk) to High(pk) do
+  for pk := Low(TPartKind) to High(TPartKind) do
     parts[pk].Free;
   inherited;
 end;
@@ -419,16 +515,63 @@ begin
       Exit;
 
     if FMonth.PushMonth(aNextDateTime) then
-      if FDayOfTheMonth.PushDayOfMonth(aNextDateTime) then
-        if FDayOfTheWeek.PushDayOfWeek(aNextDateTime) then
-          if FHour.PushHour(aNextDateTime) then
-            if FMinute.PushMinute(aNextDateTime) then
-              if FSecond.PushSecond(aNextDateTime) then
-              begin
-                Exit(True);
-              end;
+      if PushDomDow(aNextDateTime) then
+        if FHour.PushHour(aNextDateTime) then
+          if FMinute.PushMinute(aNextDateTime) then
+            if FSecond.PushSecond(aNextDateTime) then
+            begin
+              Exit(True);
+            end;
 
   end;
+end;
+
+function TCronSchedulePlan.PushDomDow(var NextDate: TDateTime): boolean;
+var
+  lMode: TmaxCronDayMatchMode;
+  lDomOk: Boolean;
+  lDowOk: Boolean;
+  lDomCandidate: TDateTime;
+  lDowCandidate: TDateTime;
+  lDom: Word;
+  lDow: Word;
+begin
+  Result := True;
+
+  lMode := fDayMatchMode;
+  if lMode = TmaxCronDayMatchMode.dmDefault then
+    lMode := TmaxCronDayMatchMode.dmAnd;
+
+  // If either part is full range, "OR" reduces to the other constraint.
+  if (lMode = TmaxCronDayMatchMode.dmAnd) or FDayOfTheMonth.Fullrange or FDayOfTheWeek.Fullrange then
+  begin
+    Result := FDayOfTheMonth.PushDayOfMonth(NextDate);
+    if Result then
+      Result := FDayOfTheWeek.PushDayOfWeek(NextDate);
+    Exit;
+  end;
+
+  // OR mode and both are restricted: accept if either matches.
+  lDom := DayOf(NextDate);
+  lDow := DayOfTheWeek(NextDate);
+  lDomOk := (FDayOfTheMonth.NextVal(lDom) = lDom);
+  lDowOk := (FDayOfTheWeek.NextVal(lDow) = lDow);
+  if lDomOk or lDowOk then
+    Exit(True);
+
+  // Otherwise, advance to the earliest next date that satisfies DOM or DOW.
+  lDomCandidate := NextDate;
+  lDowCandidate := NextDate;
+
+  FDayOfTheMonth.PushDayOfMonth(lDomCandidate);
+  FDayOfTheWeek.PushDayOfWeek(lDowCandidate);
+
+  if lDomCandidate <= lDowCandidate then
+    NextDate := lDomCandidate
+  else
+    NextDate := lDowCandidate;
+
+  Result := False;
 end;
 
 function TCronSchedulePlan.GetParts(PartKind: TPartKind): TCronPart;
@@ -676,20 +819,22 @@ begin
   end else begin
 
     l := TStringList.Create;
-    SplitString(FData, ',', l);
-    for x := 0 to l.Count - 1 do
-    begin
-      if l[x] = '*' then
+    try
+      SplitString(FData, ',', l);
+      for x := 0 to l.Count - 1 do
       begin
-        fFullrange := True;
-        fRange := NIL;
-        FCount := 0;
-      end
-      else
-        ParsePart(l[x]);
+        if l[x] = '*' then
+        begin
+          fFullrange := True;
+          fRange := NIL;
+          FCount := 0;
+        end
+        else
+          ParsePart(l[x]);
+      end;
+    finally
+      l.Free;
     end;
-
-    l.Free;
   end;
 end;
 
@@ -703,7 +848,9 @@ var
   Repeater: integer;
 begin
 
-  s := Value;
+  s := Trim(Value);
+  if s = '' then
+    raise Exception.Create('Invalid cron token');
   case fPartKind of
     ckMonth:
       s := ReplaceMonthNames(s);
@@ -946,6 +1093,15 @@ end;
 constructor TmaxCronEvent.Create;
 begin
   inherited;
+  fLock := TCriticalSection.Create;
+  fEventToken := TCronEventToken.Create(Self);
+  fInvokeMode := TmaxCronInvokeMode.imDefault;
+  fOverlapMode := TmaxCronOverlapMode.omAllowOverlap;
+  fDayMatchMode := TmaxCronDayMatchMode.dmDefault;
+  fRunning := 0;
+  fPendingRuns := 0;
+  fExecDepth := 0;
+  fPendingDestroy := False;
   FValidFrom := 0;
   FValidTo := 0;
   fScheduler := TCronSchedulePlan.Create;
@@ -953,8 +1109,14 @@ begin
 end;
 
 destructor TmaxCronEvent.Destroy;
+var
+  lToken: ICronEventToken;
 begin
+  if Supports(fEventToken, ICronEventToken, lToken) then
+    lToken.Detach;
+
   fScheduler.Free;
+  fLock.Free;
 
   inherited
 end;
@@ -971,7 +1133,7 @@ begin
   if not fScheduler.FindNextScheduleDate(dt,
     fNextSchedule,
     FValidFrom, FValidTo) then
-    Stop;
+    FEnabled := False;
 
 end;
 
@@ -979,34 +1141,48 @@ function TmaxCronEvent.Run: TmaxCronEvent;
 begin
   Result := self;
 
-  FEnabled := True;
-  fNumOfExecutions := 0;
-  fLastExecutionTime := 0;
-
-  self.ResetSchedule;
+  fLock.Acquire;
+  try
+    FEnabled := True;
+    fNumOfExecutions := 0;
+    fLastExecutionTime := 0;
+    ResetSchedule;
+  finally
+    fLock.Release;
+  end;
 end;
 
 procedure TmaxCronEvent.SetEnabled(const Value: boolean);
 begin
-  if FEnabled <> Value then
-  begin
-    FEnabled := Value;
-    case FEnabled of
-      True:
-        Run;
-      false:
-        Stop;
+  fLock.Acquire;
+  try
+    if FEnabled = Value then Exit;
+    if Value then
+    begin
+      FEnabled := True;
+      fNumOfExecutions := 0;
+      fLastExecutionTime := 0;
+      ResetSchedule;
+    end else begin
+      FEnabled := False;
     end;
+  finally
+    fLock.Release;
   end;
 end;
 
 procedure TmaxCronEvent.SetEventPlan(const Value: string);
 begin
-  if FEventPlan <> Value then
-  begin
-    FEventPlan := Value;
-    fScheduler.Parse(Value);
-    ResetSchedule;
+  fLock.Acquire;
+  try
+    if FEventPlan <> Value then
+    begin
+      FEventPlan := Value;
+      fScheduler.Parse(Value);
+      ResetSchedule;
+    end;
+  finally
+    fLock.Release;
   end;
 end;
 
@@ -1017,16 +1193,25 @@ end;
 
 procedure TmaxCronEvent.SetOnScheduleEvent(const Value: TmaxCronNotifyEvent);
 begin
-  self.FOnScheduleEvent := Value;
+  fLock.Acquire;
+  try
+    self.FOnScheduleEvent := Value;
+  finally
+    fLock.Release;
+  end;
 end;
 
 procedure TmaxCronEvent.SetNumOfExecutions(const Value: uint64);
 begin
-  fNumOfExecutions := Value;
-  if fScheduler.ExecutionLimit <> 0 then
-    if fNumOfExecutions >= fScheduler.ExecutionLimit then
-      Stop;
-
+  fLock.Acquire;
+  try
+    fNumOfExecutions := Value;
+    if fScheduler.ExecutionLimit <> 0 then
+      if fNumOfExecutions >= fScheduler.ExecutionLimit then
+        FEnabled := False;
+  finally
+    fLock.Release;
+  end;
 end;
 
 procedure TmaxCronEvent.SetTag(const Value: integer);
@@ -1056,7 +1241,12 @@ end;
 
 procedure TmaxCronEvent.Stop;
 begin
-  FEnabled := false;
+  fLock.Acquire;
+  try
+    FEnabled := False;
+  finally
+    fLock.Release;
+  end;
 end;
 
 { TSchEventList }
@@ -1066,14 +1256,37 @@ var
   event: TmaxCronEvent;
 begin
   event := TmaxCronEvent.Create;
+  event.fCron := Self;
+  event.fCronToken := fQueueToken;
+  event.fScheduler.DayMatchMode := fDefaultDayMatchMode;
   event.Name := aName;
   Result := event;
-  fItems.Add(event);
+  fItemsLock.Acquire;
+  try
+    fItems.Add(event);
+  finally
+    fItemsLock.Release;
+  end;
 end;
 
 procedure TmaxCron.Clear;
 begin
-  fItems.Clear;
+  fItemsLock.Acquire;
+  try
+    Inc(fTickDepth);
+    try
+      while fItems.Count > 0 do
+      begin
+        fItems[0].MarkPendingDestroy;
+        fPendingFree.Add(fItems.Extract(fItems[0]));
+      end;
+    finally
+      Dec(fTickDepth);
+      FlushPendingFreeLocked;
+    end;
+  finally
+    fItemsLock.Release;
+  end;
 end;
 
 constructor TmaxCron.Create;
@@ -1170,14 +1383,131 @@ begin
   fTimer.OnTimer := aValue;
 end;
 
+constructor TCronEventToken.Create(aEvent: TmaxCronEvent);
+begin
+  inherited Create;
+  fLock := TCriticalSection.Create;
+  fEvent := aEvent;
+end;
+
+destructor TCronEventToken.Destroy;
+begin
+  fLock.Free;
+  inherited;
+end;
+
+procedure TCronEventToken.Detach;
+begin
+  fLock.Acquire;
+  try
+    fEvent := nil;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TCronEventToken.TryGetEvent(out aEvent: TmaxCronEvent): Boolean;
+begin
+  fLock.Acquire;
+  try
+    aEvent := fEvent;
+    Result := (aEvent <> nil);
+  finally
+    fLock.Release;
+  end;
+end;
+
 constructor TmaxCron.Create(const aTimerBackend: TmaxCronTimerBackend);
 begin
   inherited Create;
 
   fItems := TObjectList<TmaxCronEvent>.Create;
+  fItemsLock := TCriticalSection.Create;
+  fPendingFree := TList<TmaxCronEvent>.Create;
+  fTickDepth := 0;
+  fDefaultInvokeMode := TmaxCronInvokeMode.imMainThread;
+  fDefaultDayMatchMode := TmaxCronDayMatchMode.dmAnd;
+  fAsyncLock := TCriticalSection.Create;
+  fAsyncKeepAlive := TList<IInterface>.Create;
   fTickQueued := 0;
   fQueueToken := TCronQueueToken.Create(Self);
   CreateTimer(aTimerBackend);
+end;
+
+procedure TmaxCron.SetDefaultDayMatchMode(const Value: TmaxCronDayMatchMode);
+var
+  x: Integer;
+begin
+  if Value = TmaxCronDayMatchMode.dmDefault then
+    fDefaultDayMatchMode := TmaxCronDayMatchMode.dmAnd
+  else
+    fDefaultDayMatchMode := Value;
+
+  fItemsLock.Acquire;
+  try
+    for x := 0 to fItems.Count - 1 do
+      if fItems[x].fDayMatchMode = TmaxCronDayMatchMode.dmDefault then
+        fItems[x].fScheduler.DayMatchMode := fDefaultDayMatchMode;
+  finally
+    fItemsLock.Release;
+  end;
+end;
+
+procedure TmaxCron.KeepAsyncAlive(const aAsync: IInterface);
+begin
+  if aAsync = nil then Exit;
+  fAsyncLock.Acquire;
+  try
+    fAsyncKeepAlive.Add(aAsync);
+  finally
+    fAsyncLock.Release;
+  end;
+end;
+
+procedure TmaxCron.ReleaseAsyncAlive(const aAsync: IInterface);
+var
+  i: Integer;
+begin
+  if aAsync = nil then Exit;
+  fAsyncLock.Acquire;
+  try
+    i := fAsyncKeepAlive.IndexOf(aAsync);
+    if i >= 0 then
+      fAsyncKeepAlive.Delete(i);
+  finally
+    fAsyncLock.Release;
+  end;
+end;
+
+procedure TmaxCron.FlushPendingFree;
+begin
+  if fItemsLock = nil then Exit;
+  fItemsLock.Acquire;
+  try
+    FlushPendingFreeLocked;
+  finally
+    fItemsLock.Release;
+  end;
+end;
+
+procedure TmaxCron.FlushPendingFreeLocked;
+var
+  i: Integer;
+  lEvent: TmaxCronEvent;
+begin
+  if (fTickDepth <> 0) then Exit;
+
+  i := fPendingFree.Count - 1;
+  while i >= 0 do
+  begin
+    lEvent := fPendingFree[i];
+    if (lEvent <> nil) and lEvent.CanFreeNow then
+    begin
+      fPendingFree.Delete(i);
+      lEvent.Free;
+    end;
+    Dec(i);
+  end;
 end;
 
 procedure TmaxCron.CreateTimer(const aRequestedBackend: TmaxCronTimerBackend);
@@ -1204,16 +1534,35 @@ begin
   end;
 
   fTimer.SetOnTimer(TimerTimer);
+  {$IFNDEF MAXCRON_TESTS}
   fTimer.Start(1000);
+  {$ENDIF}
 end;
 
 function TmaxCron.Delete(index: integer): boolean;
+var
+  lEvent: TmaxCronEvent;
 begin
 
   if (index >= 0) and (index < self.Count) then
   begin
-    Result := True;
-    fItems.Delete(index);
+    fItemsLock.Acquire;
+    try
+      if (index >= 0) and (index < fItems.Count) then
+      begin
+        lEvent := fItems.Extract(fItems[index]);
+        if lEvent <> nil then
+        begin
+          lEvent.MarkPendingDestroy;
+          fPendingFree.Add(lEvent);
+        end;
+        FlushPendingFreeLocked;
+        Exit(True);
+      end;
+    finally
+      fItemsLock.Release;
+    end;
+    Result := False;
   end
   else
     Result := false;
@@ -1232,6 +1581,7 @@ end;
 destructor TmaxCron.Destroy;
 var
   lToken: ICronQueueToken;
+  lDone: Boolean;
 begin
   if Supports(fQueueToken, ICronQueueToken, lToken) then
     lToken.Detach;
@@ -1242,33 +1592,106 @@ begin
 
   Clear;
 
+  repeat
+    FlushPendingFree;
+    fItemsLock.Acquire;
+    try
+      lDone := (fPendingFree.Count = 0);
+    finally
+      fItemsLock.Release;
+    end;
+
+    if not lDone then
+    begin
+      if TThread.CurrentThread.ThreadID = MainThreadID then
+        CheckSynchronize(10)
+      else
+        TThread.Sleep(10);
+    end;
+  until lDone;
+
   fItems.Free;
+  fPendingFree.Free;
+  fItemsLock.Free;
+  fAsyncKeepAlive.Free;
+  fAsyncLock.Free;
   inherited;
 end;
 
 function TmaxCron.GetCount: integer;
 begin
-  Result := fItems.Count
+  fItemsLock.Acquire;
+  try
+    Result := fItems.Count
+  finally
+    fItemsLock.Release;
+  end;
 end;
 
 function TmaxCron.GetEvents(index: integer): TmaxCronEvent;
 begin
-  Result := fItems[index]
+  fItemsLock.Acquire;
+  try
+    Result := fItems[index]
+  finally
+    fItemsLock.Release;
+  end;
 end;
 
 function TmaxCron.IndexOf(event: TmaxCronEvent): integer;
 begin
-  Result := fItems.IndexOf(event);
+  fItemsLock.Acquire;
+  try
+    Result := fItems.IndexOf(event);
+  finally
+    fItemsLock.Release;
+  end;
 end;
 
 procedure TmaxCron.DoTick;
 var
-  x: integer;
+  lNow: TDateTime;
 begin
-  for x := 0 to fItems.Count - 1 do
-    if fItems[x].Enabled then
-      fItems[x].checkTimer;
+  lNow := Now;
+  DoTickAt(lNow);
 end;
+
+procedure TmaxCron.DoTickAt(const aNow: TDateTime);
+var
+  x: integer;
+  lSnapshot: TArray<TmaxCronEvent>;
+begin
+  fItemsLock.Acquire;
+  try
+    Inc(fTickDepth);
+    SetLength(lSnapshot, fItems.Count);
+    for x := 0 to fItems.Count - 1 do
+      lSnapshot[x] := fItems[x];
+  finally
+    fItemsLock.Release;
+  end;
+
+  try
+    for x := 0 to Length(lSnapshot) - 1 do
+      if (lSnapshot[x] <> nil) then
+        lSnapshot[x].checkTimer(aNow);
+  finally
+    fItemsLock.Acquire;
+    try
+      Dec(fTickDepth);
+      FlushPendingFreeLocked;
+    finally
+      fItemsLock.Release;
+    end;
+  end;
+end;
+
+{$IFDEF MAXCRON_TESTS}
+procedure TmaxCron.TickAt(const aNow: TDateTime);
+begin
+  DoTickAt(aNow);
+end;
+{$ENDIF}
 
 procedure TmaxCron.QueueTick;
 var
@@ -1316,28 +1739,36 @@ var
   d: TDateTime;
   scheduler: TCronSchedulePlan;
 begin
-     result := false;
+  Result := False;
   scheduler := TCronSchedulePlan.Create;
-  scheduler.Parse(SchedulePlan);
-  SetLength(Dates, Limit);
-  C := 0;
-  d := now;
-  for x := 0 to Limit - 1 do
-  begin
-    if not scheduler.FindNextScheduleDate(d, d) then
-      break;
+  try
+    scheduler.Parse(SchedulePlan);
+    SetLength(Dates, Limit);
+    C := 0;
+    d := Now;
+    for x := 0 to Limit - 1 do
+    begin
+      if not scheduler.FindNextScheduleDate(d, d) then
+        Break;
 
-    Dates[x] := d;
-    inc(C);
-
+      Dates[x] := d;
+      Inc(C);
+    end;
+    SetLength(Dates, C);
+    Result := True;
+  finally
+    scheduler.Free;
   end;
-
-  SetLength(Dates, C);
 end;
 
 procedure TmaxCronEvent.SetOnScheduleProc(const Value: TmaxCronNotifyProc);
 begin
-  FOnScheduleProc := Value;
+  fLock.Acquire;
+  try
+    FOnScheduleProc := Value;
+  finally
+    fLock.Release;
+  end;
 end;
 
 function TmaxCron.Add(const aName, aEventPlan: string;
@@ -1356,28 +1787,475 @@ begin
   Result.OnScheduleProc := aOnScheduleEvent;
 end;
 
-procedure TmaxCronEvent.checkTimer;
-var
-  dt: TDateTime;
+procedure TmaxCronEvent.SetInvokeMode(const Value: TmaxCronInvokeMode);
 begin
-  dt := now();
-  if dt >= fNextSchedule then
+  fLock.Acquire;
+  try
+    fInvokeMode := Value;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.SetOverlapMode(const Value: TmaxCronOverlapMode);
+begin
+  fLock.Acquire;
+  try
+    fOverlapMode := Value;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.SetDayMatchMode(const Value: TmaxCronDayMatchMode);
+var
+  lMode: TmaxCronDayMatchMode;
+  lToken: ICronQueueToken;
+  lCron: TmaxCron;
+begin
+  lMode := Value;
+  if lMode = TmaxCronDayMatchMode.dmDefault then
+    if Supports(fCronToken, ICronQueueToken, lToken) and lToken.TryGetOwner(lCron) then
+      lMode := lCron.fDefaultDayMatchMode
+    else
+      lMode := TmaxCronDayMatchMode.dmAnd;
+
+  fLock.Acquire;
+  try
+    fDayMatchMode := Value;
+    fScheduler.DayMatchMode := lMode;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetEnabled: boolean;
+begin
+  fLock.Acquire;
+  try
+    Result := FEnabled;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetNextSchedule: TDateTime;
+begin
+  fLock.Acquire;
+  try
+    Result := fNextSchedule;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetLastExecution: TDateTime;
+begin
+  fLock.Acquire;
+  try
+    Result := fLastExecutionTime;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetNumOfExecutionsPerformed: uint64;
+begin
+  fLock.Acquire;
+  try
+    Result := fNumOfExecutions;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetEffectiveInvokeMode: TmaxCronInvokeMode;
+var
+  lToken: ICronQueueToken;
+  lCron: TmaxCron;
+begin
+  Result := fInvokeMode;
+  if Result <> TmaxCronInvokeMode.imDefault then Exit;
+  if Supports(fCronToken, ICronQueueToken, lToken) and lToken.TryGetOwner(lCron) then
+    Exit(lCron.fDefaultInvokeMode);
+  Result := TmaxCronInvokeMode.imMainThread;
+end;
+
+function TmaxCronEvent.GetOverlapMode: TmaxCronOverlapMode;
+begin
+  fLock.Acquire;
+  try
+    Result := fOverlapMode;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetDayMatchMode: TmaxCronDayMatchMode;
+begin
+  fLock.Acquire;
+  try
+    Result := fDayMatchMode;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.TryAcquireExecution: Boolean;
+begin
+  fLock.Acquire;
+  try
+    if fPendingDestroy then
+      Exit(False);
+    Inc(fExecDepth);
+    Result := True;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.ReleaseExecution;
+begin
+  fLock.Acquire;
+  try
+    Dec(fExecDepth);
+    if fExecDepth < 0 then
+      fExecDepth := 0;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.MarkPendingDestroy;
+begin
+  fLock.Acquire;
+  try
+    fPendingDestroy := True;
+    FEnabled := False;
+    fPendingRuns := 0;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.CanFreeNow: Boolean;
+begin
+  fLock.Acquire;
+  try
+    Result := (fExecDepth = 0);
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.DispatchCallbacks(const aInvokeMode: TmaxCronInvokeMode;
+  const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
+  const aOverlapMode: TmaxCronOverlapMode);
+var
+  lToken: ICronEventToken;
+  lOwnerToken: ICronQueueToken;
+  lThread: TThread;
+  lKeepAlive: IInterface;
+  lCron: TmaxCron;
+
+  type
+    IAsyncKeepAliveEntry = interface
+      ['{96E1F117-5C6E-4B10-8D9C-0B8E7B2B0BB2}']
+      procedure AttachAsync(const aAsync: IInterface);
+      procedure MarkDone;
+    end;
+
+    TAsyncKeepAliveEntry = class(TInterfacedObject, IAsyncKeepAliveEntry)
+    private
+      fLock: TCriticalSection;
+      fOwnerToken: ICronQueueToken;
+      fAsync: IInterface;
+      fDone: Boolean;
+    public
+      constructor Create(const aOwnerToken: ICronQueueToken);
+      destructor Destroy; override;
+      procedure AttachAsync(const aAsync: IInterface);
+      procedure MarkDone;
+    end;
+
+  procedure FinalizeOverlap;
+  var
+    lCron: TmaxCron;
+    lPendingDestroy: Boolean;
   begin
-    fNumOfExecutions := fNumOfExecutions + 1;
-    fLastExecutionTime := dt;
+    case aOverlapMode of
+      TmaxCronOverlapMode.omSkipIfRunning:
+        TInterlocked.Exchange(fRunning, 0);
+      TmaxCronOverlapMode.omSerialize,
+      TmaxCronOverlapMode.omSerializeCoalesce:
+        begin
+          lPendingDestroy := False;
+          fLock.Acquire;
+          try
+            lPendingDestroy := fPendingDestroy;
+          finally
+            fLock.Release;
+          end;
+
+          if lPendingDestroy then
+          begin
+            TInterlocked.Exchange(fPendingRuns, 0);
+            TInterlocked.Exchange(fRunning, 0);
+            ReleaseExecution;
+            Exit;
+          end;
+
+          if TInterlocked.CompareExchange(fPendingRuns, 0, 0) > 0 then
+          begin
+            TInterlocked.Decrement(fPendingRuns);
+            if (aInvokeMode = TmaxCronInvokeMode.imMainThread) and (TThread.CurrentThread.ThreadID = MainThreadID) then
+            begin
+              {$IFDEF ForceQueueNotAvailable}
+              TThread.Queue(nil, procedure begin DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode); end);
+              {$ELSE}
+              TThread.ForceQueue(nil, procedure begin DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode); end);
+              {$ENDIF}
+            end else begin
+              DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+            end;
+            Exit; // keep execution acquired for the serialized chain
+          end;
+
+          TInterlocked.Exchange(fRunning, 0);
+          ReleaseExecution;
+          Exit;
+        end;
+    end;
+
+    if Supports(fCronToken, ICronQueueToken, lOwnerToken) and lOwnerToken.TryGetOwner(lCron) then
+      lCron.FlushPendingFree;
+  end;
+
+  procedure ExecuteOnce;
+  var
+    lEvent: TmaxCronEvent;
+  begin
+    try
+      lEvent := nil;
+
+      if not Supports(fEventToken, ICronEventToken, lToken) then Exit;
+      if not lToken.TryGetEvent(lEvent) then Exit;
+
+      if Assigned(aOnEvent) then
+        aOnEvent(lEvent);
+      if Assigned(aOnProc) then
+        aOnProc(lEvent);
+    finally
+      if (aOverlapMode = TmaxCronOverlapMode.omAllowOverlap) or (aOverlapMode = TmaxCronOverlapMode.omSkipIfRunning) then
+        ReleaseExecution;
+      FinalizeOverlap;
+    end;
+  end;
+
+  constructor TAsyncKeepAliveEntry.Create(const aOwnerToken: ICronQueueToken);
+  begin
+    inherited Create;
+    fLock := TCriticalSection.Create;
+    fOwnerToken := aOwnerToken;
+    fAsync := nil;
+    fDone := False;
+  end;
+
+  destructor TAsyncKeepAliveEntry.Destroy;
+  begin
+    fLock.Free;
+    inherited;
+  end;
+
+  procedure TAsyncKeepAliveEntry.AttachAsync(const aAsync: IInterface);
+  var
+    lDone: Boolean;
+    lCron: TmaxCron;
+  begin
+    fLock.Acquire;
+    try
+      fAsync := aAsync;
+      lDone := fDone;
+    finally
+      fLock.Release;
+    end;
+
+    if lDone and (fOwnerToken <> nil) and fOwnerToken.TryGetOwner(lCron) then
+      lCron.ReleaseAsyncAlive(Self);
+  end;
+
+  procedure TAsyncKeepAliveEntry.MarkDone;
+  var
+    lCanRelease: Boolean;
+    lCron: TmaxCron;
+  begin
+    fLock.Acquire;
+    try
+      fDone := True;
+      lCanRelease := (fAsync <> nil);
+    finally
+      fLock.Release;
+    end;
+
+    if lCanRelease and (fOwnerToken <> nil) and fOwnerToken.TryGetOwner(lCron) then
+      lCron.ReleaseAsyncAlive(Self);
+  end;
+
+begin
+  if (not Assigned(aOnEvent)) and (not Assigned(aOnProc)) then Exit;
+
+  case aInvokeMode of
+    TmaxCronInvokeMode.imMainThread:
+      begin
+        if TThread.CurrentThread.ThreadID = MainThreadID then
+          ExecuteOnce
+        else
+        begin
+          {$IFDEF ForceQueueNotAvailable}
+          TThread.Queue(nil, procedure begin ExecuteOnce; end);
+          {$ELSE}
+          TThread.ForceQueue(nil, procedure begin ExecuteOnce; end);
+          {$ENDIF}
+        end;
+      end;
+
+    TmaxCronInvokeMode.imThread:
+      begin
+        lThread := TThread.CreateAnonymousThread(
+          procedure
+          begin
+            ExecuteOnce;
+          end);
+        lThread.FreeOnTerminate := True;
+        lThread.Start;
+      end;
+
+    TmaxCronInvokeMode.imTTask:
+      begin
+        TTask.Run(
+          procedure
+          begin
+            ExecuteOnce;
+          end);
+      end;
+
+    TmaxCronInvokeMode.imMaxAsync:
+      begin
+        if (not Supports(fCronToken, ICronQueueToken, lOwnerToken)) or (not lOwnerToken.TryGetOwner(lCron)) then
+        begin
+          DispatchCallbacks(TmaxCronInvokeMode.imTTask, aOnEvent, aOnProc, aOverlapMode);
+          Exit;
+        end;
+
+        lKeepAlive := TAsyncKeepAliveEntry.Create(lOwnerToken);
+        lCron.KeepAsyncAlive(lKeepAlive);
+
+        IAsyncKeepAliveEntry(lKeepAlive).AttachAsync(SimpleAsyncCall(
+          procedure
+          begin
+            ExecuteOnce;
+          end,
+          '',
+          procedure
+          begin
+            IAsyncKeepAliveEntry(lKeepAlive).MarkDone;
+          end));
+      end;
+  else
+    ExecuteOnce;
+  end;
+end;
+
+procedure TmaxCronEvent.checkTimer(const aNow: TDateTime);
+var
+  lOnEvent: TmaxCronNotifyEvent;
+  lOnProc: TmaxCronNotifyProc;
+  lInvokeMode: TmaxCronInvokeMode;
+  lOverlap: TmaxCronOverlapMode;
+  lOwnerToken: ICronQueueToken;
+  lCron: TmaxCron;
+begin
+  lOnEvent := nil;
+  lOnProc := nil;
+  lInvokeMode := TmaxCronInvokeMode.imMainThread;
+  lOverlap := TmaxCronOverlapMode.omAllowOverlap;
+
+  fLock.Acquire;
+  try
+    if not FEnabled then Exit;
+    if aNow < fNextSchedule then Exit;
+
+    Inc(fNumOfExecutions);
+    fLastExecutionTime := aNow;
 
     if fScheduler.ExecutionLimit <> 0 then
       if fNumOfExecutions >= fScheduler.ExecutionLimit then
-        Stop;
+        FEnabled := False;
 
-    if FEnabled then // one of the above callbacks might set it to false, so we need to check it here
+    if FEnabled then
       ResetSchedule;
 
-    if Assigned(OnScheduleEvent) then
-      OnScheduleEvent(self);
+    lOnEvent := FOnScheduleEvent;
+    lOnProc := FOnScheduleProc;
+    lInvokeMode := fInvokeMode;
+    lOverlap := fOverlapMode;
+  finally
+    fLock.Release;
+  end;
 
-    if Assigned(FOnScheduleProc) then
-      FOnScheduleProc(self);
+  if (not Assigned(lOnEvent)) and (not Assigned(lOnProc)) then Exit;
+
+  if lInvokeMode = TmaxCronInvokeMode.imDefault then
+  begin
+    if Supports(fCronToken, ICronQueueToken, lOwnerToken) and lOwnerToken.TryGetOwner(lCron) then
+      lInvokeMode := lCron.fDefaultInvokeMode
+    else
+      lInvokeMode := TmaxCronInvokeMode.imMainThread;
+  end;
+
+  case lOverlap of
+    TmaxCronOverlapMode.omAllowOverlap:
+      begin
+        if not TryAcquireExecution then Exit;
+        DispatchCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+      end;
+    TmaxCronOverlapMode.omSkipIfRunning:
+      begin
+        if TInterlocked.CompareExchange(fRunning, 1, 0) <> 0 then Exit;
+        if not TryAcquireExecution then
+        begin
+          TInterlocked.Exchange(fRunning, 0);
+          Exit;
+        end;
+        DispatchCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+      end;
+    TmaxCronOverlapMode.omSerialize:
+      begin
+        if TInterlocked.CompareExchange(fRunning, 1, 0) = 0 then
+        begin
+          if not TryAcquireExecution then
+          begin
+            TInterlocked.Exchange(fRunning, 0);
+            Exit;
+          end;
+          DispatchCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+        end else
+          TInterlocked.Increment(fPendingRuns);
+      end;
+    TmaxCronOverlapMode.omSerializeCoalesce:
+      begin
+        if TInterlocked.CompareExchange(fRunning, 1, 0) = 0 then
+        begin
+          if not TryAcquireExecution then
+          begin
+            TInterlocked.Exchange(fRunning, 0);
+            Exit;
+          end;
+          DispatchCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+        end else begin
+          TInterlocked.CompareExchange(fPendingRuns, 1, 0); // keep backlog <= 1
+        end;
+      end;
   end;
 end;
 
@@ -1434,14 +2312,16 @@ begin
   s := Trim(s);
 
   l := TStringList.Create;
-  l.Delimiter := ' ';
-  l.StrictDelimiter := True;
-  l.DelimitedText := s;
+  try
+    l.Delimiter := ' ';
+    l.StrictDelimiter := True;
+    l.DelimitedText := s;
 
-  for x := 0 to min(length(parts), l.Count) - 1 do
-    parts[x] := l[x];
-
-  l.Free;
+    for x := 0 to Min(Length(parts), l.Count) - 1 do
+      parts[x] := l[x];
+  finally
+    l.Free;
+  end;
 
 end;
 

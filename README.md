@@ -52,6 +52,64 @@ begin
 end;
 ```
 
+## Timer backend selection
+
+By default `TmaxCron` uses `ctAuto`:
+
+- If created on the VCL main thread: uses `TTimer` (`ctVcl`)
+- Otherwise: uses the threaded portable timer (`ctPortable`)
+
+```delphi
+CronScheduler := TmaxCron.Create(ctAuto);
+// or force one:
+CronScheduler := TmaxCron.Create(ctVcl);
+CronScheduler := TmaxCron.Create(ctPortable);
+```
+
+## How a job is executed (per-event)
+
+Each event can override how its callback is invoked:
+
+```delphi
+CronScheduler.DefaultInvokeMode := imMainThread; // default
+
+NewSchedule := CronScheduler.Add('BackgroundJob', '* * * * * * * 0');
+NewSchedule.InvokeMode := imMaxAsync; // or imTTask / imThread / imMainThread
+NewSchedule.Run;
+```
+
+Note: if we execute off the VCL main thread, we must not touch UI directly.
+
+## Overlap handling (per-event)
+
+When a schedule fires again while a previous execution is still running:
+
+```delphi
+NewSchedule.OverlapMode := omAllowOverlap;        // default
+NewSchedule.OverlapMode := omSkipIfRunning;       // drop overlapping fires
+NewSchedule.OverlapMode := omSerialize;           // queue and run 1-by-1
+NewSchedule.OverlapMode := omSerializeCoalesce;   // serialize, but keep backlog <= 1
+```
+
+## DOM / DOW matching
+
+When **both** Day-of-Month and Day-of-Week are restricted (not `*`), classic crontab typically uses **OR** semantics.
+maxCron supports both:
+
+```delphi
+CronScheduler.DefaultDayMatchMode := dmAnd; // legacy (both must match)
+CronScheduler.DefaultDayMatchMode := dmOr;  // crontab-style (either may match)
+
+NewSchedule.DayMatchMode := dmDefault; // use scheduler default
+NewSchedule.DayMatchMode := dmAnd;
+NewSchedule.DayMatchMode := dmOr;
+```
+
+## Unit tests
+
+DUnitX tests live under `tests/` (runner: `tests/maxCronTests.dpr`).
+Our upstream-derived cron corpus used by tests is stored in `tests/data/cron-utils-unix-5field.txt`.
+
 # using the TCronSchedulePlan:
 The TPlan is a small class that allows you to specify the parts in a more friendly way and then convert them to a cron string
 ```Delphi
@@ -200,4 +258,3 @@ Examples:
 | * * * 1,2,3 * *                      | * * * 1,2,3 |
 | 0 0 * * * *                          | 0 0 |
 | 0 0 * * 3 *                          | 0 0 * * 3 |
-
