@@ -8,7 +8,7 @@ unit maxCron;
 interface
 
 uses
-  windows, SysUtils, classes, forms, ExtCtrls, threading, generics.collections;
+  System.Classes, System.Generics.Collections, System.SysUtils;
 
 Type
   // forward declarations
@@ -19,16 +19,33 @@ Type
   TmaxCronNotifyEvent = procedure(Sender: TmaxCronEvent) of object;
   TmaxCronNotifyProc = reference to procedure(Sender: TmaxCronEvent);
 
+  TmaxCronTimerBackend = (ctAuto, ctVcl, ctPortable);
+
+  ICronTimer = interface
+    ['{4F3B81F6-57F0-4A98-9F65-6B8E7A7A0E41}']
+    procedure Start(const aIntervalMs: Cardinal);
+    procedure Stop;
+    procedure SetOnTimer(const aValue: TNotifyEvent);
+  end;
+
   TmaxCron = class(TObject)
   private
-    fTimer: TTimer;
+    fRequestedTimerBackend: TmaxCronTimerBackend;
+    fActiveTimerBackend: TmaxCronTimerBackend;
+    fTimer: ICronTimer;
     fItems: TObjectList<TmaxCronEvent>;
+    fTickQueued: Integer;
+    fQueueToken: IInterface;
     function GetCount: integer;
     function GetEvents(index: integer): TmaxCronEvent;
     procedure TimerTimer(Sender: TObject);
+    procedure CreateTimer(const aRequestedBackend: TmaxCronTimerBackend);
+    procedure DoTick;
+    procedure QueueTick;
 
   public
-    constructor Create;
+    constructor Create; overload;
+    constructor Create(const aTimerBackend: TmaxCronTimerBackend); overload;
     destructor Destroy; override;
 
     procedure Clear;
@@ -43,6 +60,8 @@ Type
 
     property Count: integer read GetCount;
     property Events[index: integer]: TmaxCronEvent read GetEvents;
+    property RequestedTimerBackend: TmaxCronTimerBackend read fRequestedTimerBackend;
+    property ActiveTimerBackend: TmaxCronTimerBackend read fActiveTimerBackend;
   end;
 
   TmaxCronEvent = class(TObject)
@@ -232,7 +251,49 @@ function MakePreview(const SchedulePlan: string; out Dates: TDates; Limit: integ
 implementation
 
 uses
-  dateUtils, math, dialogs, messages, controls;
+  System.DateUtils, System.Math, System.SyncObjs,
+  Vcl.ExtCtrls,
+  MaxLogic.PortableTimer;
+
+type
+  ICronQueueToken = interface
+    ['{3F1D42F5-52B2-4B86-9E06-5ED517BD5E46}']
+    procedure Detach;
+    function TryGetOwner(out aOwner: TmaxCron): Boolean;
+  end;
+
+  TCronQueueToken = class(TInterfacedObject, ICronQueueToken)
+  private
+    fLock: TCriticalSection;
+    fOwner: TmaxCron;
+  public
+    constructor Create(aOwner: TmaxCron);
+    destructor Destroy; override;
+    procedure Detach;
+    function TryGetOwner(out aOwner: TmaxCron): Boolean;
+  end;
+
+  TVclCronTimer = class(TInterfacedObject, ICronTimer)
+  private
+    fTimer: Vcl.ExtCtrls.TTimer;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure Start(const aIntervalMs: Cardinal);
+    procedure Stop;
+    procedure SetOnTimer(const aValue: TNotifyEvent);
+  end;
+
+  TPortableCronTimer = class(TInterfacedObject, ICronTimer)
+  private
+    fTimer: MaxLogic.PortableTimer.TPortableTimer;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure Start(const aIntervalMs: Cardinal);
+    procedure Stop;
+    procedure SetOnTimer(const aValue: TNotifyEvent);
+  end;
 
 const
   OneMinute = 1 / 24 / 60;
@@ -1011,20 +1072,139 @@ begin
 end;
 
 procedure TmaxCron.Clear;
-var
-  x: integer;
 begin
   fItems.Clear;
 end;
 
 constructor TmaxCron.Create;
 begin
+  Create(TmaxCronTimerBackend.ctAuto);
+end;
+
+constructor TCronQueueToken.Create(aOwner: TmaxCron);
+begin
+  inherited Create;
+  fLock := TCriticalSection.Create;
+  fOwner := aOwner;
+end;
+
+destructor TCronQueueToken.Destroy;
+begin
+  fLock.Free;
   inherited;
-  fItems := TObjectList<TmaxCronEvent>.Create;
-  fTimer := TTimer.Create(nil);
-  fTimer.onTimer := TimerTimer;
-  fTimer.Interval := 1000;
+end;
+
+procedure TCronQueueToken.Detach;
+begin
+  fLock.Acquire;
+  try
+    fOwner := nil;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TCronQueueToken.TryGetOwner(out aOwner: TmaxCron): Boolean;
+begin
+  fLock.Acquire;
+  try
+    aOwner := fOwner;
+    Result := (aOwner <> nil);
+  finally
+    fLock.Release;
+  end;
+end;
+
+constructor TVclCronTimer.Create;
+begin
+  inherited Create;
+  fTimer := Vcl.ExtCtrls.TTimer.Create(nil);
+end;
+
+destructor TVclCronTimer.Destroy;
+begin
+  fTimer.Free;
+  inherited;
+end;
+
+procedure TVclCronTimer.Start(const aIntervalMs: Cardinal);
+begin
+  fTimer.Interval := aIntervalMs;
   fTimer.Enabled := True;
+end;
+
+procedure TVclCronTimer.Stop;
+begin
+  fTimer.Enabled := False;
+end;
+
+procedure TVclCronTimer.SetOnTimer(const aValue: TNotifyEvent);
+begin
+  fTimer.OnTimer := aValue;
+end;
+
+constructor TPortableCronTimer.Create;
+begin
+  inherited Create;
+  fTimer := MaxLogic.PortableTimer.TPortableTimer.Create;
+end;
+
+destructor TPortableCronTimer.Destroy;
+begin
+  fTimer.Free;
+  inherited;
+end;
+
+procedure TPortableCronTimer.Start(const aIntervalMs: Cardinal);
+begin
+  fTimer.Start(aIntervalMs);
+end;
+
+procedure TPortableCronTimer.Stop;
+begin
+  fTimer.Stop;
+end;
+
+procedure TPortableCronTimer.SetOnTimer(const aValue: TNotifyEvent);
+begin
+  fTimer.OnTimer := aValue;
+end;
+
+constructor TmaxCron.Create(const aTimerBackend: TmaxCronTimerBackend);
+begin
+  inherited Create;
+
+  fItems := TObjectList<TmaxCronEvent>.Create;
+  fTickQueued := 0;
+  fQueueToken := TCronQueueToken.Create(Self);
+  CreateTimer(aTimerBackend);
+end;
+
+procedure TmaxCron.CreateTimer(const aRequestedBackend: TmaxCronTimerBackend);
+begin
+  fRequestedTimerBackend := aRequestedBackend;
+  fActiveTimerBackend := aRequestedBackend;
+
+  if fActiveTimerBackend = TmaxCronTimerBackend.ctAuto then
+  begin
+    if TThread.CurrentThread.ThreadID = MainThreadID then
+      fActiveTimerBackend := TmaxCronTimerBackend.ctVcl
+    else
+      fActiveTimerBackend := TmaxCronTimerBackend.ctPortable;
+  end;
+
+  case fActiveTimerBackend of
+    TmaxCronTimerBackend.ctVcl:
+      fTimer := TVclCronTimer.Create;
+    TmaxCronTimerBackend.ctPortable:
+      fTimer := TPortableCronTimer.Create;
+  else
+    fTimer := TVclCronTimer.Create;
+    fActiveTimerBackend := TmaxCronTimerBackend.ctVcl;
+  end;
+
+  fTimer.SetOnTimer(TimerTimer);
+  fTimer.Start(1000);
 end;
 
 function TmaxCron.Delete(index: integer): boolean;
@@ -1050,11 +1230,19 @@ begin
 end;
 
 destructor TmaxCron.Destroy;
+var
+  lToken: ICronQueueToken;
 begin
+  if Supports(fQueueToken, ICronQueueToken, lToken) then
+    lToken.Detach;
+
+  if fTimer <> nil then
+    fTimer.Stop;
+  fTimer := nil;
+
   Clear;
 
   fItems.Free;
-  fTimer.Free;
   inherited;
 end;
 
@@ -1069,19 +1257,57 @@ begin
 end;
 
 function TmaxCron.IndexOf(event: TmaxCronEvent): integer;
-var
-  x: integer;
 begin
   Result := fItems.IndexOf(event);
 end;
 
-procedure TmaxCron.TimerTimer(Sender: TObject);
+procedure TmaxCron.DoTick;
 var
   x: integer;
 begin
   for x := 0 to fItems.Count - 1 do
     if fItems[x].Enabled then
       fItems[x].checkTimer;
+end;
+
+procedure TmaxCron.QueueTick;
+var
+  lToken: ICronQueueToken;
+begin
+  if TInterlocked.CompareExchange(fTickQueued, 1, 0) <> 0 then
+    Exit;
+
+  if not Supports(fQueueToken, ICronQueueToken, lToken) then
+  begin
+    TInterlocked.Exchange(fTickQueued, 0);
+    Exit;
+  end;
+
+  {$IFDEF ForceQueueNotAvailable}
+  TThread.Queue(nil,
+  {$ELSE}
+  TThread.ForceQueue(nil,
+  {$ENDIF}
+    procedure
+    var
+      Cron: TmaxCron;
+    begin
+      try
+        if lToken.TryGetOwner(Cron) then
+          Cron.DoTick;
+      finally
+        if lToken.TryGetOwner(Cron) then
+          TInterlocked.Exchange(Cron.fTickQueued, 0);
+      end;
+    end);
+end;
+
+procedure TmaxCron.TimerTimer(Sender: TObject);
+begin
+  if TThread.CurrentThread.ThreadID = MainThreadID then
+    DoTick
+  else
+    QueueTick;
 end;
 
 function MakePreview(const SchedulePlan: string; out Dates: TDates; Limit: integer = 100): boolean;

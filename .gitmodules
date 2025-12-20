@@ -1,0 +1,4 @@
+[submodule "lib/MaxLogicFoundation"]
+	path = lib/MaxLogicFoundation
+	url = https://github.com/MaxLogic/MaxLogicFoundation
+	branch = main
