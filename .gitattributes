@@ -1,0 +1,20 @@
+# Delphi / Windows text files
+*.pas      text eol=crlf
+*.dpr      text eol=crlf
+*.dpk      text eol=crlf
+*.dfm      text eol=crlf
+*.dproj    text eol=crlf
+*.groupproj text eol=crlf
+
+# Scripts should stay LF
+*.sh       text eol=lf
+
+
+# Then normalize:
+# ```bash
+# git add .gitattributes
+# git add --renormalize .
+# git commit -m "Enforce line endings via .gitattributes"
+# ```
+#
+# After that, you can even set `core.autocrlf` to `false` everywhere if you want — attributes will control EOL.

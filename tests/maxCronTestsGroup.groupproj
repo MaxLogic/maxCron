@@ -1,0 +1,60 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{F7FE244E-E043-4899-849D-33DF2195AE06}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="maxCronStressTests.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="maxCronTests.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="maxCronVclTests.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="maxCronStressTests">
+        <MSBuild Projects="maxCronStressTests.dproj"/>
+    </Target>
+    <Target Name="maxCronStressTests:Clean">
+        <MSBuild Projects="maxCronStressTests.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="maxCronStressTests:Make">
+        <MSBuild Projects="maxCronStressTests.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="maxCronTests">
+        <MSBuild Projects="maxCronTests.dproj"/>
+    </Target>
+    <Target Name="maxCronTests:Clean">
+        <MSBuild Projects="maxCronTests.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="maxCronTests:Make">
+        <MSBuild Projects="maxCronTests.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="maxCronVclTests">
+        <MSBuild Projects="maxCronVclTests.dproj"/>
+    </Target>
+    <Target Name="maxCronVclTests:Clean">
+        <MSBuild Projects="maxCronVclTests.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="maxCronVclTests:Make">
+        <MSBuild Projects="maxCronVclTests.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="maxCronStressTests;maxCronTests;maxCronVclTests"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="maxCronStressTests:Clean;maxCronTests:Clean;maxCronVclTests:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="maxCronStressTests:Make;maxCronTests:Make;maxCronVclTests:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>
