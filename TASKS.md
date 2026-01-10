@@ -29,7 +29,6 @@ Details:
 - Update parsing rules, validation, and tests per dialect.
 
 Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `tests/unit/TestCronInvalidCorpus.pas`, `README.md`
-
 ### T-009 Add hash/jitter syntax (H) with deterministic seed
 Summary: Support `H` tokens for jittered schedules using a stable hash seed.
 
@@ -102,6 +101,16 @@ Likely files to touch/read: `README.md`
 ## Blocked
 
 ## Done
+
+### T-008 Add cron dialect flag (Standard/MaxCron/QuartzSecondsFirst)
+Summary: Add a dialect flag to parse cron strings in multiple formats.
+
+Details:
+- Dialects: `Standard` (5-field), `MaxCron` (current), `QuartzSecondsFirst` (6/7-field seconds-first).
+- Ensure we keep current default behavior unchanged.
+- Update parsing rules, validation, and tests per dialect.
+
+Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `tests/unit/TestCronInvalidCorpus.pas`, `README.md`
 
 ### T-002 Strengthen cron parser and field-count coverage
 Summary: Add targeted tests for malformed tokens, mixed list/range/step syntax, and field-count semantics (5/6/7/8 fields).

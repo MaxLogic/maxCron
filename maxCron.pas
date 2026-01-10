@@ -44,6 +44,8 @@ Type
   // - dmOr:  either may match (crontab/Vixie-style behavior)
   TmaxCronDayMatchMode = (dmDefault, dmAnd, dmOr);
 
+  TmaxCronDialect = (cdStandard, cdMaxCron, cdQuartzSecondsFirst);
+
   TmaxCronTimerBackend = (ctAuto, ctVcl, ctPortable);
 
   ICronTimer = interface
@@ -59,6 +61,7 @@ Type
     fActiveTimerBackend: TmaxCronTimerBackend;
     fDefaultInvokeMode: TmaxCronInvokeMode;
     fDefaultDayMatchMode: TmaxCronDayMatchMode;
+    fDefaultDialect: TmaxCronDialect;
     fTimer: ICronTimer;
     fItems: TObjectList<TmaxCronEvent>;
     fItemsLock: TCriticalSection;
@@ -80,6 +83,7 @@ Type
     procedure FlushPendingFree;
     procedure FlushPendingFreeLocked;
     procedure SetDefaultDayMatchMode(const Value: TmaxCronDayMatchMode);
+    procedure SetDefaultDialect(const Value: TmaxCronDialect);
 
   public
     constructor Create; overload;
@@ -102,6 +106,7 @@ Type
     property ActiveTimerBackend: TmaxCronTimerBackend read fActiveTimerBackend;
     property DefaultInvokeMode: TmaxCronInvokeMode read fDefaultInvokeMode write fDefaultInvokeMode;
     property DefaultDayMatchMode: TmaxCronDayMatchMode read fDefaultDayMatchMode write SetDefaultDayMatchMode;
+    property DefaultDialect: TmaxCronDialect read fDefaultDialect write SetDefaultDialect;
 
     {$IFDEF MAXCRON_TESTS}
     procedure TickAt(const aNow: TDateTime);
@@ -134,6 +139,7 @@ Type
     fEventToken: IInterface;
     fOverlapMode: TmaxCronOverlapMode;
     fDayMatchMode: TmaxCronDayMatchMode;
+    fDialect: TmaxCronDialect;
     fRunning: Integer;
     fPendingRuns: Integer;
     fExecDepth: Integer;
@@ -152,6 +158,7 @@ Type
     procedure SetInvokeMode(const Value: TmaxCronInvokeMode);
     procedure SetOverlapMode(const Value: TmaxCronOverlapMode);
     procedure SetDayMatchMode(const Value: TmaxCronDayMatchMode);
+    procedure SetDialect(const Value: TmaxCronDialect);
     function GetEnabled: boolean;
     function GetNextSchedule: TDateTime;
     function GetLastExecution: TDateTime;
@@ -201,6 +208,7 @@ Type
     property InvokeMode: TmaxCronInvokeMode read fInvokeMode write SetInvokeMode;
     property OverlapMode: TmaxCronOverlapMode read GetOverlapMode write SetOverlapMode;
     property DayMatchMode: TmaxCronDayMatchMode read GetDayMatchMode write SetDayMatchMode;
+    property Dialect: TmaxCronDialect read fDialect write SetDialect;
 
     // tels how many times this event was executed
     property NumOfExecutionsPerformed: uint64 read GetNumOfExecutionsPerformed;
@@ -236,6 +244,7 @@ Type
 
   TPlan = record
   private
+    fDialect: TmaxCronDialect;
     function asString: String;
     procedure setText(const Value: string);
   public
@@ -249,6 +258,7 @@ Type
     property Year: string read parts[5] write parts[5];
     property Second: string read parts[6] write parts[6];
     property ExecutionLimit: string read parts[7] write parts[7];
+    property Dialect: TmaxCronDialect read fDialect write fDialect;
 
     property text: string read asString write setText;
 
@@ -324,6 +334,8 @@ Type
     FYear: TCronPart;
     fExecutionLimit: LongWord;
     fDayMatchMode: TmaxCronDayMatchMode;
+    fDialect: TmaxCronDialect;
+    fLastPlan: string;
 
     function GetParts(PartKind: TPartKind): TCronPart;
     function DomMatchesDate(const aDate: TDateTime): Boolean;
@@ -336,6 +348,7 @@ Type
     procedure SetParts(PartKind: TPartKind; const Value: TCronPart);
     procedure SetSecond(const Value: TCronPart);
     procedure SetYear(const Value: TCronPart);
+    procedure SetDialect(const Value: TmaxCronDialect);
     function PushDomDow(var NextDate: TDateTime): boolean;
   public
     Constructor Create;
@@ -359,12 +372,15 @@ Type
     property parts[PartKind: TPartKind]: TCronPart read GetParts write SetParts;
     property ExecutionLimit: LongWord read fExecutionLimit;
     property DayMatchMode: TmaxCronDayMatchMode read fDayMatchMode write fDayMatchMode;
+    property Dialect: TmaxCronDialect read fDialect write SetDialect;
   end;
 
   TDates = array of TDateTime;
 
   // you can use this to show the user a preview ow what his schedule will look like.
-function MakePreview(const SchedulePlan: string; out Dates: TDates; Limit: integer = 100): boolean;
+function MakePreview(const SchedulePlan: string; out Dates: TDates; Limit: integer = 100): boolean; overload;
+function MakePreview(const SchedulePlan: string; const Dialect: TmaxCronDialect; out Dates: TDates;
+  Limit: integer = 100): boolean; overload;
 
 implementation
 
@@ -576,44 +592,71 @@ begin
   Result := lResult;
 end;
 
-function TryExpandCronMacro(const aValue: string; out aExpanded: string): Boolean;
+function TryApplyCronMacro(const aValue: string; var aPlan: TPlan): Boolean;
 var
   lMacro: string;
 begin
   lMacro := Trim(LowerCase(aValue));
   if (lMacro = '@yearly') or (lMacro = '@annually') then
   begin
-    aExpanded := '0 0 1 1 *';
+    aPlan.Minute := '0';
+    aPlan.Hour := '0';
+    aPlan.DayOfTheMonth := '1';
+    aPlan.Month := '1';
+    aPlan.DayOfTheWeek := '*';
     Exit(True);
   end;
 
   if lMacro = '@monthly' then
   begin
-    aExpanded := '0 0 1 * *';
+    aPlan.Minute := '0';
+    aPlan.Hour := '0';
+    aPlan.DayOfTheMonth := '1';
+    aPlan.Month := '*';
+    aPlan.DayOfTheWeek := '*';
     Exit(True);
   end;
 
   if lMacro = '@weekly' then
   begin
-    aExpanded := '0 0 * * 0';
+    aPlan.Minute := '0';
+    aPlan.Hour := '0';
+    aPlan.DayOfTheMonth := '*';
+    aPlan.Month := '*';
+    aPlan.DayOfTheWeek := '0';
     Exit(True);
   end;
 
   if (lMacro = '@daily') or (lMacro = '@midnight') then
   begin
-    aExpanded := '0 0 * * *';
+    aPlan.Minute := '0';
+    aPlan.Hour := '0';
+    aPlan.DayOfTheMonth := '*';
+    aPlan.Month := '*';
+    aPlan.DayOfTheWeek := '*';
     Exit(True);
   end;
 
   if lMacro = '@hourly' then
   begin
-    aExpanded := '0 * * * *';
+    aPlan.Minute := '0';
+    aPlan.Hour := '*';
+    aPlan.DayOfTheMonth := '*';
+    aPlan.Month := '*';
+    aPlan.DayOfTheWeek := '*';
     Exit(True);
   end;
 
   if lMacro = '@reboot' then
   begin
-    aExpanded := '* * * * * * * 1';
+    aPlan.Minute := '*';
+    aPlan.Hour := '*';
+    aPlan.DayOfTheMonth := '*';
+    aPlan.Month := '*';
+    aPlan.DayOfTheWeek := '*';
+    aPlan.Year := '*';
+    aPlan.Second := '*';
+    aPlan.ExecutionLimit := '1';
     Exit(True);
   end;
 
@@ -638,6 +681,8 @@ begin
   inherited;
 
   fDayMatchMode := TmaxCronDayMatchMode.dmAnd;
+  fDialect := cdMaxCron;
+  fLastPlan := '';
   for pk := Low(TPartKind) to High(TPartKind) do
     parts[pk] := TCronPart.Create(pk);
 end;
@@ -899,6 +944,7 @@ var
   pk: TPartKind;
 begin
   Clear;
+  plan.Dialect := fDialect;
   plan.text := CronPlan;
 
   for pk := Low(TPartKind) to High(TPartKind) do
@@ -907,6 +953,7 @@ begin
   fExecutionLimit := 0;
   if plan.ExecutionLimit <> '*' then
     fExecutionLimit := StrToIntDef(plan.ExecutionLimit, 0);
+  fLastPlan := CronPlan;
 end;
 
 procedure TCronSchedulePlan.SetDayOfTheMonth(const Value: TCronPart);
@@ -962,6 +1009,15 @@ end;
 procedure TCronSchedulePlan.SetYear(const Value: TCronPart);
 begin
   FYear := Value;
+end;
+
+procedure TCronSchedulePlan.SetDialect(const Value: TmaxCronDialect);
+begin
+  if fDialect = Value then
+    Exit;
+  fDialect := Value;
+  if fLastPlan <> '' then
+    Parse(fLastPlan);
 end;
 
 { TCronPart }
@@ -1791,6 +1847,7 @@ begin
   fInvokeMode := TmaxCronInvokeMode.imDefault;
   fOverlapMode := TmaxCronOverlapMode.omAllowOverlap;
   fDayMatchMode := TmaxCronDayMatchMode.dmDefault;
+  fDialect := cdMaxCron;
   fRunning := 0;
   fPendingRuns := 0;
   fExecDepth := 0;
@@ -1798,6 +1855,7 @@ begin
   FValidFrom := 0;
   FValidTo := 0;
   fScheduler := TCronSchedulePlan.Create;
+  fScheduler.Dialect := fDialect;
   FEnabled := false;
 end;
 
@@ -1871,6 +1929,8 @@ begin
     if FEventPlan <> Value then
     begin
       FEventPlan := Value;
+      if fScheduler.Dialect <> fDialect then
+        fScheduler.fDialect := fDialect;
       fScheduler.Parse(Value);
       ResetSchedule;
     end;
@@ -1952,6 +2012,8 @@ begin
   event.fCron := Self;
   event.fCronToken := fQueueToken;
   event.fScheduler.DayMatchMode := fDefaultDayMatchMode;
+  event.fDialect := fDefaultDialect;
+  event.fScheduler.Dialect := fDefaultDialect;
   event.Name := aName;
   Result := event;
   fItemsLock.Acquire;
@@ -2176,6 +2238,7 @@ begin
   fTickDepth := 0;
   fDefaultInvokeMode := TmaxCronInvokeMode.imMainThread;
   fDefaultDayMatchMode := TmaxCronDayMatchMode.dmAnd;
+  fDefaultDialect := cdMaxCron;
   fAsyncLock := TCriticalSection.Create;
   fAsyncKeepAlive := TList<IInterface>.Create;
   fTickQueued := 0;
@@ -2200,6 +2263,11 @@ begin
   finally
     fItemsLock.Release;
   end;
+end;
+
+procedure TmaxCron.SetDefaultDialect(const Value: TmaxCronDialect);
+begin
+  fDefaultDialect := Value;
 end;
 
 procedure TmaxCron.KeepAsyncAlive(const aAsync: IInterface);
@@ -2483,6 +2551,12 @@ begin
 end;
 
 function MakePreview(const SchedulePlan: string; out Dates: TDates; Limit: integer = 100): boolean;
+begin
+  Result := MakePreview(SchedulePlan, cdMaxCron, Dates, Limit);
+end;
+
+function MakePreview(const SchedulePlan: string; const Dialect: TmaxCronDialect; out Dates: TDates;
+  Limit: integer = 100): boolean;
 var
   C, x: integer;
   d: TDateTime;
@@ -2491,6 +2565,7 @@ begin
   Result := False;
   scheduler := TCronSchedulePlan.Create;
   try
+    scheduler.Dialect := Dialect;
     scheduler.Parse(SchedulePlan);
     SetLength(Dates, Limit);
     C := 0;
@@ -2573,6 +2648,21 @@ begin
   try
     fDayMatchMode := Value;
     fScheduler.DayMatchMode := lMode;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.SetDialect(const Value: TmaxCronDialect);
+begin
+  fLock.Acquire;
+  try
+    if fDialect = Value then
+      Exit;
+    fDialect := Value;
+    fScheduler.Dialect := Value;
+    if FEventPlan <> '' then
+      ResetSchedule;
   finally
     fLock.Release;
   end;
@@ -2986,7 +3076,6 @@ procedure TPlan.setText(const Value: string);
 var
   l: TStringList;
   s: string;
-  lExpanded: string;
   x: integer;
 begin
   reset;
@@ -2995,29 +3084,71 @@ begin
   s := NormalizeCommaWhitespace(s);
   s := Trim(s);
   if s = '' then
-    raise Exception.Create('Cron plan must have at least 5 fields');
+  begin
+    case fDialect of
+      cdStandard:
+        raise Exception.Create('Cron plan must have exactly 5 fields');
+      cdQuartzSecondsFirst:
+        raise Exception.Create('Cron plan must have 6 or 7 fields');
+    else
+      raise Exception.Create('Cron plan must have at least 5 fields');
+    end;
+  end;
   if s[1] = '@' then
   begin
-    if not TryExpandCronMacro(s, lExpanded) then
+    if not TryApplyCronMacro(s, Self) then
       raise Exception.Create('Unknown cron macro');
-    s := lExpanded;
+    Exit;
   end;
 
   l := TStringList.Create;
   try
     SplitByWhitespace(s, l);
 
-    if l.Count < 5 then
-      raise Exception.Create('Cron plan must have at least 5 fields');
-    if l.Count > Length(parts) then
-      raise Exception.Create('Cron plan has too many fields');
+    case fDialect of
+      cdStandard:
+        if l.Count <> 5 then
+          raise Exception.Create('Cron plan must have exactly 5 fields');
+      cdQuartzSecondsFirst:
+        if (l.Count < 6) or (l.Count > 7) then
+          raise Exception.Create('Cron plan must have 6 or 7 fields');
+    else
+      begin
+        if l.Count < 5 then
+          raise Exception.Create('Cron plan must have at least 5 fields');
+        if l.Count > Length(parts) then
+          raise Exception.Create('Cron plan has too many fields');
+      end;
+    end;
 
     for x := 0 to l.Count - 1 do
       if (Length(l[x]) > 0) and ((l[x][1] = ',') or (l[x][Length(l[x])] = ',') or (Pos(',,', l[x]) > 0)) then
         raise Exception.Create('Invalid cron token');
 
-    for x := 0 to Min(Length(parts), l.Count) - 1 do
-      parts[x] := l[x];
+    case fDialect of
+      cdStandard:
+        begin
+          Minute := l[0];
+          Hour := l[1];
+          DayOfTheMonth := l[2];
+          Month := l[3];
+          DayOfTheWeek := l[4];
+        end;
+      cdQuartzSecondsFirst:
+        begin
+          Second := l[0];
+          Minute := l[1];
+          Hour := l[2];
+          DayOfTheMonth := l[3];
+          Month := l[4];
+          DayOfTheWeek := l[5];
+          if l.Count > 6 then
+            Year := l[6];
+        end;
+    else
+      for x := 0 to Min(Length(parts), l.Count) - 1 do
+        parts[x] := l[x];
+    end;
   finally
     l.Free;
   end;

@@ -13,6 +13,8 @@ type
   private
     procedure AssertParses(const aExpr: string);
     procedure AssertRaisesOnParse(const aExpr: string);
+    procedure AssertParsesDialect(const aExpr: string; const aDialect: TmaxCronDialect);
+    procedure AssertRaisesOnParseDialect(const aExpr: string; const aDialect: TmaxCronDialect);
   public
     [Test]
     procedure Parse_AbridgedDefaults_SecondsAndLimit;
@@ -40,16 +42,28 @@ type
 
     [Test]
     procedure Parse_RebootMacro_SetsExecutionLimit;
+
+    [Test]
+    procedure Parse_Dialect_Standard_Exact5;
+
+    [Test]
+    procedure Parse_Dialect_QuartzSecondsFirst_FieldOrder;
   end;
 
 implementation
 
 procedure TTestCronParsing.AssertParses(const aExpr: string);
+begin
+  AssertParsesDialect(aExpr, cdMaxCron);
+end;
+
+procedure TTestCronParsing.AssertParsesDialect(const aExpr: string; const aDialect: TmaxCronDialect);
 var
   Plan: TCronSchedulePlan;
 begin
   Plan := TCronSchedulePlan.Create;
   try
+    Plan.Dialect := aDialect;
     Plan.Parse(aExpr);
   finally
     Plan.Free;
@@ -58,8 +72,13 @@ end;
 
 procedure TTestCronParsing.AssertRaisesOnParse(const aExpr: string);
 begin
+  AssertRaisesOnParseDialect(aExpr, cdMaxCron);
+end;
+
+procedure TTestCronParsing.AssertRaisesOnParseDialect(const aExpr: string; const aDialect: TmaxCronDialect);
+begin
   try
-    AssertParses(aExpr);
+    AssertParsesDialect(aExpr, aDialect);
     Assert.Fail('Expected parse error: ' + aExpr);
   except
     on Exception do
@@ -148,6 +167,48 @@ begin
   try
     Plan.Parse('@reboot');
     Assert.AreEqual(1, Integer(Plan.ExecutionLimit));
+  finally
+    Plan.Free;
+  end;
+end;
+
+procedure TTestCronParsing.Parse_Dialect_Standard_Exact5;
+var
+  Plan: TCronSchedulePlan;
+begin
+  Plan := TCronSchedulePlan.Create;
+  try
+    Plan.Dialect := cdStandard;
+    Plan.Parse('0 0 * * *');
+    Assert.AreEqual('0', Plan.Second.Data);
+    Assert.IsTrue(Plan.Year.Fullrange);
+    Assert.AreEqual(0, Integer(Plan.ExecutionLimit));
+    AssertRaisesOnParseDialect('0 0 * * * *', cdStandard);
+  finally
+    Plan.Free;
+  end;
+end;
+
+procedure TTestCronParsing.Parse_Dialect_QuartzSecondsFirst_FieldOrder;
+var
+  Plan: TCronSchedulePlan;
+begin
+  Plan := TCronSchedulePlan.Create;
+  try
+    Plan.Dialect := cdQuartzSecondsFirst;
+    Plan.Parse('5 10 11 12 1 2 2025');
+    Assert.AreEqual('5', Plan.Second.Data);
+    Assert.AreEqual('10', Plan.Minute.Data);
+    Assert.AreEqual('11', Plan.Hour.Data);
+    Assert.AreEqual('12', Plan.Day_of_the_Month.Data);
+    Assert.AreEqual('1', Plan.Month.Data);
+    Assert.AreEqual('2', Plan.Day_of_the_Week.Data);
+    Assert.AreEqual('2025', Plan.Year.Data);
+
+    Plan.Parse('5 10 11 12 1 2');
+    Assert.IsTrue(Plan.Year.Fullrange);
+    AssertRaisesOnParseDialect('0 0 * * *', cdQuartzSecondsFirst);
+    AssertRaisesOnParseDialect('0 0 1 2 3 4 5 6', cdQuartzSecondsFirst);
   finally
     Plan.Free;
   end;

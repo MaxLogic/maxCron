@@ -186,6 +186,23 @@ The following graph shows what the format that maxCron uses consists of:
 
 Any of these 8 fields may be an asterisk (*). This means the entire range of possible values (each minute, each hour, etc.).
 
+## Cron dialects
+
+We can parse multiple cron dialects. The default remains `cdMaxCron` (current behavior).
+
+- `cdStandard` (5-field): `<Minute> <Hour> <DayOfMonth> <Month> <DayOfWeek>`
+- `cdMaxCron` (5-8 field): `<Minute> <Hour> <DayOfMonth> <Month> <DayOfWeek> [Year] [Second] [ExecutionLimit]`
+- `cdQuartzSecondsFirst` (6/7-field): `<Second> <Minute> <Hour> <DayOfMonth> <Month> <DayOfWeek> [Year]`
+
+DefaultDialect applies when we create new events; we can override per event:
+
+```delphi
+CronScheduler.DefaultDialect := cdStandard;
+NewSchedule := CronScheduler.Add('QuartzStyle');
+NewSchedule.Dialect := cdQuartzSecondsFirst;
+NewSchedule.EventPlan := '0 15 10 ? * 2#3';
+```
+
 Any field may contain a list of values separated by commas, (e.g. 1,3,7) or a range of values (two integers separated by a hyphen, e.g. 1-5).
 
 After an asterisk (*) or a range of values, you can use character / to specify that values are repeated over and over with a certain interval between them. For example, you can write "0-23/2" in Hour field to specify that some action should be performed every two hours (it will have the same effect as "0,2,4,6,8,10,12,14,16,18,20,22"); value "*/4" in Minute field means that the action should be performed every 4 minutes, "1-30/3" means the same as "1,4,7,10,13,16,19,22,25,28".
