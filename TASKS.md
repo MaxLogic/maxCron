@@ -30,16 +30,6 @@ Details:
 
 Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `tests/unit/TestScheduleNext.pas`, `README.md`
 
-### T-012 Add human-readable schedule descriptions
-Summary: Provide a basic “humanized” description for schedules for UI/logging.
-
-Details:
-- Handle common patterns (daily, weekly, monthly, simple step).
-- Keep output deterministic and language-neutral (English only).
-- Add tests for a small curated set of patterns.
-
-Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `README.md`
-
 ### T-013 Add misfire policy handling
 Summary: Define what happens when the scheduler is delayed or the machine sleeps.
 
@@ -101,6 +91,16 @@ Details:
 - Add tests for count=0, large count, and invalid plans.
 
 Likely files to touch/read: `maxCron.pas`, `tests/unit/TestScheduleNext.pas`, `README.md`
+
+### T-012 Add human-readable schedule descriptions
+Summary: Provide a basic “humanized” description for schedules for UI/logging.
+
+Details:
+- Handle common patterns (daily, weekly, monthly, simple step).
+- Keep output deterministic and language-neutral (English only).
+- Add tests for a small curated set of patterns.
+
+Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `README.md`
 
 ### T-002 Strengthen cron parser and field-count coverage
 Summary: Add targeted tests for malformed tokens, mixed list/range/step syntax, and field-count semantics (5/6/7/8 fields).

@@ -148,6 +148,25 @@ begin
 end;
 ```
 
+## Human-readable descriptions
+
+We can generate a basic, deterministic description for logging or UI:
+
+```delphi
+var
+  Plan: TCronSchedulePlan;
+  Desc: string;
+begin
+  Plan := TCronSchedulePlan.Create;
+  try
+    Plan.Parse('*/5 * * * * * 0 0');
+    Desc := Plan.Describe; // "Every 5 minutes"
+  finally
+    Plan.Free;
+  end;
+end;
+```
+
 # From / To valid range
 
 Example how to use From / To valid range. The event will fire for one year, every sunday, every second hour, but only on 1,5 and 10 month in the year.

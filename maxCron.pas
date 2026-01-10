@@ -49,6 +49,7 @@ Type
   TmaxCronTimerBackend = (ctAuto, ctVcl, ctPortable);
 
   TDates = array of TDateTime;
+  TWordArray = array of Word;
 
   ICronTimer = interface
     ['{4F3B81F6-57F0-4A98-9F65-6B8E7A7A0E41}']
@@ -318,6 +319,13 @@ Type
 
     procedure Clear;
     function NextVal(v: word): word;
+    function IsAny: Boolean;
+    function IsNoSpec: Boolean;
+    function HasSpecialTokens: Boolean;
+    function TryGetSingleValue(out aValue: Word): Boolean;
+    function TryGetStep(out aStart, aStep: Word; out aCoversFullRange: Boolean): Boolean;
+    function GetValues(out aValues: TWordArray): Boolean;
+    function DescribeDomSpecial: string;
 
     property Data: string read FData write SetData;
     property PartKind: TPartKind read fPartKind;
@@ -366,6 +374,7 @@ Type
     function GetNextOccurrences(const aCount: Integer; const aFromDate: TDateTime;
       out aDates: TDates; const aValidFrom: TDateTime = 0;
       const aValidTo: TDateTime = 0): Integer;
+    function Describe: string;
 
     property Second: TCronPart read FSecond write SetSecond;
     property Minute: TCronPart read FMinute write SetMinute;
@@ -833,6 +842,64 @@ begin
   end;
 end;
 
+function FormatTwo(const aValue: Word): string;
+begin
+  Result := Format('%.2d', [aValue]);
+end;
+
+function FormatTime(const aHour, aMinute, aSecond: Word; const aIncludeSeconds: Boolean): string;
+begin
+  if aIncludeSeconds then
+    Result := FormatTwo(aHour) + ':' + FormatTwo(aMinute) + ':' + FormatTwo(aSecond)
+  else
+    Result := FormatTwo(aHour) + ':' + FormatTwo(aMinute);
+end;
+
+function FormatDowName(const aDow: Word): string;
+var
+  lIndex: Word;
+begin
+  if aDow = 0 then
+    lIndex := 7
+  else
+    lIndex := aDow;
+
+  if (lIndex >= 1) and (lIndex <= 7) then
+    Result := DayNames[lIndex]
+  else
+    Result := IntToStr(aDow);
+end;
+
+function FormatMonthName(const aMonth: Word): string;
+begin
+  if (aMonth >= 1) and (aMonth <= 12) then
+    Result := MonthNames[aMonth]
+  else
+    Result := IntToStr(aMonth);
+end;
+
+function JoinValues(const aValues: TWordArray; const aKind: TPartKind): string;
+var
+  i: Integer;
+  s: string;
+begin
+  s := '';
+  for i := 0 to Length(aValues) - 1 do
+  begin
+    if i > 0 then
+      s := s + ',';
+    case aKind of
+      TPartKind.ckDayOfTheWeek:
+        s := s + FormatDowName(aValues[i]);
+      TPartKind.ckMonth:
+        s := s + FormatMonthName(aValues[i]);
+    else
+      s := s + IntToStr(aValues[i]);
+    end;
+  end;
+  Result := s;
+end;
+
 function TCronSchedulePlan.GetNextOccurrences(const aCount: Integer; const aFromDate: TDateTime;
   out aDates: TDates; const aValidFrom: TDateTime; const aValidTo: TDateTime): Integer;
 var
@@ -872,6 +939,118 @@ begin
   end;
 
   SetLength(aDates, Result);
+end;
+
+function TCronSchedulePlan.Describe: string;
+var
+  lHour: Word;
+  lMinute: Word;
+  lSecond: Word;
+  lMonth: Word;
+  lDom: Word;
+  lYear: Word;
+  lHasHour: Boolean;
+  lHasMinute: Boolean;
+  lHasSecond: Boolean;
+  lHasMonth: Boolean;
+  lHasDom: Boolean;
+  lHasYear: Boolean;
+  lTime: string;
+  lYearSuffix: string;
+  lValues: TWordArray;
+  lStepStart: Word;
+  lStep: Word;
+  lStepFull: Boolean;
+  lDomText: string;
+begin
+  lHasHour := Hour.TryGetSingleValue(lHour);
+  lHasMinute := Minute.TryGetSingleValue(lMinute);
+  lHasSecond := Second.TryGetSingleValue(lSecond);
+  lHasMonth := Month.TryGetSingleValue(lMonth);
+  lHasDom := Day_of_the_Month.TryGetSingleValue(lDom);
+  lHasYear := Year.TryGetSingleValue(lYear);
+
+  lYearSuffix := '';
+  if lHasYear then
+    lYearSuffix := ' in ' + IntToStr(lYear);
+
+  if Second.TryGetStep(lStepStart, lStep, lStepFull) and (lStep > 0) and
+    (Minute.IsAny) and (Hour.IsAny) and (Day_of_the_Month.IsAny) and (Month.IsAny) and
+    (Day_of_the_Week.IsAny) and (Year.IsAny) then
+  begin
+    if lStep = 1 then
+      Exit('Every second' + lYearSuffix);
+    if lStepStart = 0 then
+      Exit(Format('Every %d seconds%s', [lStep, lYearSuffix]));
+    Exit(Format('Every %d seconds starting at %d%s', [lStep, lStepStart, lYearSuffix]));
+  end;
+
+  if Minute.TryGetStep(lStepStart, lStep, lStepFull) and (lStep > 0) and
+    (Hour.IsAny) and (Day_of_the_Month.IsAny) and (Month.IsAny) and (Day_of_the_Week.IsAny) and
+    (Year.IsAny) and lHasSecond then
+  begin
+    if lSecond = 0 then
+    begin
+      if lStep = 1 then
+        Exit('Every minute' + lYearSuffix);
+      if lStepStart = 0 then
+        Exit(Format('Every %d minutes%s', [lStep, lYearSuffix]));
+      Exit(Format('Every %d minutes starting at minute %d%s', [lStep, lStepStart, lYearSuffix]));
+    end;
+  end;
+
+  if Hour.TryGetStep(lStepStart, lStep, lStepFull) and (lStep > 0) and
+    (Day_of_the_Month.IsAny) and (Month.IsAny) and (Day_of_the_Week.IsAny) and (Year.IsAny) and
+    lHasMinute and lHasSecond then
+  begin
+    if (lMinute = 0) and (lSecond = 0) then
+    begin
+      if lStep = 1 then
+        Exit('Every hour' + lYearSuffix);
+      if lStepStart = 0 then
+        Exit(Format('Every %d hours%s', [lStep, lYearSuffix]));
+      Exit(Format('Every %d hours starting at hour %d%s', [lStep, lStepStart, lYearSuffix]));
+    end;
+  end;
+
+  lTime := '';
+  if lHasHour and lHasMinute and lHasSecond then
+  begin
+    if lSecond = 0 then
+      lTime := FormatTime(lHour, lMinute, lSecond, False)
+    else
+      lTime := FormatTime(lHour, lMinute, lSecond, True);
+  end;
+
+  if (lTime <> '') and (Day_of_the_Month.IsAny) and (Month.IsAny) and (Day_of_the_Week.IsAny) and (Year.IsAny) then
+    Exit('Every day at ' + lTime + lYearSuffix);
+
+  if (lTime <> '') and (Day_of_the_Month.IsAny) and (Month.IsAny) and (Year.IsAny) and
+    (not Day_of_the_Week.IsAny) and (not Day_of_the_Week.HasSpecialTokens) then
+  begin
+    if Day_of_the_Week.GetValues(lValues) then
+      Exit('Every week on ' + JoinValues(lValues, TPartKind.ckDayOfTheWeek) + ' at ' + lTime + lYearSuffix);
+  end;
+
+  if (lTime <> '') and (Month.IsAny) and (Year.IsAny) and (Day_of_the_Week.IsAny) then
+  begin
+    lDomText := Day_of_the_Month.DescribeDomSpecial;
+    if lDomText <> '' then
+      Exit('Every month on ' + lDomText + ' at ' + lTime + lYearSuffix);
+    if lHasDom then
+      Exit(Format('Every month on day %d at %s%s', [lDom, lTime, lYearSuffix]));
+  end;
+
+  if (lTime <> '') and lHasMonth and (Year.IsAny) and (Day_of_the_Week.IsAny) then
+  begin
+    lDomText := Day_of_the_Month.DescribeDomSpecial;
+    if lDomText <> '' then
+      Exit('Every year on ' + FormatMonthName(lMonth) + ' ' + lDomText + ' at ' + lTime + lYearSuffix);
+    if lHasDom then
+      Exit(Format('Every year on %s %d at %s%s', [FormatMonthName(lMonth), lDom, lTime, lYearSuffix]));
+  end;
+
+  Result := 'Custom schedule';
 end;
 
 function TCronSchedulePlan.PushDomDow(var NextDate: TDateTime): boolean;
@@ -1456,6 +1635,114 @@ begin
     end;
   end;
 
+end;
+
+function TCronPart.IsAny: Boolean;
+begin
+  Result := Fullrange or fNoSpec;
+end;
+
+function TCronPart.IsNoSpec: Boolean;
+begin
+  Result := fNoSpec;
+end;
+
+function TCronPart.HasSpecialTokens: Boolean;
+begin
+  Result := HasSpecial;
+end;
+
+function TCronPart.TryGetSingleValue(out aValue: Word): Boolean;
+begin
+  if fNoSpec then
+    Exit(False);
+  if HasSpecial then
+    Exit(False);
+  if (not fFullrange) and (FCount = 1) then
+  begin
+    aValue := fRange[0];
+    Exit(True);
+  end;
+  Result := False;
+end;
+
+function TCronPart.TryGetStep(out aStart, aStep: Word; out aCoversFullRange: Boolean): Boolean;
+var
+  i: Integer;
+  lStep: Integer;
+begin
+  aStart := 0;
+  aStep := 0;
+  aCoversFullRange := False;
+
+  if fNoSpec then
+    Exit(False);
+  if HasSpecial then
+    Exit(False);
+
+  if fFullrange then
+  begin
+    aStart := FValidFrom;
+    aStep := 1;
+    aCoversFullRange := True;
+    Exit(True);
+  end;
+
+  if FCount = 0 then
+    Exit(False);
+
+  aStart := fRange[0];
+  if FCount = 1 then
+  begin
+    aStep := 0;
+    Exit(True);
+  end;
+
+  lStep := fRange[1] - fRange[0];
+  if lStep <= 0 then
+    Exit(False);
+
+  for i := 2 to FCount - 1 do
+    if (fRange[i] - fRange[i - 1]) <> lStep then
+      Exit(False);
+
+  aStep := lStep;
+  if (aStart = FValidFrom) and (fRange[FCount - 1] = FValidTo) then
+    aCoversFullRange := ((FValidTo - FValidFrom) div aStep + 1) = FCount;
+
+  Result := True;
+end;
+
+function TCronPart.GetValues(out aValues: TWordArray): Boolean;
+begin
+  SetLength(aValues, 0);
+  if fNoSpec then
+    Exit(False);
+  if HasSpecial then
+    Exit(False);
+  if fFullrange then
+    Exit(False);
+  if FCount = 0 then
+    Exit(False);
+
+  SetLength(aValues, FCount);
+  if FCount > 0 then
+    Move(fRange[0], aValues[0], SizeOf(fRange[0]) * FCount);
+  Result := True;
+end;
+
+function TCronPart.DescribeDomSpecial: string;
+begin
+  case fDomModifier of
+    TCronDomModifier.cdmLastDay:
+      Result := 'the last day';
+    TCronDomModifier.cdmLastWeekday:
+      Result := 'the last weekday';
+    TCronDomModifier.cdmNearestWeekday:
+      Result := Format('the nearest weekday to %d', [fDomValue]);
+  else
+    Result := '';
+  end;
 end;
 
 procedure TCronPart.Parse;

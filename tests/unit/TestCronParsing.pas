@@ -15,6 +15,7 @@ type
     procedure AssertRaisesOnParse(const aExpr: string);
     procedure AssertParsesDialect(const aExpr: string; const aDialect: TmaxCronDialect);
     procedure AssertRaisesOnParseDialect(const aExpr: string; const aDialect: TmaxCronDialect);
+    procedure AssertDescription(const aExpr, aExpected: string);
   public
     [Test]
     procedure Parse_AbridgedDefaults_SecondsAndLimit;
@@ -48,6 +49,9 @@ type
 
     [Test]
     procedure Parse_Dialect_QuartzSecondsFirst_FieldOrder;
+
+    [Test]
+    procedure Describe_BasicPatterns;
   end;
 
 implementation
@@ -83,6 +87,21 @@ begin
   except
     on Exception do
       ; // expected
+  end;
+end;
+
+procedure TTestCronParsing.AssertDescription(const aExpr, aExpected: string);
+var
+  Plan: TCronSchedulePlan;
+  Desc: string;
+begin
+  Plan := TCronSchedulePlan.Create;
+  try
+    Plan.Parse(aExpr);
+    Desc := Plan.Describe;
+    Assert.AreEqual(aExpected, Desc);
+  finally
+    Plan.Free;
   end;
 end;
 
@@ -212,6 +231,16 @@ begin
   finally
     Plan.Free;
   end;
+end;
+
+procedure TTestCronParsing.Describe_BasicPatterns;
+begin
+  AssertDescription('* * * * * *', 'Every minute');
+  AssertDescription('*/5 * * * * * 0 0', 'Every 5 minutes');
+  AssertDescription('0 0 * * * * 0 0', 'Every day at 00:00');
+  AssertDescription('30 9 * * 1 * 0 0', 'Every week on Mon at 09:30');
+  AssertDescription('0 10 15 * * * 0 0', 'Every month on day 15 at 10:00');
+  AssertDescription('0 10 1 1 * * 0 0', 'Every year on Jan 1 at 10:00');
 end;
 
 end.
