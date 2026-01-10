@@ -3,7 +3,7 @@ unit TestExecutionLimit;
 interface
 
 uses
-  System.DateUtils, System.Diagnostics, System.SysUtils, System.SyncObjs,
+  System.DateUtils, System.Diagnostics, System.SysUtils, System.SyncObjs, System.Classes,
   DUnitX.TestFramework,
   maxCron;
 
@@ -27,7 +27,8 @@ begin
   Count := 0;
   Cron := TmaxCron.Create(ctPortable);
   try
-    Evt := Cron.Add('Limit', '* * * * * * * 2'); // execution limit = 2
+    Evt := Cron.Add('Limit');
+    Evt.EventPlan := '* * * * * * * 2'; // execution limit = 2
     Evt.InvokeMode := imThread;
     Evt.OverlapMode := omAllowOverlap;
     Evt.OnScheduleProc :=
@@ -52,4 +53,3 @@ begin
 end;
 
 end.
-

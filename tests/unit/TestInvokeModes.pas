@@ -38,7 +38,8 @@ begin
   try
     Fired := TEvent.Create(nil, True, False, '');
     try
-      Evt := Cron.Add('MainQueued', '* * * * * * * 0');
+      Evt := Cron.Add('MainQueued');
+      Evt.EventPlan := '* * * * * * * 0';
       Evt.InvokeMode := imMainThread;
       Evt.OverlapMode := omAllowOverlap;
       Evt.OnScheduleProc :=
@@ -54,6 +55,7 @@ begin
         begin
           Cron.TickAt(Evt.NextSchedule);
         end);
+      Worker.FreeOnTerminate := False;
       try
         Worker.Start;
         Worker.WaitFor;
@@ -89,7 +91,8 @@ begin
   try
     Fired := TEvent.Create(nil, True, False, '');
     try
-      Evt := Cron.Add('TTask', '* * * * * * * 0');
+      Evt := Cron.Add('TTask');
+      Evt.EventPlan := '* * * * * * * 0';
       Evt.InvokeMode := imTTask;
       Evt.OverlapMode := omAllowOverlap;
       Evt.OnScheduleProc := procedure(Sender: TmaxCronEvent) begin Fired.SetEvent; end;
@@ -117,7 +120,8 @@ begin
   try
     Fired := TEvent.Create(nil, True, False, '');
     try
-      Evt := Cron.Add('MaxAsync', '* * * * * * * 0');
+      Evt := Cron.Add('MaxAsync');
+      Evt.EventPlan := '* * * * * * * 0';
       Evt.InvokeMode := imMaxAsync;
       Evt.OverlapMode := omAllowOverlap;
       Evt.OnScheduleProc := procedure(Sender: TmaxCronEvent) begin Fired.SetEvent; end;
@@ -138,4 +142,3 @@ begin
 end;
 
 end.
-

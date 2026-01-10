@@ -3,7 +3,7 @@ unit TestStress;
 interface
 
 uses
-  System.Diagnostics, System.SysUtils, System.SyncObjs, System.Classes,
+  System.DateUtils, System.Diagnostics, System.SysUtils, System.SyncObjs, System.Classes,
   DUnitX.TestFramework,
   maxCron;
 
@@ -39,7 +39,8 @@ begin
   try
     Cron := TmaxCron.Create(ctPortable);
     try
-      Evt := Cron.Add('MainThread', '* * * * * * * 0');
+      Evt := Cron.Add('MainThread');
+      Evt.EventPlan := '* * * * * * * 0';
       Evt.InvokeMode := imMainThread;
       Evt.OnScheduleProc :=
         procedure(Sender: TmaxCronEvent)
@@ -90,7 +91,8 @@ begin
 
   Cron := TmaxCron.Create(ctPortable);
   try
-    Evt := Cron.Add('Coalesce', '* * * * * * * 0');
+    Evt := Cron.Add('Coalesce');
+    Evt.EventPlan := '* * * * * * * 0';
     Evt.InvokeMode := imThread;
     Evt.OverlapMode := omSerializeCoalesce;
     Evt.OnScheduleProc :=
@@ -119,4 +121,3 @@ begin
 end;
 
 end.
-

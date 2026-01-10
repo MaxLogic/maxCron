@@ -10,12 +10,27 @@ uses
 type
   [TestFixture]
   TTestHeavyStress = class
+  private
+    procedure SetError(const aLock: TCriticalSection; var aErrorText: string;
+      const aWhere, aText: string);
   public
     [Test]
     procedure ManyEvents_ManyTicks_30s;
   end;
 
 implementation
+
+procedure TTestHeavyStress.SetError(const aLock: TCriticalSection; var aErrorText: string;
+  const aWhere, aText: string);
+begin
+  aLock.Acquire;
+  try
+    if aErrorText = '' then
+      aErrorText := aWhere + ': ' + aText;
+  finally
+    aLock.Release;
+  end;
+end;
 
 procedure TTestHeavyStress.ManyEvents_ManyTicks_30s;
 const
@@ -30,7 +45,6 @@ var
   Threads: array [0 .. ThreadCount - 1] of TThread;
   Started: array [0 .. ThreadCount - 1] of TEvent;
   i: Integer;
-  BaseDt: TDateTime;
   EndStamp: Int64;
   Evt: TmaxCronEvent;
 
@@ -51,46 +65,36 @@ var
           if NowStamp >= EndStamp then
             Break;
           try
-            NowDt := IncSecond(BaseDt, LocalTick);
+            NowDt := Now;
             Cron.TickAt(NowDt);
           except
             on E: Exception do
             begin
-              SetError('TickAt', E.ClassName + ': ' + E.Message);
+              SetError(ErrLock, ErrorText, 'TickAt', E.ClassName + ': ' + E.Message);
               Exit;
             end;
           end;
           Inc(LocalTick);
           if (LocalTick and $F) = 0 then
             TThread.Yield;
+          TThread.Sleep(10);
         end;
       end
       );
-  end;
-
-  procedure SetError(const aWhere, aText: string);
-  begin
-    ErrLock.Acquire;
-    try
-      if ErrorText = '' then
-        ErrorText := aWhere + ': ' + aText;
-    finally
-      ErrLock.Release;
-    end;
+    Result.FreeOnTerminate := False;
   end;
 
 begin
   Fires := 0;
   ErrorText := '';
-  BaseDt := EncodeDateTime(2025, 1, 1, 0, 0, 0, 0);
-
   ErrLock := TCriticalSection.Create;
   try
     Cron := TmaxCron.Create(ctPortable);
     try
       for i := 0 to EventCount - 1 do
       begin
-        Evt := Cron.Add('E' + IntToStr(i), '* * * * * * * 0');
+        Evt := Cron.Add('E' + IntToStr(i));
+        Evt.EventPlan := '* * * * * * * 0';
         Evt.Tag := i;
         Evt.InvokeMode := imThread;
         if (i mod 4) = 0 then
@@ -111,7 +115,7 @@ begin
                 TThread.Sleep(2);
             except
               on E: Exception do
-                SetError('Callback', E.ClassName + ': ' + E.Message);
+                SetError(ErrLock, ErrorText, 'Callback', E.ClassName + ': ' + E.Message);
             end;
           end;
         Evt.Run;

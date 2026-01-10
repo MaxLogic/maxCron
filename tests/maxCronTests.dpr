@@ -28,6 +28,16 @@ begin
   ReportMemoryLeaksOnShutdown := True;
   try
     TDUnitX.CheckCommandLine;
+    TDUnitX.RegisterTestFixture(TTestCronInvalidCorpus);
+    TDUnitX.RegisterTestFixture(TTestCronParsing);
+    TDUnitX.RegisterTestFixture(TTestCronUtilsCorpus);
+    TDUnitX.RegisterTestFixture(TTestExecutionLimit);
+    TDUnitX.RegisterTestFixture(TTestInvokeModes);
+    TDUnitX.RegisterTestFixture(TTestLifecycle);
+    TDUnitX.RegisterTestFixture(TTestMaxCron);
+    TDUnitX.RegisterTestFixture(TTestScheduleNext);
+    TDUnitX.RegisterTestFixture(TTestStress);
+    TDUnitX.RegisterTestFixture(TTestValidRange);
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));

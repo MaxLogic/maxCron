@@ -19,6 +19,7 @@ begin
   ReportMemoryLeaksOnShutdown := True;
   try
     TDUnitX.CheckCommandLine;
+    TDUnitX.RegisterTestFixture(TTestHeavyStress);
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));
@@ -33,4 +34,3 @@ begin
     end;
   end;
 end.
-

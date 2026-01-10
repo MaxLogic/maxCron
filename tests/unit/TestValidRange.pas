@@ -3,7 +3,7 @@ unit TestValidRange;
 interface
 
 uses
-  System.DateUtils, System.Diagnostics, System.SysUtils, System.SyncObjs,
+  System.DateUtils, System.Diagnostics, System.SysUtils, System.SyncObjs, System.Classes,
   DUnitX.TestFramework,
   maxCron;
 
@@ -29,7 +29,8 @@ begin
   Count := 0;
   Cron := TmaxCron.Create(ctPortable);
   try
-    Evt := Cron.Add('Range', '* * * * * * * 0');
+    Evt := Cron.Add('Range');
+    Evt.EventPlan := '* * * * * * * 0';
     Evt.InvokeMode := imThread;
     Evt.OverlapMode := omAllowOverlap;
     Evt.OnScheduleProc :=
@@ -60,4 +61,3 @@ begin
 end;
 
 end.
-

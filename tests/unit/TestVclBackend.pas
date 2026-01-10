@@ -3,7 +3,7 @@ unit TestVclBackend;
 interface
 
 uses
-  System.Diagnostics, System.SysUtils, System.Classes,
+  System.Diagnostics, System.SysUtils, System.Classes, System.SyncObjs,
   Vcl.Forms,
   DUnitX.TestFramework,
   maxCron;
@@ -48,7 +48,8 @@ begin
   try
     Assert.AreEqual(TmaxCronTimerBackend.ctVcl, Cron.ActiveTimerBackend);
 
-    Evt := Cron.Add('VclTick', '* * * * * * * 0'); // every second
+    Evt := Cron.Add('VclTick');
+    Evt.EventPlan := '* * * * * * * 0'; // every second
     Evt.InvokeMode := imMainThread;
     Evt.OverlapMode := omAllowOverlap;
     Evt.OnScheduleProc :=
@@ -75,4 +76,3 @@ begin
 end;
 
 end.
-

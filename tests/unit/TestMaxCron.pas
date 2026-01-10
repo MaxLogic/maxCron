@@ -3,7 +3,7 @@ unit TestMaxCron;
 interface
 
 uses
-  System.DateUtils, System.Diagnostics, System.SysUtils, System.SyncObjs,
+  System.DateUtils, System.Diagnostics, System.SysUtils, System.SyncObjs, System.Classes,
   DUnitX.TestFramework,
   maxCron;
 
@@ -52,7 +52,8 @@ begin
     Started := TEvent.Create(nil, True, False, '');
     Gate := TEvent.Create(nil, True, False, '');
     try
-      Evt := Cron.Add('Coalesce', '* * * * * * * 0');
+      Evt := Cron.Add('Coalesce');
+      Evt.EventPlan := '* * * * * * * 0';
       Evt.InvokeMode := imThread;
       Evt.OverlapMode := omSerializeCoalesce;
       Evt.OnScheduleProc :=
@@ -106,7 +107,8 @@ begin
     Started := TEvent.Create(nil, True, False, '');
     Gate := TEvent.Create(nil, True, False, '');
     try
-      Evt := Cron.Add('Serialize', '* * * * * * * 0');
+      Evt := Cron.Add('Serialize');
+      Evt.EventPlan := '* * * * * * * 0';
       Evt.InvokeMode := imThread;
       Evt.OverlapMode := omSerialize;
       Evt.OnScheduleProc :=

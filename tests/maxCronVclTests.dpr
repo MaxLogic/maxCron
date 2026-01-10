@@ -19,6 +19,7 @@ begin
   Application.Initialize;
   try
     TDUnitX.CheckCommandLine;
+    TDUnitX.RegisterTestFixture(TTestVclBackend);
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));
@@ -34,4 +35,3 @@ begin
     end;
   end;
 end.
-
