@@ -127,6 +127,27 @@ TPlan is a small record that lets us set parts in a friendly way and then conver
   NewSchedule := CronScheduler.Add('EventFromTPlan', plan.Text, OnScheduleTrigger).Run;
 ```
 
+# Preview upcoming occurrences
+
+We can fetch the next N fire times from a parsed plan:
+
+```delphi
+var
+  Plan: TCronSchedulePlan;
+  Dates: TDates;
+  Count: Integer;
+begin
+  Plan := TCronSchedulePlan.Create;
+  try
+    Plan.Parse('*/5 * * * * * 0 0');
+    Count := Plan.GetNextOccurrences(10, Now, Dates);
+    // Dates[0..Count-1] are our upcoming occurrences.
+  finally
+    Plan.Free;
+  end;
+end;
+```
+
 # From / To valid range
 
 Example how to use From / To valid range. The event will fire for one year, every sunday, every second hour, but only on 1,5 and 10 month in the year.

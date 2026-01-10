@@ -57,6 +57,15 @@ type
 
     [Test]
     procedure Next_YearRestriction_NoLeapDay;
+
+    [Test]
+    procedure Next_GetNextOccurrences_CountZero;
+
+    [Test]
+    procedure Next_GetNextOccurrences_LargeCount;
+
+    [Test]
+    procedure Next_GetNextOccurrences_InvalidPlan;
   end;
 
 implementation
@@ -270,6 +279,71 @@ begin
     Plan.Parse('0 0 29 2 * 2025 0 0');
     Base := EncodeDateTime(2025, 1, 1, 0, 0, 0, 0);
     Assert.IsFalse(Plan.FindNextScheduleDate(Base, NextDt));
+  finally
+    Plan.Free;
+  end;
+end;
+
+procedure TTestScheduleNext.Next_GetNextOccurrences_CountZero;
+var
+  Plan: TCronSchedulePlan;
+  Dates: TDates;
+  Base: TDateTime;
+  Count: Integer;
+begin
+  Plan := TCronSchedulePlan.Create;
+  try
+    Plan.Parse('* * * * * *');
+    Base := EncodeDateTime(2025, 1, 1, 0, 0, 0, 0);
+    Count := Plan.GetNextOccurrences(0, Base, Dates);
+    Assert.AreEqual(0, Count);
+    Assert.AreEqual<Integer>(0, Length(Dates));
+  finally
+    Plan.Free;
+  end;
+end;
+
+procedure TTestScheduleNext.Next_GetNextOccurrences_LargeCount;
+const
+  ExpectedCount = 20;
+var
+  Plan: TCronSchedulePlan;
+  Dates: TDates;
+  Base: TDateTime;
+  Count: Integer;
+  i: Integer;
+begin
+  Plan := TCronSchedulePlan.Create;
+  try
+    Plan.Parse('*/5 * * * * * 0 0');
+    Base := EncodeDateTime(2025, 1, 1, 0, 0, 0, 0);
+    Count := Plan.GetNextOccurrences(ExpectedCount, Base, Dates);
+    Assert.AreEqual(ExpectedCount, Count);
+    Assert.AreEqual<Integer>(ExpectedCount, Length(Dates));
+    for i := 1 to Length(Dates) - 1 do
+    begin
+      Assert.IsTrue(Dates[i] > Dates[i - 1]);
+      Assert.AreEqual<Int64>(5, MinutesBetween(Dates[i - 1], Dates[i]));
+    end;
+  finally
+    Plan.Free;
+  end;
+end;
+
+procedure TTestScheduleNext.Next_GetNextOccurrences_InvalidPlan;
+var
+  Plan: TCronSchedulePlan;
+  Dates: TDates;
+  Base: TDateTime;
+  Count: Integer;
+begin
+  Plan := TCronSchedulePlan.Create;
+  try
+    Plan.Parse('0 0 29 2 * 2025 0 0');
+    Base := EncodeDateTime(2025, 1, 1, 0, 0, 0, 0);
+    Count := Plan.GetNextOccurrences(5, Base, Dates);
+    Assert.AreEqual(0, Count);
+    Assert.AreEqual<Integer>(0, Length(Dates));
   finally
     Plan.Free;
   end;

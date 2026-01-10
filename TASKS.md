@@ -20,15 +20,6 @@ Details:
 
 Likely files to touch/read: `maxCron.pas`, `tests/unit/TestScheduleNext.pas`, `tests/unit/TestValidRange.pas`, `README.md`
 
-### T-008 Add cron dialect flag (Standard/MaxCron/QuartzSecondsFirst)
-Summary: Add a dialect flag to parse cron strings in multiple formats.
-
-Details:
-- Dialects: `Standard` (5-field), `MaxCron` (current), `QuartzSecondsFirst` (6/7-field seconds-first).
-- Ensure we keep current default behavior unchanged.
-- Update parsing rules, validation, and tests per dialect.
-
-Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `tests/unit/TestCronInvalidCorpus.pas`, `README.md`
 ### T-009 Add hash/jitter syntax (H) with deterministic seed
 Summary: Support `H` tokens for jittered schedules using a stable hash seed.
 
@@ -38,17 +29,6 @@ Details:
 - Add tests to ensure stable output and range enforcement.
 
 Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `tests/unit/TestScheduleNext.pas`, `README.md`
-
-
-### T-011 Add “next N occurrences” API
-Summary: Add an API to return upcoming occurrences for a plan (preview/scheduling).
-
-Details:
-- Provide `GetNextOccurrences(Count, FromDate)` or similar.
-- Reuse `FindNextScheduleDate` and guard against infinite loops.
-- Add tests for count=0, large count, and invalid plans.
-
-Likely files to touch/read: `maxCron.pas`, `tests/unit/TestScheduleNext.pas`, `README.md`
 
 ### T-012 Add human-readable schedule descriptions
 Summary: Provide a basic “humanized” description for schedules for UI/logging.
@@ -111,6 +91,16 @@ Details:
 - Update parsing rules, validation, and tests per dialect.
 
 Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `tests/unit/TestCronInvalidCorpus.pas`, `README.md`
+
+### T-011 Add “next N occurrences” API
+Summary: Add an API to return upcoming occurrences for a plan (preview/scheduling).
+
+Details:
+- Provide `GetNextOccurrences(Count, FromDate)` or similar.
+- Reuse `FindNextScheduleDate` and guard against infinite loops.
+- Add tests for count=0, large count, and invalid plans.
+
+Likely files to touch/read: `maxCron.pas`, `tests/unit/TestScheduleNext.pas`, `README.md`
 
 ### T-002 Strengthen cron parser and field-count coverage
 Summary: Add targeted tests for malformed tokens, mixed list/range/step syntax, and field-count semantics (5/6/7/8 fields).

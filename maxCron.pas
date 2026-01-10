@@ -48,6 +48,8 @@ Type
 
   TmaxCronTimerBackend = (ctAuto, ctVcl, ctPortable);
 
+  TDates = array of TDateTime;
+
   ICronTimer = interface
     ['{4F3B81F6-57F0-4A98-9F65-6B8E7A7A0E41}']
     procedure Start(const aIntervalMs: Cardinal);
@@ -361,6 +363,9 @@ Type
       out aNextDateTime: TDateTime;
       const aValidFrom: TDateTime = 0;
       const aValidTo: TDateTime = 0): boolean;
+    function GetNextOccurrences(const aCount: Integer; const aFromDate: TDateTime;
+      out aDates: TDates; const aValidFrom: TDateTime = 0;
+      const aValidTo: TDateTime = 0): Integer;
 
     property Second: TCronPart read FSecond write SetSecond;
     property Minute: TCronPart read FMinute write SetMinute;
@@ -374,8 +379,6 @@ Type
     property DayMatchMode: TmaxCronDayMatchMode read fDayMatchMode write fDayMatchMode;
     property Dialect: TmaxCronDialect read fDialect write SetDialect;
   end;
-
-  TDates = array of TDateTime;
 
   // you can use this to show the user a preview ow what his schedule will look like.
 function MakePreview(const SchedulePlan: string; out Dates: TDates; Limit: integer = 100): boolean; overload;
@@ -828,6 +831,47 @@ begin
             end;
 
   end;
+end;
+
+function TCronSchedulePlan.GetNextOccurrences(const aCount: Integer; const aFromDate: TDateTime;
+  out aDates: TDates; const aValidFrom: TDateTime; const aValidTo: TDateTime): Integer;
+var
+  lCursor: TDateTime;
+  lNext: TDateTime;
+  lStall: Integer;
+  lMaxStall: Integer;
+begin
+  Result := 0;
+  SetLength(aDates, 0);
+  if aCount <= 0 then
+    Exit;
+
+  SetLength(aDates, aCount);
+  lCursor := aFromDate;
+  lStall := 0;
+  lMaxStall := Max(8, aCount * 4);
+
+  while Result < aCount do
+  begin
+    if not FindNextScheduleDate(lCursor, lNext, aValidFrom, aValidTo) then
+      Break;
+
+    if lNext <= lCursor then
+    begin
+      Inc(lStall);
+      if lStall > lMaxStall then
+        Break;
+      lCursor := lCursor + OneSecond;
+      Continue;
+    end;
+
+    aDates[Result] := lNext;
+    Inc(Result);
+    lCursor := lNext;
+    lStall := 0;
+  end;
+
+  SetLength(aDates, Result);
 end;
 
 function TCronSchedulePlan.PushDomDow(var NextDate: TDateTime): boolean;
@@ -2558,8 +2602,6 @@ end;
 function MakePreview(const SchedulePlan: string; const Dialect: TmaxCronDialect; out Dates: TDates;
   Limit: integer = 100): boolean;
 var
-  C, x: integer;
-  d: TDateTime;
   scheduler: TCronSchedulePlan;
 begin
   Result := False;
@@ -2567,18 +2609,7 @@ begin
   try
     scheduler.Dialect := Dialect;
     scheduler.Parse(SchedulePlan);
-    SetLength(Dates, Limit);
-    C := 0;
-    d := Now;
-    for x := 0 to Limit - 1 do
-    begin
-      if not scheduler.FindNextScheduleDate(d, d) then
-        Break;
-
-      Dates[x] := d;
-      Inc(C);
-    end;
-    SetLength(Dates, C);
+    scheduler.GetNextOccurrences(Limit, Now, Dates);
     Result := True;
   finally
     scheduler.Free;
