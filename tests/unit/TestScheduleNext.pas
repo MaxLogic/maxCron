@@ -27,6 +27,36 @@ type
 
     [Test]
     procedure Next_Dow_Sunday_ZeroOrSeven;
+
+    [Test]
+    procedure Next_Dom_LastDay;
+
+    [Test]
+    procedure Next_Dom_LastWeekday;
+
+    [Test]
+    procedure Next_Dom_NearestWeekday;
+
+    [Test]
+    procedure Next_Dom_NearestWeekday_AtMonthStart;
+
+    [Test]
+    procedure Next_Dom_NearestWeekday_AtMonthEnd;
+
+    [Test]
+    procedure Next_Dow_LastInMonth;
+
+    [Test]
+    procedure Next_Dow_NthInMonth;
+
+    [Test]
+    procedure Next_Dow_NthInMonth_SkipMonthWhenMissing;
+
+    [Test]
+    procedure Next_Dow_NoSpec;
+
+    [Test]
+    procedure Next_YearRestriction_NoLeapDay;
   end;
 
 implementation
@@ -134,6 +164,112 @@ begin
     Assert.AreEqual(Next0, Next7, 0.0);
     Assert.AreEqual(Next0, NextName, 0.0);
     Assert.AreEqual(EncodeDateTime(2025, 1, 5, 0, 0, 0, 0), Next0, 0.0); // next Sunday
+  finally
+    Plan.Free;
+  end;
+end;
+
+procedure TTestScheduleNext.Next_Dom_LastDay;
+var
+  Base: TDateTime;
+  Expected: TDateTime;
+begin
+  Base := EncodeDateTime(2025, 1, 10, 0, 0, 0, 0);
+  Expected := EncodeDateTime(2025, 1, 31, 0, 0, 0, 0);
+  AssertNext('0 0 L 1 *', Base, Expected);
+end;
+
+procedure TTestScheduleNext.Next_Dom_LastWeekday;
+var
+  Base: TDateTime;
+  Expected: TDateTime;
+begin
+  Base := EncodeDateTime(2025, 5, 1, 0, 0, 0, 0);
+  Expected := EncodeDateTime(2025, 5, 30, 0, 0, 0, 0);
+  AssertNext('0 0 LW 5 *', Base, Expected);
+end;
+
+procedure TTestScheduleNext.Next_Dom_NearestWeekday;
+var
+  Base: TDateTime;
+  Expected: TDateTime;
+begin
+  Base := EncodeDateTime(2025, 3, 1, 0, 0, 0, 0);
+  Expected := EncodeDateTime(2025, 3, 14, 0, 0, 0, 0);
+  AssertNext('0 0 15W 3 *', Base, Expected);
+end;
+
+procedure TTestScheduleNext.Next_Dom_NearestWeekday_AtMonthStart;
+var
+  Base: TDateTime;
+  Expected: TDateTime;
+begin
+  Base := EncodeDateTime(2025, 1, 31, 0, 0, 0, 0);
+  Expected := EncodeDateTime(2025, 2, 3, 0, 0, 0, 0);
+  AssertNext('0 0 1W 2 *', Base, Expected);
+end;
+
+procedure TTestScheduleNext.Next_Dom_NearestWeekday_AtMonthEnd;
+var
+  Base: TDateTime;
+  Expected: TDateTime;
+begin
+  Base := EncodeDateTime(2025, 8, 1, 0, 0, 0, 0);
+  Expected := EncodeDateTime(2025, 8, 29, 0, 0, 0, 0);
+  AssertNext('0 0 31W 8 *', Base, Expected);
+end;
+
+procedure TTestScheduleNext.Next_Dow_LastInMonth;
+var
+  Base: TDateTime;
+  Expected: TDateTime;
+begin
+  Base := EncodeDateTime(2025, 4, 1, 0, 0, 0, 0);
+  Expected := EncodeDateTime(2025, 4, 25, 0, 0, 0, 0);
+  AssertNext('0 0 * 4 5L', Base, Expected);
+end;
+
+procedure TTestScheduleNext.Next_Dow_NthInMonth;
+var
+  Base: TDateTime;
+  Expected: TDateTime;
+begin
+  Base := EncodeDateTime(2025, 6, 1, 0, 0, 0, 0);
+  Expected := EncodeDateTime(2025, 6, 17, 0, 0, 0, 0);
+  AssertNext('0 0 * 6 2#3', Base, Expected);
+end;
+
+procedure TTestScheduleNext.Next_Dow_NthInMonth_SkipMonthWhenMissing;
+var
+  Base: TDateTime;
+  Expected: TDateTime;
+begin
+  Base := EncodeDateTime(2025, 2, 1, 0, 0, 0, 0);
+  Expected := EncodeDateTime(2025, 3, 31, 0, 0, 0, 0);
+  AssertNext('0 0 * * 1#5', Base, Expected);
+end;
+
+procedure TTestScheduleNext.Next_Dow_NoSpec;
+var
+  Base: TDateTime;
+  Expected: TDateTime;
+begin
+  Base := EncodeDateTime(2025, 6, 1, 0, 0, 0, 0);
+  Expected := EncodeDateTime(2025, 7, 10, 0, 0, 0, 0);
+  AssertNext('0 0 10 7 ?', Base, Expected);
+end;
+
+procedure TTestScheduleNext.Next_YearRestriction_NoLeapDay;
+var
+  Plan: TCronSchedulePlan;
+  NextDt: TDateTime;
+  Base: TDateTime;
+begin
+  Plan := TCronSchedulePlan.Create;
+  try
+    Plan.Parse('0 0 29 2 * 2025 0 0');
+    Base := EncodeDateTime(2025, 1, 1, 0, 0, 0, 0);
+    Assert.IsFalse(Plan.FindNextScheduleDate(Base, NextDt));
   finally
     Plan.Free;
   end;

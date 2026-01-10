@@ -13,6 +13,9 @@ type
   public
     [Test]
     procedure ValidFromTo_StopsOutsideWindow;
+
+    [Test]
+    procedure ValidFromTo_InclusiveBoundaries;
   end;
 
 implementation
@@ -57,6 +60,28 @@ begin
     Assert.IsTrue(TInterlocked.CompareExchange(Count, 0, 0) <= 2);
   finally
     Cron.Free;
+  end;
+end;
+
+procedure TTestValidRange.ValidFromTo_InclusiveBoundaries;
+var
+  Plan: TCronSchedulePlan;
+  NextDt: TDateTime;
+  Base: TDateTime;
+  StartAt: TDateTime;
+  StopAt: TDateTime;
+begin
+  Plan := TCronSchedulePlan.Create;
+  try
+    Plan.Parse('* * * * * * * 0');
+    Base := EncodeDateTime(2025, 1, 1, 0, 0, 0, 0);
+    StartAt := EncodeDateTime(2025, 1, 1, 0, 0, 5, 0);
+    StopAt := EncodeDateTime(2025, 1, 1, 0, 0, 6, 0);
+    Assert.IsTrue(Plan.FindNextScheduleDate(Base, NextDt, StartAt, StopAt));
+    Assert.AreEqual(StopAt, NextDt, 0.0);
+    Assert.IsFalse(Plan.FindNextScheduleDate(Base, NextDt, StartAt, StartAt));
+  finally
+    Plan.Free;
   end;
 end;
 

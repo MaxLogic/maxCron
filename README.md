@@ -9,7 +9,7 @@ Homepage: https://maxlogic.eu/portfolio/maxcron-scheduler-for-delphi/
 
 - Compatible with most of what CRON is offering
 - Setting the CRON is as simple as setting one string. Example below.
-- It also supports simple intervals in addition to CRON style schedules
+- It supports step values (e.g., `*/5`) for interval-style schedules
 - Schedule can have valid from / to limits
 - Very lightweight implementation
 
@@ -115,16 +115,16 @@ Optional runners:
 - `tests/maxCronVclTests.dpr` (GUI/VCL message pump; tests `ctVcl` / `ctAuto` behavior)
 - `tests/maxCronStressTests.dpr` (heavier concurrency stress tests; ~30s)
 
-# using the TCronSchedulePlan:
-The TPlan is a small class that allows you to specify the parts in a more friendly way and then convert them to a cron string
+# Using the TPlan helper:
+TPlan is a small record that lets us set parts in a friendly way and then convert them to a cron string.
 ```Delphi
-  plan := TCronSchedulePlan .create;
-  // you can use the clear  method to reset all the values to their defaults like this:
-  plan.Clear;
+  var plan: TPlan;
+
+  plan.Reset;
   // you can access any of the fields just like that:
   plan.Second := '30';
   // now create a new event using our new plan
-  NewSchedule := CronScheduler.Add('EventFromTPlan', plan.text, OnScheduleTrigger).Run;
+  NewSchedule := CronScheduler.Add('EventFromTPlan', plan.Text, OnScheduleTrigger).Run;
 ```
 
 # From / To valid range
@@ -163,7 +163,7 @@ maxCron can use both traditional and "enhanced" version of cron format, which ha
 <Minute> <Hour> <Day_of_the_Month> <Month_of_the_Year> <Day_of_the_Week> <Year>
 ```
 
-More over, maxCron has a unique feature, and uses two additional fields: 7th <Seconds> and a 8th field <ExecutionLimit>:
+Moreover, maxCron has a unique feature and uses two additional fields: 7th <Seconds> and an 8th field <ExecutionLimit>:
 
 ```
 <Minute> <Hour> <Day_of_the_Month> <Month_of_the_Year> <Day_of_the_Week> <Year> <Seconds> <ExecutionLimit>
@@ -184,13 +184,21 @@ The following graph shows what the format that maxCron uses consists of:
 +---------------- Minute            (range: 0-59)
 ```
 
-Any of these 8 fields may be an asterisk (*). This would mean the entire range of possible values, i.e. each minute, each hour, etc. In the first four fields,
+Any of these 8 fields may be an asterisk (*). This means the entire range of possible values (each minute, each hour, etc.).
 
 Any field may contain a list of values separated by commas, (e.g. 1,3,7) or a range of values (two integers separated by a hyphen, e.g. 1-5).
 
 After an asterisk (*) or a range of values, you can use character / to specify that values are repeated over and over with a certain interval between them. For example, you can write "0-23/2" in Hour field to specify that some action should be performed every two hours (it will have the same effect as "0,2,4,6,8,10,12,14,16,18,20,22"); value "*/4" in Minute field means that the action should be performed every 4 minutes, "1-30/3" means the same as "1,4,7,10,13,16,19,22,25,28".
 
 In Month and Day of Week fields, you can use names of months or days of weeks abbreviated to first three letters ("Jan,Feb,...,Dec" or "Mon,Tue,...,Sun") instead of their numeric values.
+
+Additional syntax we support:
+
+- Quartz-style modifiers for Day-of-Month and Day-of-Week:
+  - DOM: `L` (last day), `W` (nearest weekday), `LW` (last weekday).
+  - DOW: `?` (no specific value), `nL` (last weekday in month), `n#k` (nth weekday, k=1..5).
+- Macros: `@yearly`/`@annually`, `@monthly`, `@weekly`, `@daily`/`@midnight`, `@hourly`, `@reboot` (runs once on the next scheduler tick).
+- Comments and whitespace: trailing `# comment` is ignored; extra spaces/tabs and spaces after commas are accepted.
 
 Examples:
 
@@ -212,7 +220,8 @@ Examples:
 
 */15 */6 1,15,31 * 1-5 *            Same as above (different notation)
 
-0 12 * * 1-5 * 0 12 * * Mon-Fri *) At midday on weekdays
+0 12 * * 1-5 *                       At midday on weekdays
+0 12 * * Mon-Fri *                   Same as above (different notation)
 
 * * * 1,3,5,7,9,11 * *              Each minute in January,  March,  May, July, September, and November
 
@@ -242,7 +251,7 @@ Examples:
 ```
 
 Crontab notation may be abridged by omitting the rightmost asterisks.
-Please note, that omiting the Seconds field does not mean that the task will be executed every second. MaxCron puts a 0 as a default for the Seconds part.
+Please note that omitting the Seconds field does not mean that the task will be executed every second. maxCron uses a default of 0 for Seconds.
 
 Examples:
 

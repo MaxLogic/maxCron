@@ -16,6 +16,9 @@ type
 
     [Test]
     procedure FreeScheduler_WhileRunning_DoesNotCrash;
+
+    [Test]
+    procedure UpdateEventPlan_RecalculatesNextSchedule;
   end;
 
 implementation
@@ -106,6 +109,39 @@ begin
     Started.Free;
     if Cron <> nil then
       Cron.Free;
+  end;
+end;
+
+procedure TTestLifecycle.UpdateEventPlan_RecalculatesNextSchedule;
+var
+  Cron: TmaxCron;
+  Evt: TmaxCronEvent;
+  Base: TDateTime;
+  SearchFrom: TDateTime;
+  Expected: TDateTime;
+  YearVal: Word;
+begin
+  Cron := TmaxCron.Create(ctPortable);
+  try
+    Evt := Cron.Add('UpdatePlan');
+    Evt.EventPlan := '* * * * * * * 0';
+    Evt.InvokeMode := imThread;
+    Evt.Run;
+
+    Base := EncodeDateTime(YearOf(Now), MonthOf(Now), DayOf(Now), HourOf(Now), MinuteOf(Now), SecondOf(Now), 0);
+    Base := IncDay(Base, 1);
+    Cron.TickAt(Base);
+
+    Evt.EventPlan := '0 0 1 1 * * 0 0';
+    SearchFrom := IncSecond(Base, 2);
+    YearVal := YearOf(SearchFrom);
+    Expected := EncodeDateTime(YearVal, 1, 1, 0, 0, 0, 0);
+    if Expected <= SearchFrom then
+      Expected := EncodeDateTime(YearVal + 1, 1, 1, 0, 0, 0, 0);
+
+    Assert.AreEqual(Expected, Evt.NextSchedule, 0.0);
+  finally
+    Cron.Free;
   end;
 end;
 

@@ -3,17 +3,19 @@ unit maxCronHlpDlg;
 interface
 
 uses
-  Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes, Vcl.Graphics,
-  Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.OleCtrls, SHDocVw, Vcl.StdCtrls;
+  Winapi.Windows, Winapi.Messages, Winapi.ShellAPI, System.SysUtils, System.Variants, System.Classes,
+  Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls;
 
 type
   TChronHelpDlg = class(TForm)
-    WebBrowser1: TWebBrowser;
     edHTML: TMemo;
+    btnOpenInBrowser: TButton;
     procedure FormCreate(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
+    procedure btnOpenInBrowserClick(Sender: TObject);
   private
     fHTMLFileName: string;
+    procedure OpenInBrowser;
   public
     { Public declarations }
   end;
@@ -31,15 +33,27 @@ uses
 procedure TChronHelpDlg.FormCreate(Sender: TObject);
 begin
   fHTMLFileName := jclSysInfo.GetWindowsTempFolder + self.ClassName + IntToStr(GetTickCount) + '.html';
-  edHTML.Lines.SaveToFile(fHTMLFileName);;
-  WebBrowser1.Align := alClient;
-  WebBrowser1.Navigate(fHTMLFileName);
+  edHTML.Lines.SaveToFile(fHTMLFileName);
+  edHTML.ReadOnly := True;
+  OpenInBrowser;
 end;
 
 procedure TChronHelpDlg.FormDestroy(Sender: TObject);
 begin
   if fileExists(fHTMLFileName) then
     deleteFile(fHTMLFileName);
+end;
+
+procedure TChronHelpDlg.btnOpenInBrowserClick(Sender: TObject);
+begin
+  OpenInBrowser;
+end;
+
+procedure TChronHelpDlg.OpenInBrowser;
+begin
+  if fHTMLFileName = '' then
+    Exit;
+  ShellExecute(Handle, 'open', PChar(fHTMLFileName), nil, nil, SW_SHOWNORMAL);
 end;
 
 Procedure ShowmaxChronHelp;

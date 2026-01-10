@@ -16,6 +16,12 @@ type
 
     [Test]
     procedure SerializeCoalesce_BurstBacklogCapped;
+
+    [Test]
+    procedure DeleteQueuedCallback_DoesNotCrash;
+
+    [Test]
+    procedure Perf_Sanity_BoundedTicks;
   end;
 
 implementation
@@ -115,6 +121,83 @@ begin
     TThread.Sleep(800);
 
     Assert.IsTrue(TInterlocked.CompareExchange(ExecCount, 0, 0) <= 2, 'Expected backlog capped to <= 1 pending run');
+  finally
+    Cron.Free;
+  end;
+end;
+
+procedure TTestStress.DeleteQueuedCallback_DoesNotCrash;
+var
+  Cron: TmaxCron;
+  Evt: TmaxCronEvent;
+  Done: TEvent;
+  NextAt: TDateTime;
+  Worker: TThread;
+begin
+  Cron := TmaxCron.Create(ctPortable);
+  Done := TEvent.Create(nil, True, False, '');
+  try
+    Evt := Cron.Add('QueuedDelete');
+    Evt.EventPlan := '* * * * * * * 0';
+    Evt.InvokeMode := imMainThread;
+    Evt.OnScheduleProc :=
+      procedure(Sender: TmaxCronEvent)
+      begin
+        // our queued target should be safe even if the event is deleted before this runs
+      end;
+    Evt.Run;
+    NextAt := Evt.NextSchedule;
+
+    Worker := TThread.CreateAnonymousThread(
+      procedure
+      begin
+        Cron.TickAt(NextAt);
+        Done.SetEvent;
+      end);
+    Worker.FreeOnTerminate := False;
+    Worker.Start;
+    try
+      Assert.AreEqual(TWaitResult.wrSignaled, Done.WaitFor(2000), 'Worker did not finish');
+      Assert.IsTrue(Cron.Delete(Evt));
+      CheckSynchronize(200);
+    finally
+      Worker.Free;
+    end;
+  finally
+    Done.Free;
+    Cron.Free;
+  end;
+end;
+
+procedure TTestStress.Perf_Sanity_BoundedTicks;
+const
+  EventCount = 250;
+  TickCount = 200;
+  MaxMs = 5000;
+var
+  Cron: TmaxCron;
+  i: Integer;
+  Evt: TmaxCronEvent;
+  Sw: TStopwatch;
+  Base: TDateTime;
+begin
+  if GetEnvironmentVariable('MAXCRON_STRESS') = '' then
+    Exit;
+
+  Cron := TmaxCron.Create(ctPortable);
+  try
+    for i := 0 to EventCount - 1 do
+    begin
+      Evt := Cron.Add('Perf' + IntToStr(i));
+      Evt.EventPlan := '* * * * * * * 0';
+      Evt.Run;
+    end;
+
+    Base := Now;
+    Sw := TStopwatch.StartNew;
+    for i := 0 to TickCount - 1 do
+      Cron.TickAt(IncSecond(Base, i));
+    Assert.IsTrue(Sw.ElapsedMilliseconds <= MaxMs, 'Perf sanity exceeded budget');
   finally
     Cron.Free;
   end;

@@ -221,6 +221,19 @@ Type
     // ckExecutionLimit  - this is not a part kind but it is a part of the schedule string
     );
 
+  TCronDomModifier = (
+    cdmNone,
+    cdmLastDay,
+    cdmNearestWeekday,
+    cdmLastWeekday
+    );
+
+  TCronDowModifier = (
+    cdwNone,
+    cdwLastWeekday,
+    cdwNthWeekday
+    );
+
   TPlan = record
   private
     function asString: String;
@@ -252,6 +265,12 @@ Type
     fRange: array of word;
     FCount: integer;
     fNeedsParse: Boolean;
+    fNoSpec: Boolean;
+    fDomModifier: TCronDomModifier;
+    fDomValue: Word;
+    fDowModifier: TCronDowModifier;
+    fDowValue: Word;
+    fDowNth: Word;
 
     procedure Parse;
     procedure SetData(const Value: string);
@@ -260,6 +279,18 @@ Type
     function ReplaceDaynames(const Value: string): string;
     Procedure Add2Range(Value: word);
     function FindInRange(Value: word; out index: integer): boolean;
+    function HasSpecial: Boolean;
+    function TryParseSpecialToken(const aToken: string): Boolean;
+    function TryParseDomSpecial(const aToken: string): Boolean;
+    function TryParseDowSpecial(const aToken: string): Boolean;
+    function NormalizeDowValue(const aValue: Integer): Integer;
+    function GetLastDayOfMonth(const aYear, aMonth: Word): Word;
+    function GetLastWeekdayOfMonth(const aYear, aMonth: Word; out aDay: Word): Boolean;
+    function GetNearestWeekdayTo(const aYear, aMonth, aDay: Word; out aNearestDay: Word): Boolean;
+    function GetNthWeekdayOfMonth(const aYear, aMonth, aDow, aNth: Word; out aDay: Word): Boolean;
+    function GetLastDowOfMonth(const aYear, aMonth, aDow: Word; out aDay: Word): Boolean;
+    function TryGetDomSpecialDay(const aYear, aMonth: Word; out aDay: Word): Boolean;
+    function TryGetDowSpecialDay(const aYear, aMonth: Word; out aDay: Word): Boolean;
 
     function PushYear(var NextDate: TDateTime): boolean;
     function PushMonth(var NextDate: TDateTime): boolean;
@@ -295,6 +326,8 @@ Type
     fDayMatchMode: TmaxCronDayMatchMode;
 
     function GetParts(PartKind: TPartKind): TCronPart;
+    function DomMatchesDate(const aDate: TDateTime): Boolean;
+    function DowMatchesDate(const aDate: TDateTime): Boolean;
     procedure SetDayOfTheMonth(const Value: TCronPart);
     procedure SetDayOfTheWeek(const Value: TCronPart);
     procedure SetHour(const Value: TCronPart);
@@ -472,6 +505,121 @@ begin
     ts.Add(t);
 end;
 
+function StripCronComment(const aValue: string): string;
+var
+  i: Integer;
+begin
+  Result := aValue;
+  for i := 1 to Length(Result) do
+    if (Result[i] = '#') and ((i = 1) or (Result[i - 1] <= ' ')) then
+    begin
+      Result := Copy(Result, 1, i - 1);
+      Break;
+    end;
+  Result := TrimRight(Result);
+end;
+
+procedure SplitByWhitespace(const aValue: string; aList: TStrings);
+var
+  i: Integer;
+  lToken: string;
+  c: Char;
+begin
+  aList.Clear;
+  lToken := '';
+  for i := 1 to Length(aValue) do
+  begin
+    c := aValue[i];
+    if c <= ' ' then
+    begin
+      if lToken <> '' then
+      begin
+        aList.Add(lToken);
+        lToken := '';
+      end;
+    end
+    else
+      lToken := lToken + c;
+  end;
+
+  if lToken <> '' then
+    aList.Add(lToken);
+end;
+
+function NormalizeCommaWhitespace(const aValue: string): string;
+var
+  i: Integer;
+  lResult: string;
+  c: Char;
+  lSkipWhitespace: Boolean;
+begin
+  lResult := '';
+  lSkipWhitespace := False;
+  for i := 1 to Length(aValue) do
+  begin
+    c := aValue[i];
+    if lSkipWhitespace and (c <= ' ') then
+      Continue;
+
+    if c = ',' then
+    begin
+      while (Length(lResult) > 0) and (lResult[Length(lResult)] <= ' ') do
+        Delete(lResult, Length(lResult), 1);
+      lResult := lResult + c;
+      lSkipWhitespace := True;
+      Continue;
+    end;
+
+    lSkipWhitespace := False;
+    lResult := lResult + c;
+  end;
+  Result := lResult;
+end;
+
+function TryExpandCronMacro(const aValue: string; out aExpanded: string): Boolean;
+var
+  lMacro: string;
+begin
+  lMacro := Trim(LowerCase(aValue));
+  if (lMacro = '@yearly') or (lMacro = '@annually') then
+  begin
+    aExpanded := '0 0 1 1 *';
+    Exit(True);
+  end;
+
+  if lMacro = '@monthly' then
+  begin
+    aExpanded := '0 0 1 * *';
+    Exit(True);
+  end;
+
+  if lMacro = '@weekly' then
+  begin
+    aExpanded := '0 0 * * 0';
+    Exit(True);
+  end;
+
+  if (lMacro = '@daily') or (lMacro = '@midnight') then
+  begin
+    aExpanded := '0 0 * * *';
+    Exit(True);
+  end;
+
+  if lMacro = '@hourly' then
+  begin
+    aExpanded := '0 * * * *';
+    Exit(True);
+  end;
+
+  if lMacro = '@reboot' then
+  begin
+    aExpanded := '* * * * * * * 1';
+    Exit(True);
+  end;
+
+  Result := False;
+end;
+
 { TCronSchedulePlan }
 
 procedure TCronSchedulePlan.Clear;
@@ -609,7 +757,8 @@ begin
   lMode := fDayMatchMode;
   if lMode = TmaxCronDayMatchMode.dmDefault then
     lMode := TmaxCronDayMatchMode.dmAnd;
-  if (not FDayOfTheMonth.fFullrange) and ((lMode = TmaxCronDayMatchMode.dmAnd) or FDayOfTheWeek.Fullrange) then
+  if (not FDayOfTheMonth.Fullrange) and (FDayOfTheMonth.fDomModifier = TCronDomModifier.cdmNone) and
+    ((lMode = TmaxCronDayMatchMode.dmAnd) or FDayOfTheWeek.Fullrange) then
     if not HasDomInAllowedMonths then
       Exit(False);
 
@@ -643,8 +792,6 @@ var
   lDowOk: Boolean;
   lDomCandidate: TDateTime;
   lDowCandidate: TDateTime;
-  lDom: Word;
-  lDow: Word;
 begin
   Result := True;
 
@@ -662,11 +809,8 @@ begin
   end;
 
   // OR mode and both are restricted: accept if either matches.
-  lDom := DayOf(NextDate);
-  // Cron-compatible: 0 = Sunday, 1 = Monday, ... 6 = Saturday.
-  lDow := DayOfTheWeek(NextDate) mod 7;
-  lDomOk := (FDayOfTheMonth.NextVal(lDom) = lDom);
-  lDowOk := (FDayOfTheWeek.NextVal(lDow) = lDow);
+  lDomOk := DomMatchesDate(NextDate);
+  lDowOk := DowMatchesDate(NextDate);
   if lDomOk or lDowOk then
     Exit(True);
 
@@ -706,10 +850,52 @@ begin
   end;
 end;
 
+function TCronSchedulePlan.DomMatchesDate(const aDate: TDateTime): Boolean;
+var
+  lDay: Word;
+  lYear: Word;
+  lMonth: Word;
+  lTarget: Word;
+begin
+  if FDayOfTheMonth.Fullrange then
+    Exit(True);
+  if FDayOfTheMonth.fDomModifier <> TCronDomModifier.cdmNone then
+  begin
+    DecodeDate(aDate, lYear, lMonth, lDay);
+    if not FDayOfTheMonth.TryGetDomSpecialDay(lYear, lMonth, lTarget) then
+      Exit(False);
+    Exit(lTarget = lDay);
+  end;
+
+  lDay := DayOf(aDate);
+  Result := (FDayOfTheMonth.NextVal(lDay) = lDay);
+end;
+
+function TCronSchedulePlan.DowMatchesDate(const aDate: TDateTime): Boolean;
+var
+  lDow: Word;
+  lYear: Word;
+  lMonth: Word;
+  lDay: Word;
+  lTarget: Word;
+begin
+  if FDayOfTheWeek.Fullrange then
+    Exit(True);
+  if FDayOfTheWeek.fDowModifier <> TCronDowModifier.cdwNone then
+  begin
+    DecodeDate(aDate, lYear, lMonth, lDay);
+    if not FDayOfTheWeek.TryGetDowSpecialDay(lYear, lMonth, lTarget) then
+      Exit(False);
+    Exit(lTarget = lDay);
+  end;
+
+  lDow := DayOfTheWeek(aDate) mod 7;
+  Result := (FDayOfTheWeek.NextVal(lDow) = lDow);
+end;
+
 procedure TCronSchedulePlan.Parse(const CronPlan: string);
 var
   plan: TPlan;
-  s: string;
   pk: TPartKind;
 begin
   Clear;
@@ -802,6 +988,12 @@ begin
   FCount := 0;
   fRange := NIL;
   fNeedsParse := True;
+  fNoSpec := False;
+  fDomModifier := TCronDomModifier.cdmNone;
+  fDomValue := 0;
+  fDowModifier := TCronDowModifier.cdwNone;
+  fDowValue := 0;
+  fDowNth := 0;
 end;
 
 constructor TCronPart.Create;
@@ -892,8 +1084,256 @@ begin
   Index := l;
 end;
 
+function TCronPart.HasSpecial: Boolean;
+begin
+  Result := (fDomModifier <> TCronDomModifier.cdmNone) or (fDowModifier <> TCronDowModifier.cdwNone);
+end;
+
+function TCronPart.NormalizeDowValue(const aValue: Integer): Integer;
+begin
+  if fPartKind <> ckDayOfTheWeek then
+    Exit(aValue);
+  if aValue = 7 then
+    Exit(0);
+  Result := aValue;
+end;
+
+function TCronPart.TryParseSpecialToken(const aToken: string): Boolean;
+var
+  s: string;
+begin
+  Result := False;
+  if not (fPartKind in [ckDayOfTheMonth, ckDayOfTheWeek]) then
+    Exit(False);
+
+  s := Trim(aToken);
+  if s = '' then
+    Exit(False);
+
+  if s = '?' then
+  begin
+    fNoSpec := True;
+    fFullrange := True;
+    fRange := NIL;
+    FCount := 0;
+    Exit(True);
+  end;
+
+  if fPartKind = ckDayOfTheMonth then
+    Result := TryParseDomSpecial(s)
+  else
+    Result := TryParseDowSpecial(s);
+end;
+
+function TCronPart.TryParseDomSpecial(const aToken: string): Boolean;
+var
+  s: string;
+  lNum: Integer;
+begin
+  Result := False;
+  s := UpperCase(Trim(aToken));
+
+  if (Pos('L', s) = 0) and (Pos('W', s) = 0) then
+    Exit(False);
+
+  if (Pos('#', s) > 0) or (Pos('/', s) > 0) or (Pos('-', s) > 0) then
+    raise Exception.Create('Invalid cron token');
+
+  if s = 'L' then
+  begin
+    fDomModifier := TCronDomModifier.cdmLastDay;
+    Exit(True);
+  end;
+
+  if s = 'LW' then
+  begin
+    fDomModifier := TCronDomModifier.cdmLastWeekday;
+    Exit(True);
+  end;
+
+  if s[Length(s)] = 'W' then
+  begin
+    lNum := StrToIntDef(Copy(s, 1, Length(s) - 1), -1);
+    if (lNum < FValidFrom) or (lNum > FValidTo) then
+      raise Exception.Create('Cron value out of range');
+    fDomModifier := TCronDomModifier.cdmNearestWeekday;
+    fDomValue := lNum;
+    Exit(True);
+  end;
+
+  raise Exception.Create('Invalid cron token');
+end;
+
+function TCronPart.TryParseDowSpecial(const aToken: string): Boolean;
+var
+  s: string;
+  lHashPos: Integer;
+  lLeft: string;
+  lRight: string;
+  lNum: Integer;
+  lNth: Integer;
+begin
+  Result := False;
+  s := ReplaceDaynames(Trim(aToken));
+  s := UpperCase(s);
+
+  if Pos('W', s) > 0 then
+    raise Exception.Create('Invalid cron token');
+
+  lHashPos := Pos('#', s);
+  if lHashPos > 0 then
+  begin
+    if (Pos('L', s) > 0) or (Pos('/', s) > 0) or (Pos('-', s) > 0) then
+      raise Exception.Create('Invalid cron token');
+    lLeft := Copy(s, 1, lHashPos - 1);
+    lRight := Copy(s, lHashPos + 1, MaxInt);
+    if (lLeft = '') or (lRight = '') then
+      raise Exception.Create('Invalid cron token');
+    lNum := StrToIntDef(lLeft, -1);
+    lNum := NormalizeDowValue(lNum);
+    if (lNum < FValidFrom) or (lNum > FValidTo) then
+      raise Exception.Create('Cron value out of range');
+    lNth := StrToIntDef(lRight, 0);
+    if (lNth < 1) or (lNth > 5) then
+      raise Exception.Create('Invalid cron token');
+    fDowModifier := TCronDowModifier.cdwNthWeekday;
+    fDowValue := lNum;
+    fDowNth := lNth;
+    Exit(True);
+  end;
+
+  if (Length(s) > 1) and (s[Length(s)] = 'L') then
+  begin
+    if (Pos('/', s) > 0) or (Pos('-', s) > 0) then
+      raise Exception.Create('Invalid cron token');
+    lLeft := Copy(s, 1, Length(s) - 1);
+    lNum := StrToIntDef(lLeft, -1);
+    lNum := NormalizeDowValue(lNum);
+    if (lNum < FValidFrom) or (lNum > FValidTo) then
+      raise Exception.Create('Cron value out of range');
+    fDowModifier := TCronDowModifier.cdwLastWeekday;
+    fDowValue := lNum;
+    Exit(True);
+  end;
+
+  if s = 'L' then
+    raise Exception.Create('Invalid cron token');
+end;
+
+function TCronPart.GetLastDayOfMonth(const aYear, aMonth: Word): Word;
+begin
+  Result := DaysInMonth(EncodeDate(aYear, aMonth, 1));
+end;
+
+function TCronPart.GetLastWeekdayOfMonth(const aYear, aMonth: Word; out aDay: Word): Boolean;
+var
+  lLastDay: Word;
+  lDow: Word;
+begin
+  lLastDay := GetLastDayOfMonth(aYear, aMonth);
+  lDow := DayOfTheWeek(EncodeDate(aYear, aMonth, lLastDay)) mod 7;
+  case lDow of
+    0:
+      aDay := lLastDay - 2; // Sunday -> Friday
+    6:
+      aDay := lLastDay - 1; // Saturday -> Friday
+  else
+    aDay := lLastDay;
+  end;
+  Result := aDay >= 1;
+end;
+
+function TCronPart.GetNearestWeekdayTo(const aYear, aMonth, aDay: Word; out aNearestDay: Word): Boolean;
+var
+  lLastDay: Word;
+  lDow: Word;
+begin
+  lLastDay := GetLastDayOfMonth(aYear, aMonth);
+  if (aDay < 1) or (aDay > lLastDay) then
+    Exit(False);
+
+  lDow := DayOfTheWeek(EncodeDate(aYear, aMonth, aDay)) mod 7;
+  case lDow of
+    0:
+      if aDay = lLastDay then
+        aNearestDay := aDay - 2
+      else
+        aNearestDay := aDay + 1;
+    6:
+      if aDay = 1 then
+        aNearestDay := aDay + 2
+      else
+        aNearestDay := aDay - 1;
+  else
+    aNearestDay := aDay;
+  end;
+
+  Result := (aNearestDay >= 1) and (aNearestDay <= lLastDay);
+end;
+
+function TCronPart.GetNthWeekdayOfMonth(const aYear, aMonth, aDow, aNth: Word; out aDay: Word): Boolean;
+var
+  lFirstDow: Word;
+  lDelta: Integer;
+  lDay: Integer;
+  lLastDay: Word;
+begin
+  lLastDay := GetLastDayOfMonth(aYear, aMonth);
+  lFirstDow := DayOfTheWeek(EncodeDate(aYear, aMonth, 1)) mod 7;
+  lDelta := (7 + aDow - lFirstDow) mod 7;
+  lDay := 1 + lDelta + (Integer(aNth) - 1) * 7;
+  if lDay > lLastDay then
+    Exit(False);
+  aDay := lDay;
+  Result := True;
+end;
+
+function TCronPart.GetLastDowOfMonth(const aYear, aMonth, aDow: Word; out aDay: Word): Boolean;
+var
+  lLastDay: Word;
+  lLastDow: Word;
+  lDelta: Integer;
+begin
+  lLastDay := GetLastDayOfMonth(aYear, aMonth);
+  lLastDow := DayOfTheWeek(EncodeDate(aYear, aMonth, lLastDay)) mod 7;
+  lDelta := (7 + lLastDow - aDow) mod 7;
+  aDay := lLastDay - lDelta;
+  Result := aDay >= 1;
+end;
+
+function TCronPart.TryGetDomSpecialDay(const aYear, aMonth: Word; out aDay: Word): Boolean;
+begin
+  Result := False;
+  case fDomModifier of
+    TCronDomModifier.cdmLastDay:
+      begin
+        aDay := GetLastDayOfMonth(aYear, aMonth);
+        Result := True;
+      end;
+    TCronDomModifier.cdmLastWeekday:
+      Result := GetLastWeekdayOfMonth(aYear, aMonth, aDay);
+    TCronDomModifier.cdmNearestWeekday:
+      Result := GetNearestWeekdayTo(aYear, aMonth, fDomValue, aDay);
+  end;
+end;
+
+function TCronPart.TryGetDowSpecialDay(const aYear, aMonth: Word; out aDay: Word): Boolean;
+begin
+  Result := False;
+  case fDowModifier of
+    TCronDowModifier.cdwLastWeekday:
+      Result := GetLastDowOfMonth(aYear, aMonth, fDowValue, aDay);
+    TCronDowModifier.cdwNthWeekday:
+      Result := GetNthWeekdayOfMonth(aYear, aMonth, fDowValue, fDowNth, aDay);
+  end;
+end;
+
 function TCronPart.GetFullrange: boolean;
 begin
+  if fNoSpec then
+    Exit(True);
+  if HasSpecial then
+    Exit(False);
   Result := fFullrange OR (FCount = 0)
 end;
 
@@ -922,6 +1362,8 @@ procedure TCronPart.Parse;
 var
   x: integer;
   l: TStringList;
+  lToken: string;
+  lHasSpecial: Boolean;
 begin
   Clear;
 
@@ -938,7 +1380,9 @@ begin
     fFullrange := True;
     fRange := NIL;
     FCount := 0;
-  end else begin
+  end
+  else
+  begin
     if (Length(FData) > 0) and ((FData[1] = ',') or (FData[Length(FData)] = ',') or (Pos(',,', FData) > 0)) then
       raise Exception.Create('Invalid cron token');
 
@@ -949,6 +1393,23 @@ begin
         for x := 0 to l.Count - 1 do
           if Trim(l[x]) = '*' then
             raise Exception.Create('Invalid cron token');
+      lHasSpecial := False;
+      for x := 0 to l.Count - 1 do
+      begin
+        lToken := Trim(l[x]);
+        if lToken = '' then
+          raise Exception.Create('Invalid cron token');
+        if TryParseSpecialToken(lToken) then
+        begin
+          if (l.Count > 1) or lHasSpecial then
+            raise Exception.Create('Invalid cron token');
+          lHasSpecial := True;
+        end;
+      end;
+
+      if lHasSpecial then
+        Exit;
+
       for x := 0 to l.Count - 1 do
       begin
         if l[x] = '*' then
@@ -976,15 +1437,6 @@ var
   Repeater: integer;
   iSlash: Integer;
 
-  function NormalizeDow(const aValue: Integer): Integer;
-  begin
-    if fPartKind <> ckDayOfTheWeek then
-      Exit(aValue);
-    if aValue = 7 then
-      Exit(0);
-    Exit(aValue);
-  end;
-
   procedure AddRange(const aFrom, aTo, aStep: Integer);
   var
     v: Integer;
@@ -1000,6 +1452,8 @@ begin
 
   s := Trim(Value);
   if s = '' then
+    raise Exception.Create('Invalid cron token');
+  if Pos('?', s) > 0 then
     raise Exception.Create('Invalid cron token');
   case fPartKind of
     ckMonth:
@@ -1036,8 +1490,8 @@ begin
       RangeTo := RangeFrom;
   end;
 
-  RangeFrom := NormalizeDow(RangeFrom);
-  RangeTo := NormalizeDow(RangeTo);
+  RangeFrom := NormalizeDowValue(RangeFrom);
+  RangeTo := NormalizeDowValue(RangeTo);
 
   if (RangeFrom < FValidFrom) or (RangeFrom > FValidTo) then
     raise Exception.Create('Cron value out of range');
@@ -1061,8 +1515,37 @@ end;
 function TCronPart.PushDayOfMonth(var NextDate: TDateTime): boolean;
 var
   dc, v, i: word;
+  lYear, lMonth, lDay: Word;
+  lTarget: Word;
 begin
   Result := True;
+  if fNoSpec then
+    Exit(True);
+
+  if fDomModifier <> TCronDomModifier.cdmNone then
+  begin
+    DecodeDate(NextDate, lYear, lMonth, lDay);
+    if not TryGetDomSpecialDay(lYear, lMonth, lTarget) then
+    begin
+      NextDate := EncodeDateTime(lYear, lMonth, 1, 0, 0, 0, 0);
+      NextDate := IncMonth(NextDate);
+      Result := False;
+      Exit;
+    end;
+
+    if lTarget < lDay then
+    begin
+      NextDate := EncodeDateTime(lYear, lMonth, lTarget, 0, 0, 0, 0);
+      NextDate := IncMonth(NextDate);
+      Result := False;
+      Exit;
+    end;
+
+    if lTarget > lDay then
+      NextDate := EncodeDateTime(lYear, lMonth, lTarget, 0, 0, 0, 0);
+    Exit;
+  end;
+
   if not Fullrange then
   begin
     v := DayOf(NextDate);
@@ -1091,8 +1574,42 @@ end;
 function TCronPart.PushDayOfWeek(var NextDate: TDateTime): boolean;
 var
   v, i: word;
+  lYear, lMonth, lDay: Word;
+  lTarget: Word;
 begin
   Result := True;
+  if fNoSpec then
+    Exit(True);
+
+  if fDowModifier <> TCronDowModifier.cdwNone then
+  begin
+    DecodeDate(NextDate, lYear, lMonth, lDay);
+    if not TryGetDowSpecialDay(lYear, lMonth, lTarget) then
+    begin
+      NextDate := EncodeDateTime(lYear, lMonth, 1, 0, 0, 0, 0);
+      NextDate := IncMonth(NextDate);
+      Result := False;
+      Exit;
+    end;
+
+    if lTarget < lDay then
+    begin
+      NextDate := EncodeDateTime(lYear, lMonth, lTarget, 0, 0, 0, 0);
+      NextDate := IncMonth(NextDate);
+      Result := False;
+      Exit;
+    end;
+
+    if lTarget > lDay then
+    begin
+      Result := False;
+      NextDate := EncodeDateTime(lYear, lMonth, lTarget, 0, 0, 0, 0);
+      Exit;
+    end;
+
+    Exit(True);
+  end;
+
   if not Fullrange then
   begin
     // Cron-compatible: 0 = Sunday, 1 = Monday, ... 6 = Saturday.
@@ -2469,23 +2986,26 @@ procedure TPlan.setText(const Value: string);
 var
   l: TStringList;
   s: string;
+  lExpanded: string;
   x: integer;
 begin
   reset;
 
-  s := Value;
-  // preprocess the string
-  s := StringReplace(s, '*', ' *', [rfReplaceAll]);
-  s := StringReplace(s, ', ', ',', [rfReplaceAll]);
-  while Pos('  ', s) > 0 do
-    s := StringReplace(s, '  ', ' ', [rfReplaceAll]);
+  s := StripCronComment(Value);
+  s := NormalizeCommaWhitespace(s);
   s := Trim(s);
+  if s = '' then
+    raise Exception.Create('Cron plan must have at least 5 fields');
+  if s[1] = '@' then
+  begin
+    if not TryExpandCronMacro(s, lExpanded) then
+      raise Exception.Create('Unknown cron macro');
+    s := lExpanded;
+  end;
 
   l := TStringList.Create;
   try
-    l.Delimiter := ' ';
-    l.StrictDelimiter := True;
-    l.DelimitedText := s;
+    SplitByWhitespace(s, l);
 
     if l.Count < 5 then
       raise Exception.Create('Cron plan must have at least 5 fields');

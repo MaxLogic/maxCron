@@ -15,24 +15,25 @@ object ChronHelpDlg: TChronHelpDlg
   OnDestroy = FormDestroy
   PixelsPerInch = 96
   TextHeight = 13
-  object WebBrowser1: TWebBrowser
-    Left = 88
-    Top = 48
-    Width = 300
-    Height = 150
+  object btnOpenInBrowser: TButton
+    Left = 0
+    Top = 281
+    Width = 643
+    Height = 26
+    Align = alBottom
+    Caption = 'Open in Browser'
     TabOrder = 0
-    ControlData = {
-      4C000000021F0000810F00000000000000000000000000000000000000000000
-      000000004C000000000000000000000001000000E0D057007335CF11AE690800
-      2B2E126208000000000000004C0000000114020000000000C000000000000046
-      8000000000000000000000000000000000000000000000000000000000000000
-      00000000000000000100000000000000000000000000000000000000}
+    OnClick = btnOpenInBrowserClick
   end
   object edHTML: TMemo
-    Left = 504
-    Top = 64
-    Width = 185
-    Height = 89
+    Left = 0
+    Top = 0
+    Width = 643
+    Height = 281
+    Align = alClient
+    ReadOnly = True
+    ScrollBars = ssVertical
+    TabOrder = 1
     Lines.Strings = (
       '<html><head>'
       '<title>Cron format</title>'
