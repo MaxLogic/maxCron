@@ -14,6 +14,7 @@ All notable user-visible changes to this project will be documented in this file
 
 ### Changed
 - Changed the VCL help dialog to open help in an external browser instead of the legacy embedded control. (T-017)
+- Updated the demo to include dialect/day-match selectors and samples for Quartz modifiers and rollover cases. (T-019)
 
 ### Fixed
 - Fixed cron parsing to reject malformed tokens like trailing commas. (T-001)

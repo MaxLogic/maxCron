@@ -39,6 +39,10 @@ Type
     edSecond: TEdit;
     StaticText10: TStaticText;
     btnSamples: TButton;
+    stDialect: TStaticText;
+    cbDialect: TComboBox;
+    stDayMatchMode: TStaticText;
+    cbDayMatchMode: TComboBox;
     tsEventLog: TTabSheet;
     memLog: TMemo;
     StaticText12: TStaticText;
@@ -54,6 +58,8 @@ Type
     Procedure btnCalculateClick(Sender: TObject);
     Procedure FormDestroy(Sender: TObject);
     Procedure btnSamplesClick(Sender: TObject);
+    Procedure cbDialectChange(Sender: TObject);
+    Procedure cbDayMatchModeChange(Sender: TObject);
   Private
     ChronScheduler: TmaxCron;
     FDynamicEvent: TmaxCronEvent;
@@ -64,6 +70,13 @@ Type
     Procedure prepareSamples;
     Function GetSampleCronString(Const sample: String): String;
     Function GetSampleCaption(Const sample: String): String;
+    Function GetSelectedDialect: TmaxCronDialect;
+    Function GetSelectedDayMatchMode: TmaxCronDayMatchMode;
+    Function NormalizeCronField(const aValue, aDefault: string): string;
+    Procedure ApplyCronString;
+    Procedure ApplyDynamicEventFromUi(const aLogSuccess: Boolean);
+    Procedure RebuildCronString;
+    Procedure UpdateDialectUi;
     Procedure SelectSample(Sender: TObject); Overload;
     Procedure SelectSample(index: Integer); Overload;
     Procedure calculateIntervalls;
@@ -81,10 +94,9 @@ Implementation
 
 Procedure TForm2.FormCreate(Sender: TObject);
 Var
-  NewSchedule: TmaxCronEvent;
-  startDate, StopDate: TDateTime;
-  plan: TPlan;
-  x: Integer;
+  lNewSchedule: TmaxCronEvent;
+  lStartDate, lStopDate: TDateTime;
+  lPlan: TPlan;
 Begin
   PageControl1.activepageIndex := 0;
 
@@ -92,48 +104,61 @@ Begin
   dtTime.time := time();
   prepareSamples;
 
+  cbDialect.Items.Clear;
+  cbDialect.Items.Add('MaxCron (minute-first, 5-8 fields)');
+  cbDialect.Items.Add('Standard (minute-first, 5 fields)');
+  cbDialect.Items.Add('Quartz (seconds-first, 6/7 fields)');
+  cbDialect.ItemIndex := 0;
+
+  cbDayMatchMode.Items.Clear;
+  cbDayMatchMode.Items.Add('And (legacy)');
+  cbDayMatchMode.Items.Add('Or (crontab)');
+  cbDayMatchMode.ItemIndex := 0;
+
+  UpdateDialectUi;
+
   log('now is ' + showDate(now));
 
   // create a new TmaxCron  that will hold all the events
   ChronScheduler := TmaxCron.Create;
 
-  NewSchedule := ChronScheduler.Add('Event1', '1 * * * * *', OnScheduleTrigger).Run;
-  log(NewSchedule.name + ' next scheduled date is ' + showDate(NewSchedule.NextSchedule));
+  lNewSchedule := ChronScheduler.Add('Event1', '1 * * * * *', OnScheduleTrigger).Run;
+  log(lNewSchedule.name + ' next scheduled date is ' + showDate(lNewSchedule.NextSchedule));
 
   // you can use anonymous methods as well
-  NewSchedule := ChronScheduler.Add('Event2');
-  NewSchedule.EventPlan := '*/2 * * * * *';
-  NewSchedule.OnScheduleproc := Procedure(aEvent: TmaxCronEvent)
+  lNewSchedule := ChronScheduler.Add('Event2');
+  lNewSchedule.EventPlan := '*/2 * * * * *';
+  lNewSchedule.OnScheduleproc := Procedure(aEvent: TmaxCronEvent)
     Begin
       OnScheduleTrigger(aEvent);
     End;
-  NewSchedule.Run;
-  log(NewSchedule.name + ' next scheduled date is ' + showDate(NewSchedule.NextSchedule));
+  lNewSchedule.Run;
+  log(lNewSchedule.name + ' next scheduled date is ' + showDate(lNewSchedule.NextSchedule));
 
   // using a shorter adding syntax
-  NewSchedule := ChronScheduler.Add('Event4', '1 * * * * *',
+  lNewSchedule := ChronScheduler.Add('Event4', '1 * * * * *',
     Procedure(aEvent: TmaxCronEvent)
     Begin
       OnScheduleTrigger(aEvent);
     End).Run;
-  log(NewSchedule.name + ' next scheduled date is ' + showDate(NewSchedule.NextSchedule));
+  log(lNewSchedule.name + ' next scheduled date is ' + showDate(lNewSchedule.NextSchedule));
 
   // using the TPlan helper
   // The TPlan is a small record that allows you to specify the parts in a more friendly way and then convert them to a cron string
-  plan := Default (TPlan); // it is a record, so initialize it properly
+  lPlan := Default (TPlan); // it is a record, so initialize it properly
   // you can use the reset method to reset all the values to their defaults like this:
-  plan.reset;
+  lPlan.reset;
   // you can access any of the fields just like that:
-  plan.Second := '30';
+  lPlan.Second := '30';
   // now create a new event using our new plan
-  NewSchedule := ChronScheduler.Add('EventFromTPlan', plan.text, OnScheduleTrigger).Run;
-  log(NewSchedule.name + ' next scheduled date is ' + showDate(NewSchedule.NextSchedule));
+  lNewSchedule := ChronScheduler.Add('EventFromTPlan', lPlan.text, OnScheduleTrigger).Run;
+  log(lNewSchedule.name + ' next scheduled date is ' + showDate(lNewSchedule.NextSchedule));
 
   // start stop dynamic event
   FDynamicEvent := ChronScheduler.Add('DynamicSchedule');
-  plan.reset;
-  plan.Second := '15';
-  FDynamicEvent.EventPlan := plan.text;
+  lPlan.reset;
+  lPlan.Second := '15';
+  FDynamicEvent.EventPlan := lPlan.text;
   FDynamicEvent.OnScheduleEvent := OnScheduleTrigger;
   FDynamicEvent.Run;
   log(FDynamicEvent.name + ' next scheduled date is ' + showDate(FDynamicEvent.NextSchedule));
@@ -141,18 +166,18 @@ Begin
   // now ad a event with a valid range
 
   // start time is in 50 seconds
-  startDate := now() + 1 / 24 / 60 / 60 * 50;
+  lStartDate := now() + 1 / 24 / 60 / 60 * 50;
   // and stop 5 minutes afterwards
-  StopDate := startDate + 1 / 24 / 60 * 5;
-  log('Ranged Event start date: ' + showDate(startDate));
-  log('Ranged Event stop date: ' + showDate(StopDate));
-  NewSchedule := ChronScheduler.Add('RangedSchedule');
-  NewSchedule.EventPlan := '0 0 */2 * 1,5,10 7 *';
-  NewSchedule.OnScheduleEvent := OnScheduleTrigger;
-  NewSchedule.ValidFrom := startDate;
-  NewSchedule.ValidTo := StopDate;
-  NewSchedule.Run;
-  log(NewSchedule.name + ' next scheduled date is ' + showDate(NewSchedule.NextSchedule));
+  lStopDate := lStartDate + 1 / 24 / 60 * 5;
+  log('Ranged Event start date: ' + showDate(lStartDate));
+  log('Ranged Event stop date: ' + showDate(lStopDate));
+  lNewSchedule := ChronScheduler.Add('RangedSchedule');
+  lNewSchedule.EventPlan := '0 0 */2 * 1,5,10 7 *';
+  lNewSchedule.OnScheduleEvent := OnScheduleTrigger;
+  lNewSchedule.ValidFrom := lStartDate;
+  lNewSchedule.ValidTo := lStopDate;
+  lNewSchedule.Run;
+  log(lNewSchedule.name + ' next scheduled date is ' + showDate(lNewSchedule.NextSchedule));
 
 End;
 
@@ -180,49 +205,57 @@ End;
 Procedure TForm2.btnResetClick(Sender: TObject);
 Begin
   edCronString.setFocus;
-  edCronString.text := '* * * * * * * *';
+  Case GetSelectedDialect Of
+    cdStandard:
+      edCronString.text := '* * * * *';
+    cdQuartzSecondsFirst:
+      edCronString.text := '0 * * * * *';
+  Else
+    edCronString.text := '* * * * * * * *';
+  End;
+  ApplyDynamicEventFromUi(True);
 End;
 
 Procedure TForm2.edCronStringChange(Sender: TObject);
 Var
-  plan: TPlan;
+  lPlan: TPlan;
 Begin
   If edCronString.focused Then
   Begin
-      plan.text := edCronString.text;
+    lPlan := Default(TPlan);
+    lPlan.Dialect := GetSelectedDialect;
+    try
+      lPlan.Text := edCronString.Text;
+    except
+      on E: Exception do
+      begin
+        labSample.Caption := '(' + E.Message + ')';
+        Exit;
+      end;
+    end;
 
-    edMinute.text := plan.minute;
-    edHour.text := plan.hour;
-    edDayOfMonth.text := plan.DayOfTheMonth;
-    edMonthOfYear.text := plan.Month;
-    edDayOfTheWeek.text := plan.DayOfTheWeek;
-    edYear.text := plan.Year;
-    edSecond.text := plan.Second;
-    edExecutionLimit.text := plan.ExecutionLimit;
+    edMinute.text := lPlan.minute;
+    edHour.text := lPlan.hour;
+    edDayOfMonth.text := lPlan.DayOfTheMonth;
+    edMonthOfYear.text := lPlan.Month;
+    edDayOfTheWeek.text := lPlan.DayOfTheWeek;
+    edYear.text := lPlan.Year;
+    edSecond.text := lPlan.Second;
+    edExecutionLimit.text := lPlan.ExecutionLimit;
     labSample.Caption := '';
+    ApplyDynamicEventFromUi(False);
   End;
 End;
 
 Procedure TForm2.edExecutionLimitChange(Sender: TObject);
 Var
-  edit: TEdit;
-  plan: TPlan;
+  lEdit: TEdit;
 Begin
-  edit := Sender As TEdit;
-  If edit.focused Then
+  lEdit := Sender As TEdit;
+  If lEdit.focused Then
   Begin
-      plan.reset;
-
-    plan.minute := edMinute.text;
-    plan.hour := edHour.text;
-    plan.DayOfTheMonth := edDayOfMonth.text;
-    plan.Month := edMonthOfYear.text;
-    plan.DayOfTheWeek := edDayOfTheWeek.text;
-    plan.Year := edYear.text;
-    plan.Second := edSecond.text;
-    plan.ExecutionLimit := edExecutionLimit.text;
-
-    edCronString.text := plan.text;
+    RebuildCronString;
+    ApplyDynamicEventFromUi(False);
     labSample.Caption := '';
   End;
 End;
@@ -230,26 +263,36 @@ End;
 Procedure TForm2.btnCalculateClick(Sender: TObject);
 Begin
   calculateIntervalls;
+  ApplyDynamicEventFromUi(True);
 End;
 
 Procedure TForm2.calculateIntervalls;
 Var
   dt: TDateTime;
-  plan: TPlan;
-  schedule: TCronSchedulePlan;
+  lSchedule: TCronSchedulePlan;
   x: Integer;
 Begin
-  schedule := TCronSchedulePlan.Create;
+  lSchedule := TCronSchedulePlan.Create;
   memCalculatedIntervals.lines.beginUpdate;
   Try
     memCalculatedIntervals.lines.clear;
     dt := trunc(dtDate.DateTime) + frac(dtTime.DateTime);
 
-    schedule.Parse(edCronString.text);
+    lSchedule.Dialect := GetSelectedDialect;
+    lSchedule.DayMatchMode := GetSelectedDayMatchMode;
+    try
+      lSchedule.Parse(edCronString.text);
+    except
+      on E: Exception do
+      begin
+        memCalculatedIntervals.lines.Add('Error: ' + E.Message);
+        Exit;
+      end;
+    end;
 
     For x := 0 To 99 Do
     Begin
-      If Not schedule.FindNextScheduleDate(dt, dt) Then
+      If Not lSchedule.FindNextScheduleDate(dt, dt) Then
         break;
 
       memCalculatedIntervals.lines.Add(
@@ -258,7 +301,7 @@ Begin
     End;
   Finally
     memCalculatedIntervals.lines.endUpdate;
-    schedule.free;
+    lSchedule.free;
   End;
 
 End;
@@ -280,7 +323,8 @@ Begin
     Add('45 17 7 6 * 2001,2002                 |Once a   year, on June 7th at 17:45, if the year is 2001 or  2002');
     Add('0,15,30,45 0,6,12,18 1,15,31 * 1-5 *  |At 00:00, 00:15, 00:30, 00:45, 06:00, 06:15, 06:30, 06:45, 12:00, 12:15, 12:30, 12:45, 18:00, 18:15, 18:30, 18:45, on 1st, 15th or  31st of each  month, but not on weekends');
     Add('*/15 */6 1,15,31 * 1-5 *              |Same as above (different notation)');
-    Add('0 12 * * 1-5 * 0 12 * * Mon-Fri      |At midday on weekdays');
+    Add('0 12 * * 1-5 *                        |At midday on weekdays');
+    Add('0 12 * * Mon-Fri *                    |Same as above (different notation)');
     Add('* * * 1,3,5,7,9,11 * *                |Each minute in January,  March,  May, July, September, and November');
     Add('1,2,3,5,20-25,30-35,59 23 31 12 * *   |On the  last day of year, at 23:01, 23:02, 23:03, 23:05, 23:20, 23:21, 23:22, 23:23, 23:24, 23:25, 23:30, 23:31, 23:32, 23:33, 23:34, 23:35, 23:59');
     Add('0 9 1-7 * 1 *                         |First Monday of each month, at 9 a.m.');
@@ -293,6 +337,13 @@ Begin
     Add('0 0 * * * * *                         |Daily at midnight every second. That is 60 executions');
     Add('0 0 * * * * 15,30                     |Daily 15 and 30 second after midnight');
     Add('0 0 * * * * * 3                       |Daily at midnight every second. But limited to 3 executions');
+    Add('M:0 0 LW * *                          |Last weekday of month (set start after last weekday to test rollover)');
+    Add('M:0 0 15W * *                         |Nearest weekday to 15th (set start after that day to test rollover)');
+    Add('M:0 0 * * 5L                          |Last Friday of month (set start after that day to test rollover)');
+    Add('M:0 0 * * 2#3                         |3rd Tuesday of month (set start after that day to test rollover)');
+    Add('Q:0 15 10 ? * 2#3                      |Quartz: 3rd Tuesday at 10:15:00 (seconds-first)');
+    Add('@monthly                               |Macro: monthly at midnight');
+    Add('0 0 LW * * # last weekday               |Trailing comment example');
   End;
 
   // now build the popup menu
@@ -313,8 +364,18 @@ Begin
 End;
 
 Function TForm2.GetSampleCronString(Const sample: String): String;
+Var
+  lRaw: String;
+  lPrefix: String;
 Begin
-  result := trim(copy(sample, 1, pos('|', sample) - 1));
+  lRaw := trim(copy(sample, 1, pos('|', sample) - 1));
+  if Length(lRaw) >= 2 then
+  begin
+    lPrefix := Copy(lRaw, 1, 2);
+    if (lPrefix = 'M:') or (lPrefix = 'S:') or (lPrefix = 'Q:') then
+      lRaw := Trim(Copy(lRaw, 3, MaxInt));
+  end;
+  result := lRaw;
 End;
 
 Function TForm2.GetSampleCaption(Const sample: String): String;
@@ -333,13 +394,25 @@ End;
 Procedure TForm2.SelectSample(index: Integer);
 Var
   s: String;
+  lRaw: String;
 Begin
   edCronString.setFocus;
+  lRaw := trim(copy(fSamples[Index], 1, pos('|', fSamples[Index]) - 1));
+  if lRaw.StartsWith('Q:') then
+    cbDialect.ItemIndex := 2
+  else if lRaw.StartsWith('S:') then
+    cbDialect.ItemIndex := 1
+  else
+    cbDialect.ItemIndex := 0;
+
+  UpdateDialectUi;
   edCronString.text := GetSampleCronString(fSamples[Index]);
+  ApplyCronString;
   s := GetSampleCaption(fSamples[Index]);
   labSample.Caption := '(' + s + ')';
 
   calculateIntervalls;
+  ApplyDynamicEventFromUi(True);
 
   // now inject the samle info as the first line in the memo.
   memCalculatedIntervals.lines.insert(0, s + sLineBreak);
@@ -352,6 +425,145 @@ Begin
   p := point(0, btnSamples.height);
   p := btnSamples.ClientToScreen(p);
   popSamples.Popup(p.x, p.y);
+End;
+
+Procedure TForm2.cbDialectChange(Sender: TObject);
+Begin
+  UpdateDialectUi;
+  ApplyCronString;
+  ApplyDynamicEventFromUi(True);
+  labSample.Caption := '';
+End;
+
+Procedure TForm2.cbDayMatchModeChange(Sender: TObject);
+Begin
+  ApplyDynamicEventFromUi(True);
+  labSample.Caption := '';
+End;
+
+Function TForm2.GetSelectedDialect: TmaxCronDialect;
+Begin
+  Case cbDialect.ItemIndex Of
+    1: Result := cdStandard;
+    2: Result := cdQuartzSecondsFirst;
+  Else
+    Result := cdMaxCron;
+  End;
+End;
+
+Function TForm2.GetSelectedDayMatchMode: TmaxCronDayMatchMode;
+Begin
+  If cbDayMatchMode.ItemIndex = 1 Then
+    Result := dmOr
+  Else
+    Result := dmAnd;
+End;
+
+Function TForm2.NormalizeCronField(const aValue, aDefault: string): string;
+Var
+  lValue: String;
+Begin
+  lValue := Trim(aValue);
+  If lValue = '' Then
+    lValue := aDefault;
+  Result := lValue;
+End;
+
+Procedure TForm2.ApplyCronString;
+Var
+  lPlan: TPlan;
+Begin
+  lPlan := Default(TPlan);
+  lPlan.Dialect := GetSelectedDialect;
+  try
+    lPlan.Text := edCronString.Text;
+  except
+    on E: Exception do
+    begin
+      labSample.Caption := '(' + E.Message + ')';
+      Exit;
+    end;
+  end;
+
+  edMinute.text := lPlan.minute;
+  edHour.text := lPlan.hour;
+  edDayOfMonth.text := lPlan.DayOfTheMonth;
+  edMonthOfYear.text := lPlan.Month;
+  edDayOfTheWeek.text := lPlan.DayOfTheWeek;
+  edYear.text := lPlan.Year;
+  edSecond.text := lPlan.Second;
+  edExecutionLimit.text := lPlan.ExecutionLimit;
+End;
+
+Procedure TForm2.ApplyDynamicEventFromUi(const aLogSuccess: Boolean);
+Var
+  lPlanText: String;
+Begin
+  if FDynamicEvent = nil then
+    Exit;
+
+  lPlanText := Trim(edCronString.Text);
+  if lPlanText = '' then
+    Exit;
+
+  try
+    FDynamicEvent.Dialect := GetSelectedDialect;
+    FDynamicEvent.DayMatchMode := GetSelectedDayMatchMode;
+    FDynamicEvent.EventPlan := lPlanText;
+    if not FDynamicEvent.Enabled then
+      FDynamicEvent.Run;
+    if aLogSuccess then
+      log(FDynamicEvent.name + ' next scheduled date is ' + showDate(FDynamicEvent.NextSchedule));
+  except
+    on E: Exception do
+    begin
+      if aLogSuccess then
+        log('DynamicSchedule error: ' + E.Message);
+    end;
+  end;
+End;
+
+Procedure TForm2.RebuildCronString;
+Var
+  lDialect: TmaxCronDialect;
+  lMinute, lHour, lDom, lMonth, lDow, lYear, lSecond, lExec: String;
+  lYearRaw: String;
+Begin
+  lDialect := GetSelectedDialect;
+  lMinute := NormalizeCronField(edMinute.Text, '*');
+  lHour := NormalizeCronField(edHour.Text, '*');
+  lDom := NormalizeCronField(edDayOfMonth.Text, '*');
+  lMonth := NormalizeCronField(edMonthOfYear.Text, '*');
+  lDow := NormalizeCronField(edDayOfTheWeek.Text, '*');
+  lYear := NormalizeCronField(edYear.Text, '*');
+  lSecond := NormalizeCronField(edSecond.Text, '0');
+  lExec := NormalizeCronField(edExecutionLimit.Text, '0');
+
+  Case lDialect Of
+    cdStandard:
+      edCronString.Text := Format('%s %s %s %s %s', [lMinute, lHour, lDom, lMonth, lDow]);
+    cdQuartzSecondsFirst:
+      begin
+        lYearRaw := Trim(edYear.Text);
+        if (lYearRaw = '') or (lYearRaw = '*') then
+          edCronString.Text := Format('%s %s %s %s %s %s', [lSecond, lMinute, lHour, lDom, lMonth, lDow])
+        else
+          edCronString.Text := Format('%s %s %s %s %s %s %s', [lSecond, lMinute, lHour, lDom, lMonth, lDow, lYear]);
+      end;
+  else
+    edCronString.Text := Format('%s %s %s %s %s %s %s %s',
+      [lMinute, lHour, lDom, lMonth, lDow, lYear, lSecond, lExec]);
+  End;
+End;
+
+Procedure TForm2.UpdateDialectUi;
+Var
+  lDialect: TmaxCronDialect;
+Begin
+  lDialect := GetSelectedDialect;
+  edSecond.Enabled := lDialect <> cdStandard;
+  edYear.Enabled := lDialect <> cdStandard;
+  edExecutionLimit.Enabled := lDialect = cdMaxCron;
 End;
 
 End.

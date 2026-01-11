@@ -170,6 +170,44 @@ object Form2: TForm2
           TabOrder = 2
           OnClick = btnResetClick
         end
+        object stDialect: TStaticText
+          Left = 8
+          Top = 390
+          Width = 101
+          Height = 17
+          Alignment = taRightJustify
+          AutoSize = False
+          Caption = 'Dialect'
+          TabOrder = 22
+        end
+        object cbDialect: TComboBox
+          Left = 115
+          Top = 386
+          Width = 190
+          Height = 21
+          Style = csDropDownList
+          TabOrder = 23
+          OnChange = cbDialectChange
+        end
+        object stDayMatchMode: TStaticText
+          Left = 8
+          Top = 417
+          Width = 101
+          Height = 17
+          Alignment = taRightJustify
+          AutoSize = False
+          Caption = 'Day match'
+          TabOrder = 24
+        end
+        object cbDayMatchMode: TComboBox
+          Left = 115
+          Top = 413
+          Width = 190
+          Height = 21
+          Style = csDropDownList
+          TabOrder = 25
+          OnChange = cbDayMatchModeChange
+        end
         object StaticText2: TStaticText
           Left = 8
           Top = 118

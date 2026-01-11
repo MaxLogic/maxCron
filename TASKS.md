@@ -72,6 +72,9 @@ Likely files to touch/read: `README.md`
 
 ## Done
 
+### T-019 Update demo for dialects and modifier rollover checks
+Summary: Extend the demo UI with dialect/day-match selectors and samples for Quartz modifiers and rollover cases.
+
 ### T-018 Fix month-relative DOM/DOW modifiers after target passes
 Summary: Recompute DOM/DOW special targets after we advance to the next month, with regression tests and docs.
 
