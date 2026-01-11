@@ -4,6 +4,13 @@
 
 ---
 
+## Build and test
+
+- Build + run all unit tests: `./build-and-run-tests.sh` (no timeout; it can take a long time).
+- Stress tests: `./build-and-run-tests-stress.sh` (also no timeout).
+
+---
+
 ## Instruction hierarchy (apply in order)
 
 1. `agents.md`
