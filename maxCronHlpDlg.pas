@@ -4,6 +4,7 @@ interface
 
 uses
   Winapi.Windows, Winapi.Messages, Winapi.ShellAPI, System.SysUtils, System.Variants, System.Classes,
+  System.IOUtils,
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls;
 
 type
@@ -25,14 +26,14 @@ Procedure ShowmaxChronHelp;
 implementation
 
 uses
-  jclSysInfo;
+  System.SysUtils;
 
 {$R *.dfm}
 
 
 procedure TChronHelpDlg.FormCreate(Sender: TObject);
 begin
-  fHTMLFileName := jclSysInfo.GetWindowsTempFolder + self.ClassName + IntToStr(GetTickCount) + '.html';
+  fHTMLFileName := TPath.Combine(TPath.GetTempPath, Self.ClassName + IntToStr(GetTickCount) + '.html');
   edHTML.Lines.SaveToFile(fHTMLFileName);
   edHTML.ReadOnly := True;
   OpenInBrowser;
@@ -50,10 +51,14 @@ begin
 end;
 
 procedure TChronHelpDlg.OpenInBrowser;
+var
+  lResult: HINST;
 begin
   if fHTMLFileName = '' then
     Exit;
-  ShellExecute(Handle, 'open', PChar(fHTMLFileName), nil, nil, SW_SHOWNORMAL);
+  lResult := ShellExecute(Handle, 'open', PChar(fHTMLFileName), nil, nil, SW_SHOWNORMAL);
+  if lResult <= 32 then
+    raise Exception.CreateFmt('Failed to open browser for "%s" (ShellExecute code %d).', [fHTMLFileName, NativeInt(lResult)]);
 end;
 
 Procedure ShowmaxChronHelp;

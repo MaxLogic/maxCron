@@ -19,6 +19,12 @@ type
 
     [Test]
     procedure Invoke_MaxAsync_Runs;
+
+    [Test]
+    procedure Invoke_MaxAsync_FallbackOnNil;
+
+    [Test]
+    procedure Invoke_MaxAsync_FallbackOnException;
   end;
 
 implementation
@@ -138,6 +144,82 @@ begin
     end;
   finally
     Cron.Free;
+  end;
+end;
+
+procedure TTestInvokeModes.Invoke_MaxAsync_FallbackOnNil;
+var
+  Cron: TmaxCron;
+  Evt: TmaxCronEvent;
+  Fired: TEvent;
+  WaitRes: TWaitResult;
+begin
+  SetMaxCronAsyncCallHook(
+    function(const aProc: TThreadProcedure; const aTaskName: string): IInterface
+    begin
+      Result := nil;
+    end);
+  try
+    Cron := TmaxCron.Create(ctPortable);
+    try
+      Fired := TEvent.Create(nil, True, False, '');
+      try
+        Evt := Cron.Add('MaxAsyncNil');
+        Evt.EventPlan := '* * * * * * * 0';
+        Evt.InvokeMode := imMaxAsync;
+        Evt.OverlapMode := omAllowOverlap;
+        Evt.OnScheduleProc := procedure(Sender: TmaxCronEvent) begin Fired.SetEvent; end;
+        Evt.Run;
+
+        Cron.TickAt(Evt.NextSchedule);
+        WaitRes := Fired.WaitFor(3000);
+        Assert.AreEqual(TWaitResult.wrSignaled, WaitRes);
+      finally
+        Fired.Free;
+      end;
+    finally
+      Cron.Free;
+    end;
+  finally
+    SetMaxCronAsyncCallHook(nil);
+  end;
+end;
+
+procedure TTestInvokeModes.Invoke_MaxAsync_FallbackOnException;
+var
+  Cron: TmaxCron;
+  Evt: TmaxCronEvent;
+  Fired: TEvent;
+  WaitRes: TWaitResult;
+begin
+  SetMaxCronAsyncCallHook(
+    function(const aProc: TThreadProcedure; const aTaskName: string): IInterface
+    begin
+      raise Exception.Create('forced async failure');
+    end);
+  try
+    Cron := TmaxCron.Create(ctPortable);
+    try
+      Fired := TEvent.Create(nil, True, False, '');
+      try
+        Evt := Cron.Add('MaxAsyncException');
+        Evt.EventPlan := '* * * * * * * 0';
+        Evt.InvokeMode := imMaxAsync;
+        Evt.OverlapMode := omAllowOverlap;
+        Evt.OnScheduleProc := procedure(Sender: TmaxCronEvent) begin Fired.SetEvent; end;
+        Evt.Run;
+
+        Cron.TickAt(Evt.NextSchedule);
+        WaitRes := Fired.WaitFor(3000);
+        Assert.AreEqual(TWaitResult.wrSignaled, WaitRes);
+      finally
+        Fired.Free;
+      end;
+    finally
+      Cron.Free;
+    end;
+  finally
+    SetMaxCronAsyncCallHook(nil);
   end;
 end;
 

@@ -16,6 +16,12 @@ type
 
     [Test]
     procedure ValidFromTo_InclusiveBoundaries;
+
+    [Test]
+    procedure ValidFrom_ReschedulesWhenEnabled;
+
+    [Test]
+    procedure ValidTo_DisablesWhenPast;
   end;
 
 implementation
@@ -82,6 +88,46 @@ begin
     Assert.IsFalse(Plan.FindNextScheduleDate(Base, NextDt, StartAt, StartAt));
   finally
     Plan.Free;
+  end;
+end;
+
+procedure TTestValidRange.ValidFrom_ReschedulesWhenEnabled;
+var
+  Cron: TmaxCron;
+  Evt: TmaxCronEvent;
+  NewFrom: TDateTime;
+  NextDt: TDateTime;
+begin
+  Cron := TmaxCron.Create(ctPortable);
+  try
+    Evt := Cron.Add('RangeUpdateFrom');
+    Evt.EventPlan := '* * * * * * * 0';
+    Evt.Run;
+
+    NewFrom := IncMinute(Now, 5);
+    Evt.ValidFrom := NewFrom;
+    NextDt := Evt.NextSchedule;
+    Assert.IsTrue(NextDt >= NewFrom);
+  finally
+    Cron.Free;
+  end;
+end;
+
+procedure TTestValidRange.ValidTo_DisablesWhenPast;
+var
+  Cron: TmaxCron;
+  Evt: TmaxCronEvent;
+begin
+  Cron := TmaxCron.Create(ctPortable);
+  try
+    Evt := Cron.Add('RangeUpdateTo');
+    Evt.EventPlan := '* * * * * * * 0';
+    Evt.Run;
+
+    Evt.ValidTo := IncSecond(Now, -1);
+    Assert.IsFalse(Evt.Enabled);
+  finally
+    Cron.Free;
   end;
 end;
 

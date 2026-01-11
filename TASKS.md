@@ -72,6 +72,9 @@ Likely files to touch/read: `README.md`
 
 ## Done
 
+### T-020 Harden async fallback and event setter rescheduling
+Summary: Add defensive imMaxAsync fallback, lock setter updates (including ValidFrom/ValidTo rescheduling), and update help dialog temp path usage with tests.
+
 ### T-019 Update demo for dialects and modifier rollover checks
 Summary: Extend the demo UI with dialect/day-match selectors and samples for Quartz modifiers and rollover cases.
 

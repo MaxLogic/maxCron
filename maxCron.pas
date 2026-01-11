@@ -56,6 +56,10 @@ Type
   TDates = array of TDateTime;
   TWordArray = array of Word;
 
+  {$IFDEF MAXCRON_TESTS}
+  TmaxCronAsyncCallHook = reference to function(const aProc: TThreadProcedure; const aTaskName: string): IInterface;
+  {$ENDIF}
+
   ICronTimer = interface
     ['{4F3B81F6-57F0-4A98-9F65-6B8E7A7A0E41}']
     procedure Start(const aIntervalMs: Cardinal);
@@ -413,12 +417,26 @@ function MakePreview(const SchedulePlan: string; out Dates: TDates; Limit: integ
 function MakePreview(const SchedulePlan: string; const Dialect: TmaxCronDialect; out Dates: TDates;
   Limit: integer = 100): boolean; overload;
 
+{$IFDEF MAXCRON_TESTS}
+procedure SetMaxCronAsyncCallHook(const aHook: TmaxCronAsyncCallHook);
+{$ENDIF}
+
 implementation
 
 uses
   System.DateUtils, System.Math, System.Threading,
   Vcl.ExtCtrls,
   MaxLogic.PortableTimer, maxAsync;
+
+{$IFDEF MAXCRON_TESTS}
+var
+  gMaxCronAsyncCallHook: TmaxCronAsyncCallHook = nil;
+
+procedure SetMaxCronAsyncCallHook(const aHook: TmaxCronAsyncCallHook);
+begin
+  gMaxCronAsyncCallHook := aHook;
+end;
+{$ENDIF}
 
 type
   ICronQueueToken = interface
@@ -529,6 +547,15 @@ const
 procedure Log(const msg: string);
 begin
   // pawel1.AddToLogFile(msg, 's:\tmp\te.log');
+end;
+
+function CallSimpleAsync(const aProc: TThreadProcedure; const aTaskName: string): IInterface;
+begin
+  {$IFDEF MAXCRON_TESTS}
+  if Assigned(gMaxCronAsyncCallHook) then
+    Exit(gMaxCronAsyncCallHook(aProc, aTaskName));
+  {$ENDIF}
+  Result := SimpleAsyncCall(aProc, aTaskName);
 end;
 
 procedure SplitString(const s: string; delim: char; ts: TStrings);
@@ -2291,7 +2318,12 @@ end;
 
 procedure TmaxCronEvent.SetName(const Value: string);
 begin
-  FName := Value
+  fLock.Acquire;
+  try
+    FName := Value;
+  finally
+    fLock.Release;
+  end;
 end;
 
 procedure TmaxCronEvent.SetOnScheduleEvent(const Value: TmaxCronNotifyEvent);
@@ -2319,27 +2351,56 @@ end;
 
 procedure TmaxCronEvent.SetTag(const Value: integer);
 begin
-  FTag := Value
+  fLock.Acquire;
+  try
+    FTag := Value;
+  finally
+    fLock.Release;
+  end;
 end;
 
 procedure TmaxCronEvent.SetUserData(const Value: Pointer);
 begin
-  FUserData := Value
+  fLock.Acquire;
+  try
+    FUserData := Value;
+  finally
+    fLock.Release;
+  end;
 end;
 
 procedure TmaxCronEvent.SetUserDataInterface(const Value: iInterface);
 begin
-  FUserDataInterface := Value;
+  fLock.Acquire;
+  try
+    FUserDataInterface := Value;
+  finally
+    fLock.Release;
+  end;
 end;
 
 procedure TmaxCronEvent.SetValidFrom(const Value: TDateTime);
 begin
-  FValidFrom := Value;
+  fLock.Acquire;
+  try
+    FValidFrom := Value;
+    if FEnabled then
+      ResetSchedule;
+  finally
+    fLock.Release;
+  end;
 end;
 
 procedure TmaxCronEvent.SetValidTo(const Value: TDateTime);
 begin
-  FValidTo := Value;
+  fLock.Acquire;
+  try
+    FValidTo := Value;
+    if FEnabled then
+      ResetSchedule;
+  finally
+    fLock.Release;
+  end;
 end;
 
 procedure TmaxCronEvent.Stop;
@@ -3213,6 +3274,7 @@ var
   lKeepAlive: IInterface;
   lKeepAliveEntry: IAsyncKeepAliveEntry;
   lCron: TmaxCron;
+  lAsync: IInterface;
 begin
   if (not Assigned(aOnEvent)) and (not Assigned(aOnProc)) then Exit;
 
@@ -3263,16 +3325,34 @@ begin
         lKeepAlive := lKeepAliveEntry as IInterface;
         lCron.KeepAsyncAlive(lKeepAlive);
 
-        lKeepAliveEntry.AttachAsync(SimpleAsyncCall(
-          procedure
+        try
+          lAsync := CallSimpleAsync(
+            procedure
+            begin
+              try
+                ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+              finally
+                lKeepAliveEntry.MarkDone;
+              end;
+            end,
+            '');
+        except
+          on E: Exception do
           begin
-            try
-              ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
-            finally
-              lKeepAliveEntry.MarkDone;
-            end;
-          end,
-          ''));
+            lKeepAliveEntry.MarkDone;
+            DispatchCallbacks(TmaxCronInvokeMode.imTTask, aOnEvent, aOnProc, aOverlapMode);
+            Exit;
+          end;
+        end;
+
+        if lAsync = nil then
+        begin
+          lKeepAliveEntry.MarkDone;
+          DispatchCallbacks(TmaxCronInvokeMode.imTTask, aOnEvent, aOnProc, aOverlapMode);
+          Exit;
+        end;
+
+        lKeepAliveEntry.AttachAsync(lAsync);
       end;
   else
     ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
