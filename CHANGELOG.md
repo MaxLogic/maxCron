@@ -16,6 +16,7 @@ All notable user-visible changes to this project will be documented in this file
 - Changed the VCL help dialog to open help in an external browser instead of the legacy embedded control. (T-017)
 - Updated the demo to include dialect/day-match selectors and samples for Quartz modifiers and rollover cases. (T-019)
 - Updated the help dialog temp-file path handling to use RTL helpers and report ShellExecute failures. (T-020)
+- `NumOfExecutionsPerformed` now counts executed callbacks (after overlap rules). (T-021)
 
 ### Fixed
 - Fixed cron parsing to reject malformed tokens like trailing commas. (T-001)
@@ -24,3 +25,7 @@ All notable user-visible changes to this project will be documented in this file
 - Fixed imMaxAsync to fall back safely when async scheduling fails or returns nil. (T-020)
 - Fixed month-relative DOM/DOW modifiers to recompute after advancing to the next month. (T-018)
 - Fixed ValidFrom/ValidTo updates to reschedule enabled events immediately. (T-020)
+- Fixed schedule timing to use the scheduled fire time and avoid extra-second drift. (T-021)
+- Fixed Quartz day-of-week numbering to use 1-7 in seconds-first dialect. (T-021)
+- Fixed TPlan.Text output to respect the selected dialect. (T-021)
+- Fixed EventPlan parsing to validate before applying updates. (T-021)

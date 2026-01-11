@@ -29,6 +29,9 @@ type
     procedure Next_Dow_Sunday_ZeroOrSeven;
 
     [Test]
+    procedure Next_Dow_Quartz_OneBased;
+
+    [Test]
     procedure Next_Dom_LastDay;
 
     [Test]
@@ -187,6 +190,25 @@ begin
     Assert.AreEqual(EncodeDateTime(2025, 1, 5, 0, 0, 0, 0), Next0, 0.0); // next Sunday
   finally
     Plan.Free;
+  end;
+end;
+
+procedure TTestScheduleNext.Next_Dow_Quartz_OneBased;
+var
+  lPlan: TCronSchedulePlan;
+  lNext: TDateTime;
+  lBase: TDateTime;
+begin
+  lBase := EncodeDateTime(2025, 1, 1, 0, 0, 0, 0); // Wednesday
+
+  lPlan := TCronSchedulePlan.Create;
+  try
+    lPlan.Dialect := cdQuartzSecondsFirst;
+    lPlan.Parse('0 0 0 ? * 2'); // Monday (Quartz 1=Sun, 2=Mon)
+    Assert.IsTrue(lPlan.FindNextScheduleDate(lBase, lNext));
+    Assert.AreEqual(EncodeDateTime(2025, 1, 6, 0, 0, 0, 0), lNext, 0.0);
+  finally
+    lPlan.Free;
   end;
 end;
 

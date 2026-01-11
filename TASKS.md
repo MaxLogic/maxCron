@@ -72,6 +72,9 @@ Likely files to touch/read: `README.md`
 
 ## Done
 
+### T-021 Fix timing drift, Quartz DOW numbering, and dialect-aware plan output
+Summary: Correct scheduling timing, Quartz DOW parsing, and TPlan output by dialect, with safer event plan parsing and new tests.
+
 ### T-020 Harden async fallback and event setter rescheduling
 Summary: Add defensive imMaxAsync fallback, lock setter updates (including ValidFrom/ValidTo rescheduling), and update help dialog temp path usage with tests.
 

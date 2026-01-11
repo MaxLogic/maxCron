@@ -145,6 +145,7 @@ Type
     FValidTo: TDateTime;
     FOnScheduleProc: TmaxCronNotifyProc;
     fNumOfExecutions: uint64;
+    fNumOfDue: uint64;
     fLastExecutionTime: TDateTime;
     fInvokeMode: TmaxCronInvokeMode;
     fLock: TCriticalSection;
@@ -222,7 +223,9 @@ Type
     property DayMatchMode: TmaxCronDayMatchMode read GetDayMatchMode write SetDayMatchMode;
     property Dialect: TmaxCronDialect read fDialect write SetDialect;
 
-    // tels how many times this event was executed
+    /// <summary>
+    /// Number of executed callbacks (after overlap rules).
+    /// </summary>
     property NumOfExecutionsPerformed: uint64 read GetNumOfExecutionsPerformed;
 
     Property ValidFrom: TDateTime read FValidFrom write SetValidFrom;
@@ -276,8 +279,14 @@ Type
     property Year: string read parts[5] write parts[5];
     property Second: string read parts[6] write parts[6];
     property ExecutionLimit: string read parts[7] write parts[7];
+    /// <summary>
+    /// Controls how <c>Text</c> is parsed and emitted (standard 5-field, maxCron 5-8, or Quartz seconds-first).
+    /// </summary>
     property Dialect: TmaxCronDialect read fDialect write fDialect;
 
+    /// <summary>
+    /// Gets or sets the cron text, respecting the current Dialect when reading or writing.
+    /// </summary>
     property text: string read asString write setText;
 
     // resets all values to their defaults
@@ -299,6 +308,7 @@ Type
     fDowModifier: TCronDowModifier;
     fDowValue: Word;
     fDowNth: Word;
+    fDowOneBased: Boolean;
 
     procedure Parse;
     procedure SetData(const Value: string);
@@ -383,6 +393,7 @@ Type
     procedure SetYear(const Value: TCronPart);
     procedure SetDialect(const Value: TmaxCronDialect);
     function PushDomDow(var NextDate: TDateTime): boolean;
+    procedure ApplyDialectToParts;
   public
     Constructor Create;
     Destructor Destroy; override;
@@ -743,6 +754,7 @@ begin
   fLastPlan := '';
   for pk := Low(TPartKind) to High(TPartKind) do
     parts[pk] := TCronPart.Create(pk);
+  ApplyDialectToParts;
 end;
 
 destructor TCronSchedulePlan.Destroy;
@@ -1280,11 +1292,18 @@ begin
   FYear := Value;
 end;
 
+procedure TCronSchedulePlan.ApplyDialectToParts;
+begin
+  if FDayOfTheWeek <> nil then
+    FDayOfTheWeek.fDowOneBased := (fDialect = cdQuartzSecondsFirst);
+end;
+
 procedure TCronSchedulePlan.SetDialect(const Value: TmaxCronDialect);
 begin
   if fDialect = Value then
     Exit;
   fDialect := Value;
+  ApplyDialectToParts;
   if fLastPlan <> '' then
     Parse(fLastPlan);
 end;
@@ -1328,6 +1347,7 @@ begin
   fRange := NIL;
   fPartKind := aPartKind;
   fNeedsParse := False;
+  fDowOneBased := False;
 
   Data := '*';
 
@@ -1356,7 +1376,7 @@ begin
       end;
     ckDayOfTheWeek:
       begin
-        // Cron-compatible: 0 = Sunday, 1 = Monday, ... 6 = Saturday. We also accept 7 as Sunday (normalized to 0).
+        // Internal DOW range: 0 = Sunday, 1 = Monday, ... 6 = Saturday (Quartz 1..7 is normalized when dialect is set).
         FValidFrom := 0;
         FValidTo := 6;
       end;
@@ -1418,6 +1438,18 @@ function TCronPart.NormalizeDowValue(const aValue: Integer): Integer;
 begin
   if fPartKind <> ckDayOfTheWeek then
     Exit(aValue);
+  if fDowOneBased then
+  begin
+    if aValue = 0 then
+      Exit(-1);
+    if (aValue >= 1) and (aValue <= 7) then
+    begin
+      if aValue = 7 then
+        Exit(6);
+      Exit(aValue - 1);
+    end;
+    Exit(aValue);
+  end;
   if aValue = 7 then
     Exit(0);
   Result := aValue;
@@ -1869,6 +1901,7 @@ var
   s: string;
   Repeater: integer;
   iSlash: Integer;
+  lIsStar: Boolean;
 
   procedure AddRange(const aFrom, aTo, aStep: Integer);
   var
@@ -1906,7 +1939,8 @@ begin
     Repeater := 1;
 
   iR := Pos('-', s);
-  if s = '*' then
+  lIsStar := (s = '*');
+  if lIsStar then
   begin
     RangeFrom := FValidFrom;
     RangeTo := FValidTo;
@@ -1918,13 +1952,21 @@ begin
   begin
     RangeFrom := StrToInt(s);
     if iSlash > 0 then
-      RangeTo := FValidTo // n/k => n..max
+    begin
+      if (fPartKind = ckDayOfTheWeek) and fDowOneBased then
+        RangeTo := 7
+      else
+        RangeTo := FValidTo; // n/k => n..max
+    end
     else
       RangeTo := RangeFrom;
   end;
 
-  RangeFrom := NormalizeDowValue(RangeFrom);
-  RangeTo := NormalizeDowValue(RangeTo);
+  if not (lIsStar and (fPartKind = ckDayOfTheWeek) and fDowOneBased) then
+  begin
+    RangeFrom := NormalizeDowValue(RangeFrom);
+    RangeTo := NormalizeDowValue(RangeTo);
+  end;
 
   if (RangeFrom < FValidFrom) or (RangeFrom > FValidTo) then
     raise Exception.Create('Cron value out of range');
@@ -2045,7 +2087,7 @@ begin
 
   if not Fullrange then
   begin
-    // Cron-compatible: 0 = Sunday, 1 = Monday, ... 6 = Saturday.
+    // Internal DOW: 0 = Sunday, 1 = Monday, ... 6 = Saturday.
     v := DayOfTheWeek(NextDate) mod 7;
     i := NextVal(v);
     if i <> v then
@@ -2184,11 +2226,21 @@ begin
   s := Value;
   for x := 1 to 7 do
   begin
-    // Cron-compatible: Sun = 0 (also accept 7 as Sunday numerically in ParsePart)
-    if x = 7 then
-      s := StringReplace(s, DayNames[x], '0', [rfReplaceAll, rfIgnorecase])
-    else
-      s := StringReplace(s, DayNames[x], IntToStr(x), [rfReplaceAll, rfIgnorecase]);
+    if fDowOneBased then
+    begin
+      // Quartz-compatible: Sun = 1, Mon = 2, ... Sat = 7
+      if x = 7 then
+        s := StringReplace(s, DayNames[x], '1', [rfReplaceAll, rfIgnorecase])
+      else
+        s := StringReplace(s, DayNames[x], IntToStr(x + 1), [rfReplaceAll, rfIgnorecase]);
+    end else
+    begin
+      // Cron-compatible: Sun = 0 (also accept 7 as Sunday numerically in ParsePart)
+      if x = 7 then
+        s := StringReplace(s, DayNames[x], '0', [rfReplaceAll, rfIgnorecase])
+      else
+        s := StringReplace(s, DayNames[x], IntToStr(x), [rfReplaceAll, rfIgnorecase]);
+    end;
   end;
   Result := s;
 end;
@@ -2254,9 +2306,9 @@ var
   dt: TDateTime;
 begin
   if fLastExecutionTime = 0 then
-    dt := now + OneSecond
+    dt := now
   else
-    dt := fLastExecutionTime + OneSecond;
+    dt := fLastExecutionTime;
 
   if not fScheduler.FindNextScheduleDate(dt,
     fNextSchedule,
@@ -2273,6 +2325,7 @@ begin
   try
     FEnabled := True;
     fNumOfExecutions := 0;
+    fNumOfDue := 0;
     fLastExecutionTime := 0;
     ResetSchedule;
   finally
@@ -2289,6 +2342,7 @@ begin
     begin
       FEnabled := True;
       fNumOfExecutions := 0;
+      fNumOfDue := 0;
       fLastExecutionTime := 0;
       ResetSchedule;
     end else begin
@@ -2300,15 +2354,25 @@ begin
 end;
 
 procedure TmaxCronEvent.SetEventPlan(const Value: string);
+var
+  lValidator: TCronSchedulePlan;
 begin
   fLock.Acquire;
   try
     if FEventPlan <> Value then
     begin
-      FEventPlan := Value;
+      lValidator := TCronSchedulePlan.Create;
+      try
+        lValidator.Dialect := fDialect;
+        lValidator.Parse(Value);
+      finally
+        lValidator.Free;
+      end;
+
       if fScheduler.Dialect <> fDialect then
-        fScheduler.fDialect := fDialect;
+        fScheduler.Dialect := fDialect;
       fScheduler.Parse(Value);
+      FEventPlan := Value;
       ResetSchedule;
     end;
   finally
@@ -2341,9 +2405,13 @@ begin
   fLock.Acquire;
   try
     fNumOfExecutions := Value;
+    fNumOfDue := Value;
     if fScheduler.ExecutionLimit <> 0 then
-      if fNumOfExecutions >= fScheduler.ExecutionLimit then
+      if fNumOfDue >= fScheduler.ExecutionLimit then
+      begin
         FEnabled := False;
+        TInterlocked.Exchange(fPendingRuns, 0);
+      end;
   finally
     fLock.Release;
   end;
@@ -3060,7 +3128,11 @@ begin
     fDialect := Value;
     fScheduler.Dialect := Value;
     if FEventPlan <> '' then
+    begin
+      if fScheduler.fLastPlan <> FEventPlan then
+        fScheduler.Parse(FEventPlan);
       ResetSchedule;
+    end;
   finally
     fLock.Release;
   end;
@@ -3254,6 +3326,13 @@ begin
     if not Supports(fEventToken, ICronEventToken, lToken) then Exit;
     if not lToken.TryGetEvent(lEvent) then Exit;
 
+    fLock.Acquire;
+    try
+      Inc(fNumOfExecutions);
+    finally
+      fLock.Release;
+    end;
+
     if Assigned(aOnEvent) then
       aOnEvent(lEvent);
     if Assigned(aOnProc) then
@@ -3367,6 +3446,7 @@ var
   lOverlap: TmaxCronOverlapMode;
   lOwnerToken: ICronQueueToken;
   lCron: TmaxCron;
+  lFireAt: TDateTime;
 begin
   lOnEvent := nil;
   lOnProc := nil;
@@ -3378,12 +3458,20 @@ begin
     if not FEnabled then Exit;
     if aNow < fNextSchedule then Exit;
 
-    Inc(fNumOfExecutions);
-    fLastExecutionTime := aNow;
-
     if fScheduler.ExecutionLimit <> 0 then
-      if fNumOfExecutions >= fScheduler.ExecutionLimit then
+      if fNumOfDue >= fScheduler.ExecutionLimit then
+      begin
         FEnabled := False;
+        Exit;
+      end;
+
+    Inc(fNumOfDue);
+    if fScheduler.ExecutionLimit <> 0 then
+      if fNumOfDue >= fScheduler.ExecutionLimit then
+        FEnabled := False;
+
+    lFireAt := fNextSchedule;
+    fLastExecutionTime := lFireAt;
 
     if FEnabled then
       ResetSchedule;
@@ -3465,20 +3553,46 @@ const
       Result := aDefault;
   end;
 
+var
+  lYear: string;
 begin
-  Result :=
-    process(Minute) + sep +
-    process(Hour) + sep +
-    process(DayOfTheMonth) + sep +
-    process(Month) + sep +
-    process(DayOfTheWeek) + sep +
-    process(Year) + sep +
-    process(Second, '0') + sep +
-    process(ExecutionLimit, '0');
+  case fDialect of
+    cdStandard:
+      Result :=
+        process(Minute) + sep +
+        process(Hour) + sep +
+        process(DayOfTheMonth) + sep +
+        process(Month) + sep +
+        process(DayOfTheWeek);
+    cdQuartzSecondsFirst:
+      begin
+        lYear := Trim(Year);
+        Result :=
+          process(Second, '0') + sep +
+          process(Minute) + sep +
+          process(Hour) + sep +
+          process(DayOfTheMonth) + sep +
+          process(Month) + sep +
+          process(DayOfTheWeek);
+        if (lYear <> '') and (lYear <> '*') then
+          Result := Result + sep + lYear;
+      end;
+  else
+    Result :=
+      process(Minute) + sep +
+      process(Hour) + sep +
+      process(DayOfTheMonth) + sep +
+      process(Month) + sep +
+      process(DayOfTheWeek) + sep +
+      process(Year) + sep +
+      process(Second, '0') + sep +
+      process(ExecutionLimit, '0');
+  end;
 end;
 
 procedure TPlan.reset;
 begin
+  fDialect := cdMaxCron;
   Minute := '';
   Hour := '';
   DayOfTheMonth := '';
@@ -3494,8 +3608,11 @@ var
   l: TStringList;
   s: string;
   x: integer;
+  lDialect: TmaxCronDialect;
 begin
+  lDialect := fDialect;
   reset;
+  fDialect := lDialect;
 
   s := StripCronComment(Value);
   s := NormalizeCommaWhitespace(s);

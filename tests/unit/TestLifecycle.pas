@@ -19,6 +19,12 @@ type
 
     [Test]
     procedure UpdateEventPlan_RecalculatesNextSchedule;
+
+    [Test]
+    procedure LastExecution_UsesScheduledTime;
+
+    [Test]
+    procedure UpdateEventPlan_InvalidDoesNotChangePlan;
   end;
 
 implementation
@@ -142,6 +148,62 @@ begin
     Assert.AreEqual(Expected, Evt.NextSchedule, 0.0);
   finally
     Cron.Free;
+  end;
+end;
+
+procedure TTestLifecycle.LastExecution_UsesScheduledTime;
+var
+  lCron: TmaxCron;
+  lEvt: TmaxCronEvent;
+  lFirstSchedule: TDateTime;
+  lTickTime: TDateTime;
+  lEpsilon: Double;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lEvt := lCron.Add('LastExecutionTime');
+    lEvt.EventPlan := '* * * * * * * 0';
+    lEvt.Run;
+
+    lFirstSchedule := lEvt.NextSchedule;
+    lTickTime := IncMilliSecond(lFirstSchedule, 500);
+    lCron.TickAt(lTickTime);
+
+    lEpsilon := 1 / (24 * 60 * 60 * 1000);
+    Assert.AreEqual(lFirstSchedule, lEvt.LastExecution, lEpsilon);
+    Assert.AreEqual(IncSecond(lFirstSchedule, 1), lEvt.NextSchedule, lEpsilon);
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestLifecycle.UpdateEventPlan_InvalidDoesNotChangePlan;
+var
+  lCron: TmaxCron;
+  lEvt: TmaxCronEvent;
+  lPrevPlan: string;
+  lPrevNext: TDateTime;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lEvt := lCron.Add('InvalidPlan');
+    lEvt.EventPlan := '* * * * * * * 0';
+    lEvt.Run;
+
+    lPrevPlan := lEvt.EventPlan;
+    lPrevNext := lEvt.NextSchedule;
+    try
+      lEvt.EventPlan := '0 0 0 * * *'; // invalid day-of-month
+      Assert.Fail('Expected parse error');
+    except
+      on Exception do
+        ; // expected
+    end;
+
+    Assert.AreEqual(lPrevPlan, lEvt.EventPlan);
+    Assert.AreEqual(lPrevNext, lEvt.NextSchedule, 0.0);
+  finally
+    lCron.Free;
   end;
 end;
 

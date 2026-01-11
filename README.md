@@ -91,6 +91,8 @@ NewSchedule.OverlapMode := omSerialize;           // queue and run 1-by-1
 NewSchedule.OverlapMode := omSerializeCoalesce;   // serialize, but keep backlog <= 1
 ```
 
+`NumOfExecutionsPerformed` counts actual callback executions (after overlap rules), not just schedule hits.
+
 ## DOM / DOW matching
 
 When **both** Day-of-Month and Day-of-Week are restricted (not `*`), classic crontab typically uses **OR** semantics.
@@ -122,6 +124,7 @@ TPlan is a small record that lets us set parts in a friendly way and then conver
   var plan: TPlan;
 
   plan.Reset;
+  plan.Dialect := cdMaxCron; // or cdStandard / cdQuartzSecondsFirst
   // you can access any of the fields just like that:
   plan.Second := '30';
   // now create a new event using our new plan
@@ -236,6 +239,7 @@ We can parse multiple cron dialects. The default remains `cdMaxCron` (current be
 - `cdQuartzSecondsFirst` (6/7-field): `<Second> <Minute> <Hour> <DayOfMonth> <Month> <DayOfWeek> [Year]`
 
 Important: Quartz-style expressions are **seconds-first**. If we use `?`, `W`, `LW`, `#`, or any 6/7-field seconds-first plan, set `Dialect := cdQuartzSecondsFirst`. Parsing those expressions in minute-first dialects (`cdStandard`/`cdMaxCron`) will shift fields and produce different results.
+Quartz also uses **1-7** for Day-of-Week numbering (`1=Sun .. 7=Sat`). In `cdStandard`/`cdMaxCron` we use `0` or `7` for Sunday and `1..6` for Monday..Saturday.
 
 DefaultDialect applies when we create new events; we can override per event:
 

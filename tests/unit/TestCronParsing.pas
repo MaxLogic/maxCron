@@ -52,6 +52,9 @@ type
 
     [Test]
     procedure Describe_BasicPatterns;
+
+    [Test]
+    procedure Plan_Text_RespectsDialect;
   end;
 
 implementation
@@ -226,6 +229,7 @@ begin
 
     Plan.Parse('5 10 11 12 1 2');
     Assert.IsTrue(Plan.Year.Fullrange);
+    AssertRaisesOnParseDialect('0 0 0 ? * 0', cdQuartzSecondsFirst);
     AssertRaisesOnParseDialect('0 0 * * *', cdQuartzSecondsFirst);
     AssertRaisesOnParseDialect('0 0 1 2 3 4 5 6', cdQuartzSecondsFirst);
   finally
@@ -241,6 +245,48 @@ begin
   AssertDescription('30 9 * * 1 * 0 0', 'Every week on Mon at 09:30');
   AssertDescription('0 10 15 * * * 0 0', 'Every month on day 15 at 10:00');
   AssertDescription('0 10 1 1 * * 0 0', 'Every year on Jan 1 at 10:00');
+end;
+
+procedure TTestCronParsing.Plan_Text_RespectsDialect;
+var
+  lPlan: TPlan;
+begin
+  lPlan.reset;
+  lPlan.Dialect := cdStandard;
+  lPlan.Minute := '5';
+  lPlan.Hour := '6';
+  lPlan.DayOfTheMonth := '7';
+  lPlan.Month := '8';
+  lPlan.DayOfTheWeek := '2';
+  lPlan.Year := '2025';
+  lPlan.Second := '30';
+  lPlan.ExecutionLimit := '9';
+  Assert.AreEqual('5 6 7 8 2', lPlan.Text);
+
+  lPlan.reset;
+  lPlan.Dialect := cdQuartzSecondsFirst;
+  lPlan.Second := '1';
+  lPlan.Minute := '2';
+  lPlan.Hour := '3';
+  lPlan.DayOfTheMonth := '4';
+  lPlan.Month := '5';
+  lPlan.DayOfTheWeek := '6';
+  lPlan.Year := '*';
+  Assert.AreEqual('1 2 3 4 5 6', lPlan.Text);
+  lPlan.Year := '2026';
+  Assert.AreEqual('1 2 3 4 5 6 2026', lPlan.Text);
+
+  lPlan.reset;
+  lPlan.Dialect := cdMaxCron;
+  lPlan.Minute := '10';
+  lPlan.Hour := '11';
+  lPlan.DayOfTheMonth := '12';
+  lPlan.Month := '1';
+  lPlan.DayOfTheWeek := '2';
+  lPlan.Year := '2027';
+  lPlan.Second := '7';
+  lPlan.ExecutionLimit := '3';
+  Assert.AreEqual('10 11 12 1 2 2027 7 3', lPlan.Text);
 end;
 
 end.
