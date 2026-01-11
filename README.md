@@ -104,6 +104,7 @@ NewSchedule.DayMatchMode := dmDefault; // use scheduler default
 NewSchedule.DayMatchMode := dmAnd;
 NewSchedule.DayMatchMode := dmOr;
 ```
+For standard cron-like behavior in tools, we should set `DayMatchMode := dmOr`.
 
 ## Unit tests
 
@@ -233,6 +234,8 @@ We can parse multiple cron dialects. The default remains `cdMaxCron` (current be
 - `cdStandard` (5-field): `<Minute> <Hour> <DayOfMonth> <Month> <DayOfWeek>`
 - `cdMaxCron` (5-8 field): `<Minute> <Hour> <DayOfMonth> <Month> <DayOfWeek> [Year] [Second] [ExecutionLimit]`
 - `cdQuartzSecondsFirst` (6/7-field): `<Second> <Minute> <Hour> <DayOfMonth> <Month> <DayOfWeek> [Year]`
+
+Important: Quartz-style expressions are **seconds-first**. If we use `?`, `W`, `LW`, `#`, or any 6/7-field seconds-first plan, set `Dialect := cdQuartzSecondsFirst`. Parsing those expressions in minute-first dialects (`cdStandard`/`cdMaxCron`) will shift fields and produce different results.
 
 DefaultDialect applies when we create new events; we can override per event:
 

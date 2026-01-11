@@ -72,6 +72,9 @@ Likely files to touch/read: `README.md`
 
 ## Done
 
+### T-018 Fix month-relative DOM/DOW modifiers after target passes
+Summary: Recompute DOM/DOW special targets after we advance to the next month, with regression tests and docs.
+
 ### T-008 Add cron dialect flag (Standard/MaxCron/QuartzSecondsFirst)
 Summary: Add a dialect flag to parse cron strings in multiple formats.
 

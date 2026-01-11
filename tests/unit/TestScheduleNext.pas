@@ -35,7 +35,13 @@ type
     procedure Next_Dom_LastWeekday;
 
     [Test]
+    procedure Next_Dom_LastWeekday_AfterMonth;
+
+    [Test]
     procedure Next_Dom_NearestWeekday;
+
+    [Test]
+    procedure Next_Dom_NearestWeekday_AfterMonth;
 
     [Test]
     procedure Next_Dom_NearestWeekday_AtMonthStart;
@@ -47,7 +53,13 @@ type
     procedure Next_Dow_LastInMonth;
 
     [Test]
+    procedure Next_Dow_LastInMonth_AfterMonth;
+
+    [Test]
     procedure Next_Dow_NthInMonth;
+
+    [Test]
+    procedure Next_Dow_NthInMonth_AfterMonth;
 
     [Test]
     procedure Next_Dow_NthInMonth_SkipMonthWhenMissing;
@@ -190,72 +202,112 @@ end;
 
 procedure TTestScheduleNext.Next_Dom_LastWeekday;
 var
-  Base: TDateTime;
-  Expected: TDateTime;
+  lBase: TDateTime;
+  lExpected: TDateTime;
 begin
-  Base := EncodeDateTime(2025, 5, 1, 0, 0, 0, 0);
-  Expected := EncodeDateTime(2025, 5, 30, 0, 0, 0, 0);
-  AssertNext('0 0 LW 5 *', Base, Expected);
+  lBase := EncodeDateTime(2025, 5, 1, 0, 0, 0, 0);
+  lExpected := EncodeDateTime(2025, 5, 30, 0, 0, 0, 0);
+  AssertNext('0 0 LW 5 *', lBase, lExpected);
+end;
+
+procedure TTestScheduleNext.Next_Dom_LastWeekday_AfterMonth;
+var
+  lBase: TDateTime;
+  lExpected: TDateTime;
+begin
+  lBase := EncodeDateTime(2025, 8, 31, 0, 0, 0, 0);
+  lExpected := EncodeDateTime(2025, 9, 30, 0, 0, 0, 0);
+  AssertNext('0 0 LW * *', lBase, lExpected);
 end;
 
 procedure TTestScheduleNext.Next_Dom_NearestWeekday;
 var
-  Base: TDateTime;
-  Expected: TDateTime;
+  lBase: TDateTime;
+  lExpected: TDateTime;
 begin
-  Base := EncodeDateTime(2025, 3, 1, 0, 0, 0, 0);
-  Expected := EncodeDateTime(2025, 3, 14, 0, 0, 0, 0);
-  AssertNext('0 0 15W 3 *', Base, Expected);
+  lBase := EncodeDateTime(2025, 3, 1, 0, 0, 0, 0);
+  lExpected := EncodeDateTime(2025, 3, 14, 0, 0, 0, 0);
+  AssertNext('0 0 15W 3 *', lBase, lExpected);
+end;
+
+procedure TTestScheduleNext.Next_Dom_NearestWeekday_AfterMonth;
+var
+  lBase: TDateTime;
+  lExpected: TDateTime;
+begin
+  lBase := EncodeDateTime(2025, 3, 20, 0, 0, 0, 0);
+  lExpected := EncodeDateTime(2025, 4, 15, 0, 0, 0, 0);
+  AssertNext('0 0 15W * *', lBase, lExpected);
 end;
 
 procedure TTestScheduleNext.Next_Dom_NearestWeekday_AtMonthStart;
 var
-  Base: TDateTime;
-  Expected: TDateTime;
+  lBase: TDateTime;
+  lExpected: TDateTime;
 begin
-  Base := EncodeDateTime(2025, 1, 31, 0, 0, 0, 0);
-  Expected := EncodeDateTime(2025, 2, 3, 0, 0, 0, 0);
-  AssertNext('0 0 1W 2 *', Base, Expected);
+  lBase := EncodeDateTime(2025, 1, 31, 0, 0, 0, 0);
+  lExpected := EncodeDateTime(2025, 2, 3, 0, 0, 0, 0);
+  AssertNext('0 0 1W 2 *', lBase, lExpected);
 end;
 
 procedure TTestScheduleNext.Next_Dom_NearestWeekday_AtMonthEnd;
 var
-  Base: TDateTime;
-  Expected: TDateTime;
+  lBase: TDateTime;
+  lExpected: TDateTime;
 begin
-  Base := EncodeDateTime(2025, 8, 1, 0, 0, 0, 0);
-  Expected := EncodeDateTime(2025, 8, 29, 0, 0, 0, 0);
-  AssertNext('0 0 31W 8 *', Base, Expected);
+  lBase := EncodeDateTime(2025, 8, 1, 0, 0, 0, 0);
+  lExpected := EncodeDateTime(2025, 8, 29, 0, 0, 0, 0);
+  AssertNext('0 0 31W 8 *', lBase, lExpected);
 end;
 
 procedure TTestScheduleNext.Next_Dow_LastInMonth;
 var
-  Base: TDateTime;
-  Expected: TDateTime;
+  lBase: TDateTime;
+  lExpected: TDateTime;
 begin
-  Base := EncodeDateTime(2025, 4, 1, 0, 0, 0, 0);
-  Expected := EncodeDateTime(2025, 4, 25, 0, 0, 0, 0);
-  AssertNext('0 0 * 4 5L', Base, Expected);
+  lBase := EncodeDateTime(2025, 4, 1, 0, 0, 0, 0);
+  lExpected := EncodeDateTime(2025, 4, 25, 0, 0, 0, 0);
+  AssertNext('0 0 * 4 5L', lBase, lExpected);
+end;
+
+procedure TTestScheduleNext.Next_Dow_LastInMonth_AfterMonth;
+var
+  lBase: TDateTime;
+  lExpected: TDateTime;
+begin
+  lBase := EncodeDateTime(2025, 4, 30, 0, 0, 0, 0);
+  lExpected := EncodeDateTime(2025, 5, 30, 0, 0, 0, 0);
+  AssertNext('0 0 * * 5L', lBase, lExpected);
 end;
 
 procedure TTestScheduleNext.Next_Dow_NthInMonth;
 var
-  Base: TDateTime;
-  Expected: TDateTime;
+  lBase: TDateTime;
+  lExpected: TDateTime;
 begin
-  Base := EncodeDateTime(2025, 6, 1, 0, 0, 0, 0);
-  Expected := EncodeDateTime(2025, 6, 17, 0, 0, 0, 0);
-  AssertNext('0 0 * 6 2#3', Base, Expected);
+  lBase := EncodeDateTime(2025, 6, 1, 0, 0, 0, 0);
+  lExpected := EncodeDateTime(2025, 6, 17, 0, 0, 0, 0);
+  AssertNext('0 0 * 6 2#3', lBase, lExpected);
+end;
+
+procedure TTestScheduleNext.Next_Dow_NthInMonth_AfterMonth;
+var
+  lBase: TDateTime;
+  lExpected: TDateTime;
+begin
+  lBase := EncodeDateTime(2025, 6, 20, 0, 0, 0, 0);
+  lExpected := EncodeDateTime(2025, 7, 15, 0, 0, 0, 0);
+  AssertNext('0 0 * * 2#3', lBase, lExpected);
 end;
 
 procedure TTestScheduleNext.Next_Dow_NthInMonth_SkipMonthWhenMissing;
 var
-  Base: TDateTime;
-  Expected: TDateTime;
+  lBase: TDateTime;
+  lExpected: TDateTime;
 begin
-  Base := EncodeDateTime(2025, 2, 1, 0, 0, 0, 0);
-  Expected := EncodeDateTime(2025, 3, 31, 0, 0, 0, 0);
-  AssertNext('0 0 * * 1#5', Base, Expected);
+  lBase := EncodeDateTime(2025, 2, 1, 0, 0, 0, 0);
+  lExpected := EncodeDateTime(2025, 3, 31, 0, 0, 0, 0);
+  AssertNext('0 0 * * 1#5', lBase, lExpected);
 end;
 
 procedure TTestScheduleNext.Next_Dow_NoSpec;

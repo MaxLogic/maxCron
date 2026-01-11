@@ -39,11 +39,16 @@ Type
     omSerializeCoalesce // like omSerialize, but coalesces backlog to max 1
     );
 
-  // How to combine Day-of-Month (DOM) and Day-of-Week (DOW) when both are restricted (not '*').
-  // - dmAnd: both must match (legacy maxCron behavior)
-  // - dmOr:  either may match (crontab/Vixie-style behavior)
+  /// <summary>
+  /// How we combine Day-of-Month (DOM) and Day-of-Week (DOW) when both are restricted (not '*').
+  /// dmAnd keeps our legacy maxCron behavior; dmOr matches classic crontab OR semantics.
+  /// </summary>
   TmaxCronDayMatchMode = (dmDefault, dmAnd, dmOr);
 
+  /// <summary>
+  /// Cron parsing dialect. Use cdQuartzSecondsFirst for Quartz-style seconds-first 6/7-field plans
+  /// and for expressions that use Quartz-style modifiers like ?, W, LW, or # to avoid field-order surprises.
+  /// </summary>
   TmaxCronDialect = (cdStandard, cdMaxCron, cdQuartzSecondsFirst);
 
   TmaxCronTimerBackend = (ctAuto, ctVcl, ctPortable);
@@ -232,6 +237,9 @@ Type
     // ckExecutionLimit  - this is not a part kind but it is a part of the schedule string
     );
 
+  /// <summary>
+  /// Day-of-Month special modifiers (Quartz-style).
+  /// </summary>
   TCronDomModifier = (
     cdmNone,
     cdmLastDay,
@@ -239,6 +247,9 @@ Type
     cdmLastWeekday
     );
 
+  /// <summary>
+  /// Day-of-Week special modifiers (Quartz-style).
+  /// </summary>
   TCronDowModifier = (
     cdwNone,
     cdwLastWeekday,
@@ -307,7 +318,15 @@ Type
 
     function PushYear(var NextDate: TDateTime): boolean;
     function PushMonth(var NextDate: TDateTime): boolean;
+    /// <summary>
+    /// Advances NextDate to the next matching DOM, including special modifiers (L/W/LW).
+    /// If the month-relative target already passed, we move to the next month and recompute.
+    /// </summary>
     function PushDayOfMonth(var NextDate: TDateTime): boolean;
+    /// <summary>
+    /// Advances NextDate to the next matching DOW, including special modifiers (nL/n#k).
+    /// If the month-relative target already passed, we move to the next month and recompute.
+    /// </summary>
     function PushDayOfWeek(var NextDate: TDateTime): boolean;
     function PushHour(var NextDate: TDateTime): boolean;
     function PushMinute(var NextDate: TDateTime): boolean;
@@ -1922,7 +1941,7 @@ begin
 
     if lTarget < lDay then
     begin
-      NextDate := EncodeDateTime(lYear, lMonth, lTarget, 0, 0, 0, 0);
+      NextDate := EncodeDateTime(lYear, lMonth, 1, 0, 0, 0, 0);
       NextDate := IncMonth(NextDate);
       Result := False;
       Exit;
@@ -1981,7 +2000,7 @@ begin
 
     if lTarget < lDay then
     begin
-      NextDate := EncodeDateTime(lYear, lMonth, lTarget, 0, 0, 0, 0);
+      NextDate := EncodeDateTime(lYear, lMonth, 1, 0, 0, 0, 0);
       NextDate := IncMonth(NextDate);
       Result := False;
       Exit;
