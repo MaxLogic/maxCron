@@ -17,6 +17,7 @@ All notable user-visible changes to this project will be documented in this file
 - Updated the demo to include dialect/day-match selectors and samples for Quartz modifiers and rollover cases. (T-019)
 - Updated the help dialog temp-file path handling to use RTL helpers and report ShellExecute failures. (T-020)
 - `NumOfExecutionsPerformed` now counts executed callbacks (after overlap rules). (T-021)
+- ExecutionLimit now counts actual executions after overlap rules, not skipped/coalesced due hits. (T-027)
 
 ### Fixed
 - Fixed @reboot macro to be rejected outside cdMaxCron where ExecutionLimit is unavailable. (T-025)

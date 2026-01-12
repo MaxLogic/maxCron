@@ -6,16 +6,6 @@
 
 ## Next – This Week
 
-### T-027 Define ExecutionLimit semantics under overlap/misfire
-Summary: Decide whether ExecutionLimit counts due hits or actual executions and enforce consistently.
-
-Details:
-- Document the chosen behavior in README/spec.
-- Align overlap handling and schedule counters.
-- Add tests for overlap modes with execution limits.
-
-Likely files to touch/read: `maxCron.pas`, `tests/unit/TestLifecycle.pas`, `README.md`
-
 ## Next – Later
 
 
@@ -86,6 +76,17 @@ Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `te
 
 
 ## Done
+
+### T-027 Define ExecutionLimit semantics under overlap/misfire
+Summary: Decide whether ExecutionLimit counts due hits or actual executions and enforce consistently.
+Done: ExecutionLimit now counts actual executions after overlap rules, with skip-mode coverage and docs.
+
+Details:
+- Document the chosen behavior in README/spec.
+- Align overlap handling and schedule counters.
+- Add tests for overlap modes with execution limits.
+
+Likely files to touch/read: `maxCron.pas`, `tests/unit/TestExecutionLimit.pas`, `README.md`
 
 ### T-025 Handle @reboot macro for non-maxCron dialects
 Summary: Prevent @reboot from expanding to an unlimited schedule in cdStandard/cdQuartzSecondsFirst.

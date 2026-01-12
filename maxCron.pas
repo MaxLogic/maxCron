@@ -190,6 +190,7 @@ Type
     procedure ExecuteOnce(const aInvokeMode: TmaxCronInvokeMode;
       const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
       const aOverlapMode: TmaxCronOverlapMode);
+    function TryReserveExecution: Boolean;
     function TryAcquireExecution: Boolean;
     procedure ReleaseExecution;
     procedure HandleQueuedAcquireFailure(const aOverlapMode: TmaxCronOverlapMode);
@@ -3254,6 +3255,29 @@ begin
   end;
 end;
 
+function TmaxCronEvent.TryReserveExecution: Boolean;
+begin
+  fLock.Acquire;
+  try
+    if fPendingDestroy then
+      Exit(False);
+    if not FEnabled then
+      Exit(False);
+    if (fScheduler.ExecutionLimit <> 0) and (fNumOfDue >= fScheduler.ExecutionLimit) then
+    begin
+      FEnabled := False;
+      Exit(False);
+    end;
+
+    Inc(fNumOfDue);
+    if (fScheduler.ExecutionLimit <> 0) and (fNumOfDue >= fScheduler.ExecutionLimit) then
+      FEnabled := False;
+    Result := True;
+  finally
+    fLock.Release;
+  end;
+end;
+
 function TmaxCronEvent.TryAcquireExecution: Boolean;
 begin
   fLock.Acquire;
@@ -3574,11 +3598,6 @@ begin
         Exit;
       end;
 
-    Inc(fNumOfDue);
-    if fScheduler.ExecutionLimit <> 0 then
-      if fNumOfDue >= fScheduler.ExecutionLimit then
-        FEnabled := False;
-
     lFireAt := fNextSchedule;
     fLastExecutionTime := lFireAt;
 
@@ -3609,6 +3628,8 @@ begin
   case lOverlap of
     TmaxCronOverlapMode.omAllowOverlap:
       begin
+        if not TryReserveExecution then
+          Exit;
         if lQueueMain then
         begin
           QueueMainThreadCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
@@ -3620,6 +3641,11 @@ begin
     TmaxCronOverlapMode.omSkipIfRunning:
       begin
         if TInterlocked.CompareExchange(fRunning, 1, 0) <> 0 then Exit;
+        if not TryReserveExecution then
+        begin
+          TInterlocked.Exchange(fRunning, 0);
+          Exit;
+        end;
         if lQueueMain then
         begin
           QueueMainThreadCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
@@ -3636,24 +3662,11 @@ begin
       begin
         if TInterlocked.CompareExchange(fRunning, 1, 0) = 0 then
         begin
-          if lQueueMain then
-          begin
-            QueueMainThreadCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
-            Exit;
-          end;
-          if not TryAcquireExecution then
+          if not TryReserveExecution then
           begin
             TInterlocked.Exchange(fRunning, 0);
             Exit;
           end;
-          DispatchCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
-        end else
-          TInterlocked.Increment(fPendingRuns);
-      end;
-    TmaxCronOverlapMode.omSerializeCoalesce:
-      begin
-        if TInterlocked.CompareExchange(fRunning, 1, 0) = 0 then
-        begin
           if lQueueMain then
           begin
             QueueMainThreadCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
@@ -3666,7 +3679,40 @@ begin
           end;
           DispatchCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
         end else begin
-          TInterlocked.CompareExchange(fPendingRuns, 1, 0); // keep backlog <= 1
+          if not TryReserveExecution then
+            Exit;
+          TInterlocked.Increment(fPendingRuns);
+        end;
+      end;
+    TmaxCronOverlapMode.omSerializeCoalesce:
+      begin
+        if TInterlocked.CompareExchange(fRunning, 1, 0) = 0 then
+        begin
+          if not TryReserveExecution then
+          begin
+            TInterlocked.Exchange(fRunning, 0);
+            Exit;
+          end;
+          if lQueueMain then
+          begin
+            QueueMainThreadCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+            Exit;
+          end;
+          if not TryAcquireExecution then
+          begin
+            TInterlocked.Exchange(fRunning, 0);
+            Exit;
+          end;
+          DispatchCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+        end else begin
+          if TInterlocked.CompareExchange(fPendingRuns, 1, 0) = 0 then
+          begin
+            if not TryReserveExecution then
+            begin
+              TInterlocked.Exchange(fPendingRuns, 0);
+              Exit;
+            end;
+          end;
         end;
       end;
   end;

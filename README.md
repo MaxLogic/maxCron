@@ -92,6 +92,7 @@ NewSchedule.OverlapMode := omSerializeCoalesce;   // serialize, but keep backlog
 ```
 
 `NumOfExecutionsPerformed` counts actual callback executions (after overlap rules), not just schedule hits.
+`ExecutionLimit` caps actual executions (after overlap rules); skipped/coalesced overlaps do not consume the limit.
 
 ## DOM / DOW matching
 

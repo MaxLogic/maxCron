@@ -16,6 +16,9 @@ type
 
     [Test]
     procedure ExecutionCount_SkipIfRunning_OnlyCountsExecutions;
+
+    [Test]
+    procedure ExecutionLimit_SkipIfRunning_CountsExecutions;
   end;
 
 implementation
@@ -90,6 +93,68 @@ begin
       lGate.SetEvent;
     finally
       lGate.Free;
+      lStarted.Free;
+    end;
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestExecutionLimit.ExecutionLimit_SkipIfRunning_CountsExecutions;
+var
+  lCron: TmaxCron;
+  lEvt: TmaxCronEvent;
+  lStarted: TEvent;
+  lFinished: TEvent;
+  lGate: TEvent;
+  lWaitRes: TWaitResult;
+  lCount: Integer;
+  lStartTick: TDateTime;
+  lSw: TStopwatch;
+begin
+  lCount := 0;
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lStarted := TEvent.Create(nil, True, False, '');
+    lFinished := TEvent.Create(nil, True, False, '');
+    lGate := TEvent.Create(nil, True, False, '');
+    try
+      lEvt := lCron.Add('LimitSkip');
+      lEvt.EventPlan := '* * * * * * * 2';
+      lEvt.InvokeMode := imThread;
+      lEvt.OverlapMode := omSkipIfRunning;
+      lEvt.OnScheduleProc :=
+        procedure(Sender: TmaxCronEvent)
+        begin
+          TInterlocked.Increment(lCount);
+          lStarted.SetEvent;
+          lGate.WaitFor(3000);
+          lFinished.SetEvent;
+        end;
+      lEvt.Run;
+
+      lStartTick := lEvt.NextSchedule;
+      lCron.TickAt(lStartTick);
+      lWaitRes := lStarted.WaitFor(2000);
+      Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes);
+
+      lCron.TickAt(IncSecond(lStartTick, 1));
+      lCron.TickAt(IncSecond(lStartTick, 2));
+
+      lGate.SetEvent;
+      lWaitRes := lFinished.WaitFor(2000);
+      Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes);
+
+      lCron.TickAt(IncSecond(lStartTick, 3));
+
+      lSw := TStopwatch.StartNew;
+      while (TInterlocked.CompareExchange(lCount, 0, 0) < 2) and (lSw.ElapsedMilliseconds < 3000) do
+        TThread.Sleep(10);
+
+      Assert.AreEqual(2, TInterlocked.CompareExchange(lCount, 0, 0));
+    finally
+      lGate.Free;
+      lFinished.Free;
       lStarted.Free;
     end;
   finally
