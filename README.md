@@ -94,6 +94,22 @@ NewSchedule.OverlapMode := omSerializeCoalesce;   // serialize, but keep backlog
 `NumOfExecutionsPerformed` counts actual callback executions (after overlap rules), not just schedule hits.
 `ExecutionLimit` caps actual executions (after overlap rules); skipped/coalesced overlaps do not consume the limit.
 
+## Misfire handling (per-event)
+
+When the scheduler is delayed or the machine sleeps, we can control how missed occurrences are handled:
+
+```delphi
+CronScheduler.DefaultMisfirePolicy := TmaxCronMisfirePolicy.mpCatchUpAll; // default
+CronScheduler.DefaultMisfireCatchUpLimit := 1; // max catch-up per tick (min 1)
+
+NewSchedule.MisfirePolicy := TmaxCronMisfirePolicy.mpFireOnceNow; // per-event override
+```
+
+Policies:
+- `mpSkip`: skip missed occurrences and advance to the next time after `now`.
+- `mpFireOnceNow`: execute once, then advance to the next time after `now`.
+- `mpCatchUpAll`: execute missed occurrences sequentially, bounded per tick by `DefaultMisfireCatchUpLimit`.
+
 ## DOM / DOW matching
 
 When **both** Day-of-Month and Day-of-Week are restricted (not `*`), classic crontab typically uses **OR** semantics.

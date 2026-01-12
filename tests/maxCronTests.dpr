@@ -16,6 +16,7 @@ uses
   TestExecutionLimit in 'unit\TestExecutionLimit.pas',
   TestInvokeModes in 'unit\TestInvokeModes.pas',
   TestLifecycle in 'unit\TestLifecycle.pas',
+  TestMisfirePolicy in 'unit\TestMisfirePolicy.pas',
   TestMaxCron in 'unit\TestMaxCron.pas',
   TestScheduleNext in 'unit\TestScheduleNext.pas',
   TestStress in 'unit\TestStress.pas',
@@ -34,6 +35,7 @@ begin
     TDUnitX.RegisterTestFixture(TTestExecutionLimit);
     TDUnitX.RegisterTestFixture(TTestInvokeModes);
     TDUnitX.RegisterTestFixture(TTestLifecycle);
+    TDUnitX.RegisterTestFixture(TTestMisfirePolicy);
     TDUnitX.RegisterTestFixture(TTestMaxCron);
     TDUnitX.RegisterTestFixture(TTestScheduleNext);
     TDUnitX.RegisterTestFixture(TTestStress);

@@ -41,6 +41,16 @@ Type
     );
 
   /// <summary>
+  /// Misfire handling when the scheduler is delayed or the machine sleeps.
+  /// </summary>
+  TmaxCronMisfirePolicy = (
+    mpDefault,      // use scheduler DefaultMisfirePolicy
+    mpSkip,         // skip missed occurrences, advance to next after now
+    mpFireOnceNow,  // fire once now, then skip to next after now
+    mpCatchUpAll    // fire missed occurrences sequentially (bounded per tick)
+    );
+
+  /// <summary>
   /// How we combine Day-of-Month (DOM) and Day-of-Week (DOW) when both are restricted (not '*').
   /// dmAnd keeps our legacy maxCron behavior; dmOr matches classic crontab OR semantics.
   /// </summary>
@@ -75,6 +85,8 @@ Type
     fDefaultInvokeMode: TmaxCronInvokeMode;
     fDefaultDayMatchMode: TmaxCronDayMatchMode;
     fDefaultDialect: TmaxCronDialect;
+    fDefaultMisfirePolicy: TmaxCronMisfirePolicy;
+    fDefaultMisfireCatchUpLimit: Cardinal;
     fTimer: ICronTimer;
     fItems: TObjectList<TmaxCronEvent>;
     fItemsLock: TCriticalSection;
@@ -97,6 +109,7 @@ Type
     procedure FlushPendingFreeLocked;
     procedure SetDefaultDayMatchMode(const Value: TmaxCronDayMatchMode);
     procedure SetDefaultDialect(const Value: TmaxCronDialect);
+    procedure SetDefaultMisfireCatchUpLimit(const Value: Cardinal);
 
   public
     constructor Create; overload;
@@ -120,6 +133,8 @@ Type
     property DefaultInvokeMode: TmaxCronInvokeMode read fDefaultInvokeMode write fDefaultInvokeMode;
     property DefaultDayMatchMode: TmaxCronDayMatchMode read fDefaultDayMatchMode write SetDefaultDayMatchMode;
     property DefaultDialect: TmaxCronDialect read fDefaultDialect write SetDefaultDialect;
+    property DefaultMisfirePolicy: TmaxCronMisfirePolicy read fDefaultMisfirePolicy write fDefaultMisfirePolicy;
+    property DefaultMisfireCatchUpLimit: Cardinal read fDefaultMisfireCatchUpLimit write SetDefaultMisfireCatchUpLimit;
 
     {$IFDEF MAXCRON_TESTS}
     procedure TickAt(const aNow: TDateTime);
@@ -155,6 +170,7 @@ Type
     fOverlapMode: TmaxCronOverlapMode;
     fDayMatchMode: TmaxCronDayMatchMode;
     fDialect: TmaxCronDialect;
+    fMisfirePolicy: TmaxCronMisfirePolicy;
     fRunning: Integer;
     fPendingRuns: Integer;
     fExecDepth: Integer;
@@ -174,6 +190,7 @@ Type
     procedure SetOverlapMode(const Value: TmaxCronOverlapMode);
     procedure SetDayMatchMode(const Value: TmaxCronDayMatchMode);
     procedure SetDialect(const Value: TmaxCronDialect);
+    procedure SetMisfirePolicy(const Value: TmaxCronMisfirePolicy);
     function GetEnabled: boolean;
     function GetNextSchedule: TDateTime;
     function GetLastExecution: TDateTime;
@@ -181,6 +198,7 @@ Type
     function GetEffectiveInvokeMode: TmaxCronInvokeMode;
     function GetOverlapMode: TmaxCronOverlapMode;
     function GetDayMatchMode: TmaxCronDayMatchMode;
+    function GetMisfirePolicy: TmaxCronMisfirePolicy;
     procedure DispatchCallbacks(const aInvokeMode: TmaxCronInvokeMode;
       const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
       const aOverlapMode: TmaxCronOverlapMode);
@@ -195,6 +213,9 @@ Type
     procedure ReleaseExecution;
     procedure HandleQueuedAcquireFailure(const aOverlapMode: TmaxCronOverlapMode);
     procedure QueueMainThreadCallbacks(const aInvokeMode: TmaxCronInvokeMode;
+      const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
+      const aOverlapMode: TmaxCronOverlapMode);
+    procedure DispatchScheduledCallbacks(const aInvokeMode: TmaxCronInvokeMode;
       const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
       const aOverlapMode: TmaxCronOverlapMode);
     procedure MarkPendingDestroy;
@@ -229,6 +250,7 @@ Type
     property OverlapMode: TmaxCronOverlapMode read GetOverlapMode write SetOverlapMode;
     property DayMatchMode: TmaxCronDayMatchMode read GetDayMatchMode write SetDayMatchMode;
     property Dialect: TmaxCronDialect read fDialect write SetDialect;
+    property MisfirePolicy: TmaxCronMisfirePolicy read GetMisfirePolicy write SetMisfirePolicy;
 
     /// <summary>
     /// Number of executed callbacks (after overlap rules).
@@ -2298,6 +2320,7 @@ begin
   fOverlapMode := TmaxCronOverlapMode.omAllowOverlap;
   fDayMatchMode := TmaxCronDayMatchMode.dmDefault;
   fDialect := cdMaxCron;
+  fMisfirePolicy := TmaxCronMisfirePolicy.mpDefault;
   fRunning := 0;
   fPendingRuns := 0;
   fExecDepth := 0;
@@ -2739,6 +2762,8 @@ begin
   fDefaultInvokeMode := TmaxCronInvokeMode.imMainThread;
   fDefaultDayMatchMode := TmaxCronDayMatchMode.dmAnd;
   fDefaultDialect := cdMaxCron;
+  fDefaultMisfirePolicy := TmaxCronMisfirePolicy.mpCatchUpAll;
+  fDefaultMisfireCatchUpLimit := 1;
   fAsyncLock := TCriticalSection.Create;
   fAsyncKeepAlive := TList<IInterface>.Create;
   fTickQueued := 0;
@@ -2768,6 +2793,14 @@ end;
 procedure TmaxCron.SetDefaultDialect(const Value: TmaxCronDialect);
 begin
   fDefaultDialect := Value;
+end;
+
+procedure TmaxCron.SetDefaultMisfireCatchUpLimit(const Value: Cardinal);
+begin
+  if Value = 0 then
+    fDefaultMisfireCatchUpLimit := 1
+  else
+    fDefaultMisfireCatchUpLimit := Value;
 end;
 
 procedure TmaxCron.KeepAsyncAlive(const aAsync: IInterface);
@@ -3152,6 +3185,16 @@ begin
   end;
 end;
 
+procedure TmaxCronEvent.SetMisfirePolicy(const Value: TmaxCronMisfirePolicy);
+begin
+  fLock.Acquire;
+  try
+    fMisfirePolicy := Value;
+  finally
+    fLock.Release;
+  end;
+end;
+
 procedure TmaxCronEvent.SetDialect(const Value: TmaxCronDialect);
 var
   lValidator: TCronSchedulePlan;
@@ -3250,6 +3293,16 @@ begin
   fLock.Acquire;
   try
     Result := fDayMatchMode;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetMisfirePolicy: TmaxCronMisfirePolicy;
+begin
+  fLock.Acquire;
+  try
+    Result := fMisfirePolicy;
   finally
     fLock.Release;
   end;
@@ -3570,73 +3623,29 @@ begin
   end;
 end;
 
-procedure TmaxCronEvent.checkTimer(const aNow: TDateTime);
+procedure TmaxCronEvent.DispatchScheduledCallbacks(const aInvokeMode: TmaxCronInvokeMode;
+  const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
+  const aOverlapMode: TmaxCronOverlapMode);
 var
-  lOnEvent: TmaxCronNotifyEvent;
-  lOnProc: TmaxCronNotifyProc;
-  lInvokeMode: TmaxCronInvokeMode;
-  lOverlap: TmaxCronOverlapMode;
-  lOwnerToken: ICronQueueToken;
-  lCron: TmaxCron;
-  lFireAt: TDateTime;
   lQueueMain: Boolean;
 begin
-  lOnEvent := nil;
-  lOnProc := nil;
-  lInvokeMode := TmaxCronInvokeMode.imMainThread;
-  lOverlap := TmaxCronOverlapMode.omAllowOverlap;
+  if (not Assigned(aOnEvent)) and (not Assigned(aOnProc)) then Exit;
 
-  fLock.Acquire;
-  try
-    if not FEnabled then Exit;
-    if aNow < fNextSchedule then Exit;
-
-    if fScheduler.ExecutionLimit <> 0 then
-      if fNumOfDue >= fScheduler.ExecutionLimit then
-      begin
-        FEnabled := False;
-        Exit;
-      end;
-
-    lFireAt := fNextSchedule;
-    fLastExecutionTime := lFireAt;
-
-    if FEnabled then
-      ResetSchedule;
-
-    lOnEvent := FOnScheduleEvent;
-    lOnProc := FOnScheduleProc;
-    lInvokeMode := fInvokeMode;
-    lOverlap := fOverlapMode;
-  finally
-    fLock.Release;
-  end;
-
-  if (not Assigned(lOnEvent)) and (not Assigned(lOnProc)) then Exit;
-
-  if lInvokeMode = TmaxCronInvokeMode.imDefault then
-  begin
-    if Supports(fCronToken, ICronQueueToken, lOwnerToken) and lOwnerToken.TryGetOwner(lCron) then
-      lInvokeMode := lCron.fDefaultInvokeMode
-    else
-      lInvokeMode := TmaxCronInvokeMode.imMainThread;
-  end;
-
-  lQueueMain := (lInvokeMode = TmaxCronInvokeMode.imMainThread) and
+  lQueueMain := (aInvokeMode = TmaxCronInvokeMode.imMainThread) and
     (TThread.CurrentThread.ThreadID <> MainThreadID);
 
-  case lOverlap of
+  case aOverlapMode of
     TmaxCronOverlapMode.omAllowOverlap:
       begin
         if not TryReserveExecution then
           Exit;
         if lQueueMain then
         begin
-          QueueMainThreadCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+          QueueMainThreadCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
           Exit;
         end;
         if not TryAcquireExecution then Exit;
-        DispatchCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+        DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
       end;
     TmaxCronOverlapMode.omSkipIfRunning:
       begin
@@ -3648,7 +3657,7 @@ begin
         end;
         if lQueueMain then
         begin
-          QueueMainThreadCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+          QueueMainThreadCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
           Exit;
         end;
         if not TryAcquireExecution then
@@ -3656,7 +3665,7 @@ begin
           TInterlocked.Exchange(fRunning, 0);
           Exit;
         end;
-        DispatchCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+        DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
       end;
     TmaxCronOverlapMode.omSerialize:
       begin
@@ -3669,7 +3678,7 @@ begin
           end;
           if lQueueMain then
           begin
-            QueueMainThreadCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+            QueueMainThreadCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
             Exit;
           end;
           if not TryAcquireExecution then
@@ -3677,7 +3686,7 @@ begin
             TInterlocked.Exchange(fRunning, 0);
             Exit;
           end;
-          DispatchCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+          DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
         end else begin
           if not TryReserveExecution then
             Exit;
@@ -3695,7 +3704,7 @@ begin
           end;
           if lQueueMain then
           begin
-            QueueMainThreadCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+            QueueMainThreadCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
             Exit;
           end;
           if not TryAcquireExecution then
@@ -3703,7 +3712,7 @@ begin
             TInterlocked.Exchange(fRunning, 0);
             Exit;
           end;
-          DispatchCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+          DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
         end else begin
           if TInterlocked.CompareExchange(fPendingRuns, 1, 0) = 0 then
           begin
@@ -3715,6 +3724,130 @@ begin
           end;
         end;
       end;
+  end;
+end;
+
+procedure TmaxCronEvent.checkTimer(const aNow: TDateTime);
+var
+  lOnEvent: TmaxCronNotifyEvent;
+  lOnProc: TmaxCronNotifyProc;
+  lInvokeMode: TmaxCronInvokeMode;
+  lOverlap: TmaxCronOverlapMode;
+  lMisfire: TmaxCronMisfirePolicy;
+  lOwnerToken: ICronQueueToken;
+  lCron: TmaxCron;
+  lFireAt: TDateTime;
+  lHasCallbacks: Boolean;
+  lCatchUpLimit: Cardinal;
+  lCatchUpCount: Cardinal;
+begin
+  lOnEvent := nil;
+  lOnProc := nil;
+  lInvokeMode := TmaxCronInvokeMode.imMainThread;
+  lOverlap := TmaxCronOverlapMode.omAllowOverlap;
+  lMisfire := TmaxCronMisfirePolicy.mpDefault;
+  lCatchUpLimit := 1;
+
+  fLock.Acquire;
+  try
+    if not FEnabled then Exit;
+    if aNow < fNextSchedule then Exit;
+
+    if fScheduler.ExecutionLimit <> 0 then
+      if fNumOfDue >= fScheduler.ExecutionLimit then
+      begin
+        FEnabled := False;
+        Exit;
+      end;
+
+    lOnEvent := FOnScheduleEvent;
+    lOnProc := FOnScheduleProc;
+    lInvokeMode := fInvokeMode;
+    lOverlap := fOverlapMode;
+    lMisfire := fMisfirePolicy;
+  finally
+    fLock.Release;
+  end;
+
+  lHasCallbacks := Assigned(lOnEvent) or Assigned(lOnProc);
+
+  if lInvokeMode = TmaxCronInvokeMode.imDefault then
+  begin
+    if Supports(fCronToken, ICronQueueToken, lOwnerToken) and lOwnerToken.TryGetOwner(lCron) then
+      lInvokeMode := lCron.fDefaultInvokeMode
+    else
+      lInvokeMode := TmaxCronInvokeMode.imMainThread;
+  end;
+
+  if lMisfire = TmaxCronMisfirePolicy.mpDefault then
+  begin
+    if Supports(fCronToken, ICronQueueToken, lOwnerToken) and lOwnerToken.TryGetOwner(lCron) then
+    begin
+      lMisfire := lCron.fDefaultMisfirePolicy;
+      lCatchUpLimit := lCron.fDefaultMisfireCatchUpLimit;
+    end else begin
+      lMisfire := TmaxCronMisfirePolicy.mpCatchUpAll;
+      lCatchUpLimit := 1;
+    end;
+  end;
+
+  if lMisfire <> TmaxCronMisfirePolicy.mpCatchUpAll then
+    lCatchUpLimit := 1
+  else if lCatchUpLimit = 0 then
+    lCatchUpLimit := 1;
+
+  lCatchUpCount := 0;
+  while True do
+  begin
+    fLock.Acquire;
+    try
+      if not FEnabled then Exit;
+      if aNow < fNextSchedule then Exit;
+
+      if fScheduler.ExecutionLimit <> 0 then
+        if fNumOfDue >= fScheduler.ExecutionLimit then
+        begin
+          FEnabled := False;
+          Exit;
+        end;
+
+      case lMisfire of
+        TmaxCronMisfirePolicy.mpSkip:
+          begin
+            if not fScheduler.FindNextScheduleDate(aNow, fNextSchedule, FValidFrom, FValidTo) then
+              FEnabled := False;
+            Exit;
+          end;
+        TmaxCronMisfirePolicy.mpFireOnceNow:
+          begin
+            lFireAt := fNextSchedule;
+            fLastExecutionTime := lFireAt;
+            if FEnabled then
+              if not fScheduler.FindNextScheduleDate(aNow, fNextSchedule, FValidFrom, FValidTo) then
+                FEnabled := False;
+          end;
+      else
+        begin
+          lFireAt := fNextSchedule;
+          fLastExecutionTime := lFireAt;
+          if FEnabled then
+            ResetSchedule;
+        end;
+      end;
+    finally
+      fLock.Release;
+    end;
+
+    if not lHasCallbacks then
+      Exit;
+
+    DispatchScheduledCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+
+    Inc(lCatchUpCount);
+    if lMisfire <> TmaxCronMisfirePolicy.mpCatchUpAll then
+      Exit;
+    if lCatchUpCount >= lCatchUpLimit then
+      Exit;
   end;
 end;
 

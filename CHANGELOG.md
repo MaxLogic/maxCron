@@ -11,6 +11,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added cron dialect parsing for Standard 5-field and Quartz seconds-first formats. (T-008)
 - Added `TCronSchedulePlan.GetNextOccurrences` for schedule previews. (T-011)
 - Added basic human-readable schedule descriptions. (T-012)
+- Added misfire policies (Skip, FireOnceNow, CatchUpAll) with a bounded catch-up limit. (T-013)
 
 ### Changed
 - Changed the VCL help dialog to open help in an external browser instead of the legacy embedded control. (T-017)

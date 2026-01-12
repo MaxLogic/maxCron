@@ -9,17 +9,6 @@
 ## Next – Later
 
 
-### T-013 Add misfire policy handling
-Summary: Define what happens when the scheduler is delayed or the machine sleeps.
-
-Details:
-- Policies: `Skip`, `FireOnceNow`, `CatchUpAll` (bounded).
-- Add per-event override with scheduler default.
-- Add tests simulating delayed ticks.
-
-Likely files to touch/read: `maxCron.pas`, `tests/unit/TestLifecycle.pas`, `tests/unit/TestScheduleNext.pas`, `README.md`
-
-
 ### T-015 Update demos to showcase more features
 Summary: Expand demo projects to showcase advanced schedule features and invoke modes.
 
@@ -76,6 +65,17 @@ Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `te
 
 
 ## Done
+
+### T-013 Add misfire policy handling
+Summary: Define what happens when the scheduler is delayed or the machine sleeps.
+Done: Added misfire policies with bounded catch-up, defaulted to catch-up with limit 1, documented behavior, and added tests.
+
+Details:
+- Policies: `Skip`, `FireOnceNow`, `CatchUpAll` (bounded).
+- Add per-event override with scheduler default.
+- Add tests simulating delayed ticks.
+
+Likely files to touch/read: `maxCron.pas`, `tests/unit/TestMisfirePolicy.pas`, `README.md`
 
 ### T-027 Define ExecutionLimit semantics under overlap/misfire
 Summary: Decide whether ExecutionLimit counts due hits or actual executions and enforce consistently.
