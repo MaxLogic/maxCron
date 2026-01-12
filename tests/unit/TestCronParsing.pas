@@ -48,6 +48,9 @@ type
     procedure Parse_RebootMacro_SetsExecutionLimit;
 
     [Test]
+    procedure Parse_RebootMacro_DialectRestrictions;
+
+    [Test]
     procedure Parse_Dialect_Standard_Exact5;
 
     [Test]
@@ -219,6 +222,12 @@ begin
   finally
     Plan.Free;
   end;
+end;
+
+procedure TTestCronParsing.Parse_RebootMacro_DialectRestrictions;
+begin
+  AssertRaisesOnParseDialect('@reboot', cdStandard);
+  AssertRaisesOnParseDialect('@reboot', cdQuartzSecondsFirst);
 end;
 
 procedure TTestCronParsing.Parse_Dialect_Standard_Exact5;

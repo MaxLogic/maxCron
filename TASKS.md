@@ -6,15 +6,6 @@
 
 ## Next – This Week
 
-### T-025 Handle @reboot macro for non-maxCron dialects
-Summary: Prevent @reboot from expanding to an unlimited schedule in cdStandard/cdQuartzSecondsFirst.
-
-Details:
-- Reject @reboot in non-maxCron dialects or define equivalent semantics.
-- Add tests per dialect.
-
-Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `README.md`
-
 ### T-027 Define ExecutionLimit semantics under overlap/misfire
 Summary: Decide whether ExecutionLimit counts due hits or actual executions and enforce consistently.
 
@@ -95,6 +86,16 @@ Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `te
 
 
 ## Done
+
+### T-025 Handle @reboot macro for non-maxCron dialects
+Summary: Prevent @reboot from expanding to an unlimited schedule in cdStandard/cdQuartzSecondsFirst.
+Done: Rejected @reboot in cdStandard/cdQuartzSecondsFirst and documented the restriction with tests.
+
+Details:
+- Reject @reboot in non-maxCron dialects or define equivalent semantics.
+- Add tests per dialect.
+
+Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `README.md`
 
 ### T-026 Make ctPortable ticks independent of main-thread queue
 Summary: Ensure ctPortable schedules ticks even when the main thread is not pumping messages.

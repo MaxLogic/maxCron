@@ -727,6 +727,8 @@ begin
 
   if lMacro = '@reboot' then
   begin
+    if aPlan.Dialect <> cdMaxCron then
+      Exit(False);
     aPlan.Minute := '*';
     aPlan.Hour := '*';
     aPlan.DayOfTheMonth := '*';
