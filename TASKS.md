@@ -4,7 +4,36 @@
 
 ## Next – Today
 
+### T-026 Make ctPortable ticks independent of main-thread queue
+Summary: Ensure ctPortable schedules ticks even when the main thread is not pumping messages.
+
+Details:
+- Option A: call `DoTick` directly when `ActiveTimerBackend = ctPortable`.
+- Option B: add a config flag to choose queue vs direct execution.
+- Add tests for ctPortable in non-main-thread scenarios.
+
+Likely files to touch/read: `maxCron.pas`, `tests/unit/TestLifecycle.pas`, `tests/maxCronStressTests.dpr`
+
 ## Next – This Week
+
+### T-025 Handle @reboot macro for non-maxCron dialects
+Summary: Prevent @reboot from expanding to an unlimited schedule in cdStandard/cdQuartzSecondsFirst.
+
+Details:
+- Reject @reboot in non-maxCron dialects or define equivalent semantics.
+- Add tests per dialect.
+
+Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `README.md`
+
+### T-027 Define ExecutionLimit semantics under overlap/misfire
+Summary: Decide whether ExecutionLimit counts due hits or actual executions and enforce consistently.
+
+Details:
+- Document the chosen behavior in README/spec.
+- Align overlap handling and schedule counters.
+- Add tests for overlap modes with execution limits.
+
+Likely files to touch/read: `maxCron.pas`, `tests/unit/TestLifecycle.pas`, `README.md`
 
 ## Next – Later
 
@@ -76,6 +105,17 @@ Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `te
 
 
 ## Done
+
+### T-024 Fix ExecutionLimit parsing and validation
+Summary: Parse ExecutionLimit as unsigned 32-bit and reject negatives/overflow or invalid tokens instead of silently defaulting to 0.
+Done: Enforced 0..High(LongWord) parsing with invalid/overflow rejection and added range tests.
+
+Details:
+- Use a UInt64 parser and enforce 0..High(LongWord).
+- Treat non-numeric or out-of-range as parse errors.
+- Add tests for 0, 1, MaxInt+1, 0xFFFFFFFF, and negative values.
+
+Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `tests/unit/TestCronInvalidCorpus.pas`
 
 ### T-023 Fix timer backend interface compile blockers
 Summary: Ensure timer backend types in the public interface compile by adding the required units.

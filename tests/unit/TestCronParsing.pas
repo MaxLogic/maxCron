@@ -33,6 +33,9 @@ type
     procedure Parse_MixedTokenForms;
 
     [Test]
+    procedure Parse_ExecutionLimit_Range;
+
+    [Test]
     procedure Parse_Macros;
 
     [Test]
@@ -149,6 +152,30 @@ begin
   AssertParses('0-10/2 1,5,10 * * *');
   AssertRaisesOnParse('1,2-5//2 * * * *');
   AssertRaisesOnParse('1-5/0 * * * *');
+end;
+
+procedure TTestCronParsing.Parse_ExecutionLimit_Range;
+const
+  cMaxExecutionLimit = Int64(High(LongWord));
+var
+  Plan: TCronSchedulePlan;
+begin
+  Plan := TCronSchedulePlan.Create;
+  try
+    Plan.Parse('0 0 * * * * 0 0');
+    Assert.AreEqual(0, Integer(Plan.ExecutionLimit));
+    Plan.Parse('0 0 * * * * 0 1');
+    Assert.AreEqual(1, Integer(Plan.ExecutionLimit));
+    Plan.Parse('0 0 * * * * 0 ' + IntToStr(Int64(MaxInt) + 1));
+    Assert.AreEqual(LongWord(Int64(MaxInt) + 1), Plan.ExecutionLimit);
+    Plan.Parse('0 0 * * * * 0 ' + IntToStr(cMaxExecutionLimit));
+    Assert.AreEqual(High(LongWord), Plan.ExecutionLimit);
+  finally
+    Plan.Free;
+  end;
+
+  AssertRaisesOnParse('0 0 * * * * 0 -1');
+  AssertRaisesOnParse('0 0 * * * * 0 ' + IntToStr(cMaxExecutionLimit + 1));
 end;
 
 procedure TTestCronParsing.Parse_Macros;

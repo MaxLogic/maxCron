@@ -19,6 +19,7 @@ All notable user-visible changes to this project will be documented in this file
 - `NumOfExecutionsPerformed` now counts executed callbacks (after overlap rules). (T-021)
 
 ### Fixed
+- Fixed ExecutionLimit parsing to reject invalid, negative, or overflow values instead of silently defaulting. (T-024)
 - Fixed missing interface uses for timer backends that prevented compilation in some setups. (T-023)
 - Fixed cron parsing to reject malformed tokens like trailing commas. (T-001)
 - Fixed schedule calculation for impossible DOM/month combos and default re-parse behavior (e.g., seconds default to 0). (T-001)

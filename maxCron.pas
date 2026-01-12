@@ -1231,6 +1231,8 @@ procedure TCronSchedulePlan.Parse(const CronPlan: string);
 var
   plan: TPlan;
   pk: TPartKind;
+  lText: string;
+  lNum: Int64;
 begin
   Clear;
   plan.Dialect := fDialect;
@@ -1240,8 +1242,15 @@ begin
     parts[pk].Data := plan.parts[integer(pk)];
 
   fExecutionLimit := 0;
-  if plan.ExecutionLimit <> '*' then
-    fExecutionLimit := StrToIntDef(plan.ExecutionLimit, 0);
+  lText := Trim(plan.ExecutionLimit);
+  if (lText <> '') and (lText <> '*') then
+  begin
+    if not TryStrToInt64(lText, lNum) then
+      raise Exception.Create('Invalid cron token');
+    if (lNum < 0) or (lNum > High(LongWord)) then
+      raise Exception.Create('Cron value out of range');
+    fExecutionLimit := LongWord(lNum);
+  end;
   fLastPlan := CronPlan;
 end;
 
