@@ -261,6 +261,7 @@ Additional syntax we support:
 - Quartz-style modifiers for Day-of-Month and Day-of-Week:
   - DOM: `L` (last day), `W` (nearest weekday), `LW` (last weekday).
   - DOW: `?` (no specific value), `nL` (last weekday in month), `n#k` (nth weekday, k=1..5).
+- Note: we accept `?` for Quartz compatibility and treat it as "any" when matching schedules.
 - Macros: `@yearly`/`@annually`, `@monthly`, `@weekly`, `@daily`/`@midnight`, `@hourly`, `@reboot` (runs once on the next scheduler tick).
 - Comments and whitespace: trailing `# comment` is ignored; extra spaces/tabs and spaces after commas are accepted.
 

@@ -25,6 +25,9 @@ type
 
     [Test]
     procedure UpdateEventPlan_InvalidDoesNotChangePlan;
+
+    [Test]
+    procedure SetDialect_ReparsesEventPlan;
   end;
 
 implementation
@@ -201,6 +204,37 @@ begin
     end;
 
     Assert.AreEqual(lPrevPlan, lEvt.EventPlan);
+    Assert.AreEqual(lPrevNext, lEvt.NextSchedule, 0.0);
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestLifecycle.SetDialect_ReparsesEventPlan;
+var
+  lCron: TmaxCron;
+  lEvt: TmaxCronEvent;
+  lPrevNext: TDateTime;
+  lPrevDialect: TmaxCronDialect;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lEvt := lCron.Add('DialectReparse');
+    lEvt.Dialect := cdQuartzSecondsFirst;
+    lEvt.EventPlan := '0 0 0 ? * 2';
+    lEvt.Run;
+
+    lPrevNext := lEvt.NextSchedule;
+    lPrevDialect := lEvt.Dialect;
+    try
+      lEvt.Dialect := cdStandard;
+      Assert.Fail('Expected parse error');
+    except
+      on Exception do
+        ; // expected
+    end;
+
+    Assert.AreEqual(lPrevDialect, lEvt.Dialect);
     Assert.AreEqual(lPrevNext, lEvt.NextSchedule, 0.0);
   finally
     lCron.Free;

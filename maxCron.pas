@@ -13,7 +13,8 @@ interface
 {$ENDIF}
 
 uses
-  System.Classes, System.Generics.Collections, System.SysUtils, System.SyncObjs;
+  System.Classes, System.Generics.Collections, System.SysUtils, System.SyncObjs,
+  Vcl.ExtCtrls, MaxLogic.PortableTimer;
 
 Type
   // forward declarations
@@ -190,6 +191,10 @@ Type
       const aOverlapMode: TmaxCronOverlapMode);
     function TryAcquireExecution: Boolean;
     procedure ReleaseExecution;
+    procedure HandleQueuedAcquireFailure(const aOverlapMode: TmaxCronOverlapMode);
+    procedure QueueMainThreadCallbacks(const aInvokeMode: TmaxCronInvokeMode;
+      const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
+      const aOverlapMode: TmaxCronOverlapMode);
     procedure MarkPendingDestroy;
     function CanFreeNow: Boolean;
 
@@ -436,8 +441,7 @@ implementation
 
 uses
   System.DateUtils, System.Math, System.Threading,
-  Vcl.ExtCtrls,
-  MaxLogic.PortableTimer, maxAsync;
+  maxAsync;
 
 {$IFDEF MAXCRON_TESTS}
 var
@@ -524,6 +528,10 @@ type
     procedure AttachAsync(const aAsync: IInterface);
     procedure MarkDone;
   end;
+
+procedure ExecuteQueuedMainThread(const aToken: ICronEventToken;
+  const aInvokeMode: TmaxCronInvokeMode; const aOnEvent: TmaxCronNotifyEvent;
+  const aOnProc: TmaxCronNotifyProc; const aOverlapMode: TmaxCronOverlapMode); forward;
 
 const
   OneMinute = 1 / 24 / 60;
@@ -3120,17 +3128,29 @@ begin
 end;
 
 procedure TmaxCronEvent.SetDialect(const Value: TmaxCronDialect);
+var
+  lValidator: TCronSchedulePlan;
 begin
   fLock.Acquire;
   try
     if fDialect = Value then
       Exit;
+    if FEventPlan <> '' then
+    begin
+      lValidator := TCronSchedulePlan.Create;
+      try
+        lValidator.Dialect := Value;
+        lValidator.Parse(FEventPlan);
+      finally
+        lValidator.Free;
+      end;
+    end;
+
     fDialect := Value;
     fScheduler.Dialect := Value;
     if FEventPlan <> '' then
     begin
-      if fScheduler.fLastPlan <> FEventPlan then
-        fScheduler.Parse(FEventPlan);
+      fScheduler.Parse(FEventPlan);
       ResetSchedule;
     end;
   finally
@@ -3233,6 +3253,53 @@ begin
   finally
     fLock.Release;
   end;
+end;
+
+procedure TmaxCronEvent.HandleQueuedAcquireFailure(const aOverlapMode: TmaxCronOverlapMode);
+var
+  lCron: TmaxCron;
+  lOwnerToken: ICronQueueToken;
+begin
+  case aOverlapMode of
+    TmaxCronOverlapMode.omSkipIfRunning:
+      TInterlocked.Exchange(fRunning, 0);
+    TmaxCronOverlapMode.omSerialize,
+    TmaxCronOverlapMode.omSerializeCoalesce:
+      begin
+        TInterlocked.Exchange(fPendingRuns, 0);
+        TInterlocked.Exchange(fRunning, 0);
+      end;
+  end;
+
+  if Supports(fCronToken, ICronQueueToken, lOwnerToken) and lOwnerToken.TryGetOwner(lCron) then
+    lCron.FlushPendingFree;
+end;
+
+procedure TmaxCronEvent.QueueMainThreadCallbacks(const aInvokeMode: TmaxCronInvokeMode;
+  const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
+  const aOverlapMode: TmaxCronOverlapMode);
+var
+  lToken: ICronEventToken;
+begin
+  if not Supports(fEventToken, ICronEventToken, lToken) then
+  begin
+    HandleQueuedAcquireFailure(aOverlapMode);
+    Exit;
+  end;
+
+  {$IFDEF ForceQueueNotAvailable}
+  TThread.Queue(nil,
+    procedure
+    begin
+      ExecuteQueuedMainThread(lToken, aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+    end);
+  {$ELSE}
+  TThread.ForceQueue(nil,
+    procedure
+    begin
+      ExecuteQueuedMainThread(lToken, aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+    end);
+  {$ENDIF}
 end;
 
 procedure TmaxCronEvent.MarkPendingDestroy;
@@ -3344,6 +3411,23 @@ begin
   end;
 end;
 
+procedure ExecuteQueuedMainThread(const aToken: ICronEventToken;
+  const aInvokeMode: TmaxCronInvokeMode; const aOnEvent: TmaxCronNotifyEvent;
+  const aOnProc: TmaxCronNotifyProc; const aOverlapMode: TmaxCronOverlapMode);
+var
+  lEvent: TmaxCronEvent;
+begin
+  if aToken = nil then Exit;
+  if not aToken.TryGetEvent(lEvent) then Exit;
+  if not lEvent.TryAcquireExecution then
+  begin
+    lEvent.HandleQueuedAcquireFailure(aOverlapMode);
+    Exit;
+  end;
+
+  lEvent.ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+end;
+
 procedure TmaxCronEvent.DispatchCallbacks(const aInvokeMode: TmaxCronInvokeMode;
   const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
   const aOverlapMode: TmaxCronOverlapMode);
@@ -3447,6 +3531,7 @@ var
   lOwnerToken: ICronQueueToken;
   lCron: TmaxCron;
   lFireAt: TDateTime;
+  lQueueMain: Boolean;
 begin
   lOnEvent := nil;
   lOnProc := nil;
@@ -3494,15 +3579,28 @@ begin
       lInvokeMode := TmaxCronInvokeMode.imMainThread;
   end;
 
+  lQueueMain := (lInvokeMode = TmaxCronInvokeMode.imMainThread) and
+    (TThread.CurrentThread.ThreadID <> MainThreadID);
+
   case lOverlap of
     TmaxCronOverlapMode.omAllowOverlap:
       begin
+        if lQueueMain then
+        begin
+          QueueMainThreadCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+          Exit;
+        end;
         if not TryAcquireExecution then Exit;
         DispatchCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
       end;
     TmaxCronOverlapMode.omSkipIfRunning:
       begin
         if TInterlocked.CompareExchange(fRunning, 1, 0) <> 0 then Exit;
+        if lQueueMain then
+        begin
+          QueueMainThreadCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+          Exit;
+        end;
         if not TryAcquireExecution then
         begin
           TInterlocked.Exchange(fRunning, 0);
@@ -3514,6 +3612,11 @@ begin
       begin
         if TInterlocked.CompareExchange(fRunning, 1, 0) = 0 then
         begin
+          if lQueueMain then
+          begin
+            QueueMainThreadCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+            Exit;
+          end;
           if not TryAcquireExecution then
           begin
             TInterlocked.Exchange(fRunning, 0);
@@ -3527,6 +3630,11 @@ begin
       begin
         if TInterlocked.CompareExchange(fRunning, 1, 0) = 0 then
         begin
+          if lQueueMain then
+          begin
+            QueueMainThreadCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+            Exit;
+          end;
           if not TryAcquireExecution then
           begin
             TInterlocked.Exchange(fRunning, 0);

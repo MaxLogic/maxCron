@@ -69,3 +69,4 @@ __recovery/
 modules/
 *.cmds
 *.log
+.aider*

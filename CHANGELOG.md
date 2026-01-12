@@ -19,12 +19,15 @@ All notable user-visible changes to this project will be documented in this file
 - `NumOfExecutionsPerformed` now counts executed callbacks (after overlap rules). (T-021)
 
 ### Fixed
+- Fixed missing interface uses for timer backends that prevented compilation in some setups. (T-023)
 - Fixed cron parsing to reject malformed tokens like trailing commas. (T-001)
 - Fixed schedule calculation for impossible DOM/month combos and default re-parse behavior (e.g., seconds default to 0). (T-001)
 - Fixed imMaxAsync keep-alive cleanup to avoid leaking async resources after callbacks. (T-001)
 - Fixed imMaxAsync to fall back safely when async scheduling fails or returns nil. (T-020)
 - Fixed month-relative DOM/DOW modifiers to recompute after advancing to the next month. (T-018)
 - Fixed ValidFrom/ValidTo updates to reschedule enabled events immediately. (T-020)
+- Fixed queued main-thread callbacks to avoid holding execution depth before they run, preventing shutdown hangs. (T-022)
+- Fixed dialect changes to re-parse existing event plans for correct semantics. (T-022)
 - Fixed schedule timing to use the scheduled fire time and avoid extra-second drift. (T-021)
 - Fixed Quartz day-of-week numbering to use 1-7 in seconds-first dialect. (T-021)
 - Fixed TPlan.Text output to respect the selected dialect. (T-021)

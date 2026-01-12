@@ -8,6 +8,49 @@
 
 ## Next – Later
 
+
+### T-013 Add misfire policy handling
+Summary: Define what happens when the scheduler is delayed or the machine sleeps.
+
+Details:
+- Policies: `Skip`, `FireOnceNow`, `CatchUpAll` (bounded).
+- Add per-event override with scheduler default.
+- Add tests simulating delayed ticks.
+
+Likely files to touch/read: `maxCron.pas`, `tests/unit/TestLifecycle.pas`, `tests/unit/TestScheduleNext.pas`, `README.md`
+
+
+### T-015 Update demos to showcase more features
+Summary: Expand demo projects to showcase advanced schedule features and invoke modes.
+
+Details:
+- Add demos for overlap modes, macros, and cron dialects (once implemented).
+- Include timezone/DST examples when that feature lands.
+
+Likely files to touch/read: `demo/`, `README.md`, `maxCron.pas`
+
+### T-016 Update README after new features land
+Summary: Refresh README examples and feature list after we add new cron features.
+
+Details:
+- Add examples for macros, modifiers, dialects, and timezone/DST.
+- Document misfire policy, jitter, and comment handling.
+
+Likely files to touch/read: `README.md`
+
+## Blocked / OnHold
+
+### T-014 Add business calendar/exclusions
+Summary: Support exclusions like holidays, weekdays-only, and blackout windows.
+
+Details:
+- Provide an exclusion list or calendar hook.
+- Ensure exclusions interact correctly with DOM/DOW matching.
+- Add tests for holiday and blackout cases.
+
+Likely files to touch/read: `maxCron.pas`, `tests/unit/TestScheduleNext.pas`, `README.md`
+
+
 ### T-007 Add per-event timezone + explicit DST policies
 Summary: Add a per-event timezone (default = local) and explicit DST handling rules.
 
@@ -30,47 +73,15 @@ Details:
 
 Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `tests/unit/TestScheduleNext.pas`, `README.md`
 
-### T-013 Add misfire policy handling
-Summary: Define what happens when the scheduler is delayed or the machine sleeps.
 
-Details:
-- Policies: `Skip`, `FireOnceNow`, `CatchUpAll` (bounded).
-- Add per-event override with scheduler default.
-- Add tests simulating delayed ticks.
-
-Likely files to touch/read: `maxCron.pas`, `tests/unit/TestLifecycle.pas`, `tests/unit/TestScheduleNext.pas`, `README.md`
-
-### T-014 Add business calendar/exclusions
-Summary: Support exclusions like holidays, weekdays-only, and blackout windows.
-
-Details:
-- Provide an exclusion list or calendar hook.
-- Ensure exclusions interact correctly with DOM/DOW matching.
-- Add tests for holiday and blackout cases.
-
-Likely files to touch/read: `maxCron.pas`, `tests/unit/TestScheduleNext.pas`, `README.md`
-
-### T-015 Update demos to showcase more features
-Summary: Expand demo projects to showcase advanced schedule features and invoke modes.
-
-Details:
-- Add demos for overlap modes, macros, and cron dialects (once implemented).
-- Include timezone/DST examples when that feature lands.
-
-Likely files to touch/read: `demo/`, `README.md`, `maxCron.pas`
-
-### T-016 Update README after new features land
-Summary: Refresh README examples and feature list after we add new cron features.
-
-Details:
-- Add examples for macros, modifiers, dialects, and timezone/DST.
-- Document misfire policy, jitter, and comment handling.
-
-Likely files to touch/read: `README.md`
-
-## Blocked
 
 ## Done
+
+### T-023 Fix timer backend interface compile blockers
+Summary: Ensure timer backend types in the public interface compile by adding the required units.
+
+### T-022 Fix main-thread queue shutdown hangs and dialect reparse
+Summary: Avoid holding execution depth before queued main-thread callbacks, re-parse plans on dialect changes, and document `?` handling.
 
 ### T-021 Fix timing drift, Quartz DOW numbering, and dialect-aware plan output
 Summary: Correct scheduling timing, Quartz DOW parsing, and TPlan output by dialect, with safer event plan parsing and new tests.
