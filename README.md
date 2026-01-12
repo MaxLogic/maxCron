@@ -8,10 +8,12 @@ Homepage: https://maxlogic.eu/portfolio/maxcron-scheduler-for-delphi/
 ## Main features:
 
 - Compatible with most of what CRON is offering
-- Setting the CRON is as simple as setting one string. Example below.
-- It supports step values (e.g., `*/5`) for interval-style schedules
-- Schedule can have valid from / to limits
-- Very lightweight implementation
+- Multiple cron dialects (standard 5-field, maxCron 5-8 field, Quartz seconds-first)
+- Quartz-style DOM/DOW modifiers and cron macros
+- Per-event overlap, invoke, and misfire policies
+- Execution limits and ValidFrom/ValidTo ranges
+- Schedule previews and human-readable descriptions
+- Comments and flexible whitespace support
 
 
 # Sample scheduler usage:
@@ -281,6 +283,12 @@ Additional syntax we support:
 - Note: we accept `?` for Quartz compatibility and treat it as "any" when matching schedules.
 - Macros: `@yearly`/`@annually`, `@monthly`, `@weekly`, `@daily`/`@midnight`, `@hourly`, `@reboot` (runs once on the next scheduler tick; `@reboot` is supported only in `cdMaxCron`).
 - Comments and whitespace: trailing `# comment` is ignored; extra spaces/tabs and spaces after commas are accepted.
+
+Not yet supported (planned):
+
+- Per-event time zones and explicit DST policies.
+- Jitter/hash syntax (`H`, `H/15`, `H(0-29)`).
+- Business calendar exclusions (holidays, blackout windows).
 
 Examples:
 

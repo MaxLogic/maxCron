@@ -20,6 +20,7 @@ All notable user-visible changes to this project will be documented in this file
 - `NumOfExecutionsPerformed` now counts executed callbacks (after overlap rules). (T-021)
 - ExecutionLimit now counts actual executions after overlap rules, not skipped/coalesced due hits. (T-027)
 - Updated the demo UI with invoke/overlap/misfire controls and expanded samples. (T-015)
+- Updated README to reflect misfire policies, macros, and planned features. (T-016)
 
 ### Fixed
 - Fixed @reboot macro to be rejected outside cdMaxCron where ExecutionLimit is unavailable. (T-025)

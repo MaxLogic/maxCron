@@ -9,15 +9,6 @@
 ## Next – Later
 
 
-### T-016 Update README after new features land
-Summary: Refresh README examples and feature list after we add new cron features.
-
-Details:
-- Add examples for macros, modifiers, dialects, and timezone/DST.
-- Document misfire policy, jitter, and comment handling.
-
-Likely files to touch/read: `README.md`
-
 ## Blocked / OnHold
 
 ### T-014 Add business calendar/exclusions
@@ -56,6 +47,16 @@ Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `te
 
 
 ## Done
+
+### T-016 Update README after new features land
+Summary: Refresh README examples and feature list after we add new cron features.
+Done: Updated the README feature list, misfire section, and planned-feature notes.
+
+Details:
+- Add examples for macros, modifiers, dialects, and timezone/DST.
+- Document misfire policy, jitter, and comment handling.
+
+Likely files to touch/read: `README.md`
 
 ### T-015 Update demos to showcase more features
 Summary: Expand demo projects to showcase advanced schedule features and invoke modes.
