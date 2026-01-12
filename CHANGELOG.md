@@ -19,6 +19,7 @@ All notable user-visible changes to this project will be documented in this file
 - `NumOfExecutionsPerformed` now counts executed callbacks (after overlap rules). (T-021)
 
 ### Fixed
+- Fixed ctPortable timers to run ticks directly without requiring a main-thread queue. (T-026)
 - Fixed ExecutionLimit parsing to reject invalid, negative, or overflow values instead of silently defaulting. (T-024)
 - Fixed missing interface uses for timer backends that prevented compilation in some setups. (T-023)
 - Fixed cron parsing to reject malformed tokens like trailing commas. (T-001)

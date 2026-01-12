@@ -18,6 +18,9 @@ type
     procedure FreeScheduler_WhileRunning_DoesNotCrash;
 
     [Test]
+    procedure PortableTimer_TicksWithoutMainThreadPump;
+
+    [Test]
     procedure UpdateEventPlan_RecalculatesNextSchedule;
 
     [Test]
@@ -118,6 +121,35 @@ begin
     Started.Free;
     if Cron <> nil then
       Cron.Free;
+  end;
+end;
+
+procedure TTestLifecycle.PortableTimer_TicksWithoutMainThreadPump;
+var
+  lCron: TmaxCron;
+  lEvt: TmaxCronEvent;
+  lHit: TEvent;
+  lWaitRes: TWaitResult;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  lHit := TEvent.Create(nil, True, False, '');
+  try
+    lEvt := lCron.Add('PortableTick');
+    lEvt.EventPlan := '* * * * * * * 1';
+    lEvt.InvokeMode := imThread;
+    lEvt.OnScheduleProc :=
+      procedure(Sender: TmaxCronEvent)
+      begin
+        lHit.SetEvent;
+      end;
+    lEvt.Run;
+
+    lCron.StartTimerForTests(50);
+    lWaitRes := lHit.WaitFor(2500);
+    Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes);
+  finally
+    lHit.Free;
+    lCron.Free;
   end;
 end;
 

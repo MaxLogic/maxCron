@@ -4,16 +4,6 @@
 
 ## Next – Today
 
-### T-026 Make ctPortable ticks independent of main-thread queue
-Summary: Ensure ctPortable schedules ticks even when the main thread is not pumping messages.
-
-Details:
-- Option A: call `DoTick` directly when `ActiveTimerBackend = ctPortable`.
-- Option B: add a config flag to choose queue vs direct execution.
-- Add tests for ctPortable in non-main-thread scenarios.
-
-Likely files to touch/read: `maxCron.pas`, `tests/unit/TestLifecycle.pas`, `tests/maxCronStressTests.dpr`
-
 ## Next – This Week
 
 ### T-025 Handle @reboot macro for non-maxCron dialects
@@ -105,6 +95,17 @@ Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `te
 
 
 ## Done
+
+### T-026 Make ctPortable ticks independent of main-thread queue
+Summary: Ensure ctPortable schedules ticks even when the main thread is not pumping messages.
+Done: ctPortable now calls `DoTick` directly and a lifecycle test covers non-main-thread ticks.
+
+Details:
+- Option A: call `DoTick` directly when `ActiveTimerBackend = ctPortable`.
+- Option B: add a config flag to choose queue vs direct execution.
+- Add tests for ctPortable in non-main-thread scenarios.
+
+Likely files to touch/read: `maxCron.pas`, `tests/unit/TestLifecycle.pas`, `tests/maxCronStressTests.dpr`
 
 ### T-024 Fix ExecutionLimit parsing and validation
 Summary: Parse ExecutionLimit as unsigned 32-bit and reject negatives/overflow or invalid tokens instead of silently defaulting to 0.

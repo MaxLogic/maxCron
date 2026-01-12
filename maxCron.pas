@@ -123,6 +123,7 @@ Type
 
     {$IFDEF MAXCRON_TESTS}
     procedure TickAt(const aNow: TDateTime);
+    procedure StartTimerForTests(const aIntervalMs: Cardinal);
     {$ENDIF}
   end;
 
@@ -3004,6 +3005,12 @@ procedure TmaxCron.TickAt(const aNow: TDateTime);
 begin
   DoTickAt(aNow);
 end;
+
+procedure TmaxCron.StartTimerForTests(const aIntervalMs: Cardinal);
+begin
+  if fTimer <> nil then
+    fTimer.Start(aIntervalMs);
+end;
 {$ENDIF}
 
 procedure TmaxCron.QueueTick;
@@ -3040,6 +3047,12 @@ end;
 
 procedure TmaxCron.TimerTimer(Sender: TObject);
 begin
+  if fActiveTimerBackend = TmaxCronTimerBackend.ctPortable then
+  begin
+    DoTick;
+    Exit;
+  end;
+
   if TThread.CurrentThread.ThreadID = MainThreadID then
     DoTick
   else
