@@ -9,15 +9,6 @@
 ## Next – Later
 
 
-### T-015 Update demos to showcase more features
-Summary: Expand demo projects to showcase advanced schedule features and invoke modes.
-
-Details:
-- Add demos for overlap modes, macros, and cron dialects (once implemented).
-- Include timezone/DST examples when that feature lands.
-
-Likely files to touch/read: `demo/`, `README.md`, `maxCron.pas`
-
 ### T-016 Update README after new features land
 Summary: Refresh README examples and feature list after we add new cron features.
 
@@ -65,6 +56,16 @@ Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `te
 
 
 ## Done
+
+### T-015 Update demos to showcase more features
+Summary: Expand demo projects to showcase advanced schedule features and invoke modes.
+Done: Added invoke/overlap/misfire selectors to the demo and expanded sample schedules/macros.
+
+Details:
+- Add demos for overlap modes, macros, and cron dialects (once implemented).
+- Include timezone/DST examples when that feature lands.
+
+Likely files to touch/read: `demo/`
 
 ### T-013 Add misfire policy handling
 Summary: Define what happens when the scheduler is delayed or the machine sleeps.

@@ -43,6 +43,12 @@ Type
     cbDialect: TComboBox;
     stDayMatchMode: TStaticText;
     cbDayMatchMode: TComboBox;
+    stInvokeMode: TStaticText;
+    cbInvokeMode: TComboBox;
+    stOverlapMode: TStaticText;
+    cbOverlapMode: TComboBox;
+    stMisfirePolicy: TStaticText;
+    cbMisfirePolicy: TComboBox;
     tsEventLog: TTabSheet;
     memLog: TMemo;
     StaticText12: TStaticText;
@@ -60,6 +66,9 @@ Type
     Procedure btnSamplesClick(Sender: TObject);
     Procedure cbDialectChange(Sender: TObject);
     Procedure cbDayMatchModeChange(Sender: TObject);
+    Procedure cbInvokeModeChange(Sender: TObject);
+    Procedure cbOverlapModeChange(Sender: TObject);
+    Procedure cbMisfirePolicyChange(Sender: TObject);
   Private
     ChronScheduler: TmaxCron;
     FDynamicEvent: TmaxCronEvent;
@@ -72,6 +81,9 @@ Type
     Function GetSampleCaption(Const sample: String): String;
     Function GetSelectedDialect: TmaxCronDialect;
     Function GetSelectedDayMatchMode: TmaxCronDayMatchMode;
+    Function GetSelectedInvokeMode: TmaxCronInvokeMode;
+    Function GetSelectedOverlapMode: TmaxCronOverlapMode;
+    Function GetSelectedMisfirePolicy: TmaxCronMisfirePolicy;
     Function NormalizeCronField(const aValue, aDefault: string): string;
     Procedure ApplyCronString;
     Procedure ApplyDynamicEventFromUi(const aLogSuccess: Boolean);
@@ -114,6 +126,28 @@ Begin
   cbDayMatchMode.Items.Add('And (legacy)');
   cbDayMatchMode.Items.Add('Or (crontab)');
   cbDayMatchMode.ItemIndex := 0;
+
+  cbInvokeMode.Items.Clear;
+  cbInvokeMode.Items.Add('Default (scheduler)');
+  cbInvokeMode.Items.Add('Main thread');
+  cbInvokeMode.Items.Add('TTask');
+  cbInvokeMode.Items.Add('Thread');
+  cbInvokeMode.Items.Add('MaxAsync');
+  cbInvokeMode.ItemIndex := 0;
+
+  cbOverlapMode.Items.Clear;
+  cbOverlapMode.Items.Add('Allow overlap');
+  cbOverlapMode.Items.Add('Skip if running');
+  cbOverlapMode.Items.Add('Serialize');
+  cbOverlapMode.Items.Add('Serialize (coalesce)');
+  cbOverlapMode.ItemIndex := 0;
+
+  cbMisfirePolicy.Items.Clear;
+  cbMisfirePolicy.Items.Add('Default (scheduler)');
+  cbMisfirePolicy.Items.Add('Skip');
+  cbMisfirePolicy.Items.Add('Fire once now');
+  cbMisfirePolicy.Items.Add('Catch up all (bounded)');
+  cbMisfirePolicy.ItemIndex := 0;
 
   UpdateDialectUi;
 
@@ -342,7 +376,11 @@ Begin
     Add('M:0 0 * * 5L                          |Last Friday of month (set start after that day to test rollover)');
     Add('M:0 0 * * 2#3                         |3rd Tuesday of month (set start after that day to test rollover)');
     Add('Q:0 15 10 ? * 2#3                      |Quartz: 3rd Tuesday at 10:15:00 (seconds-first)');
+    Add('S:*/15 9-17 * * Mon-Fri               |Standard: every 15 minutes on weekdays');
+    Add('@hourly                               |Macro: hourly');
+    Add('@daily                                |Macro: daily at midnight');
     Add('@monthly                               |Macro: monthly at midnight');
+    Add('M:@reboot                             |Macro: reboot (maxCron only)');
     Add('0 0 LW * * # last weekday               |Trailing comment example');
   End;
 
@@ -441,6 +479,24 @@ Begin
   labSample.Caption := '';
 End;
 
+Procedure TForm2.cbInvokeModeChange(Sender: TObject);
+Begin
+  ApplyDynamicEventFromUi(True);
+  labSample.Caption := '';
+End;
+
+Procedure TForm2.cbOverlapModeChange(Sender: TObject);
+Begin
+  ApplyDynamicEventFromUi(True);
+  labSample.Caption := '';
+End;
+
+Procedure TForm2.cbMisfirePolicyChange(Sender: TObject);
+Begin
+  ApplyDynamicEventFromUi(True);
+  labSample.Caption := '';
+End;
+
 Function TForm2.GetSelectedDialect: TmaxCronDialect;
 Begin
   Case cbDialect.ItemIndex Of
@@ -457,6 +513,40 @@ Begin
     Result := dmOr
   Else
     Result := dmAnd;
+End;
+
+Function TForm2.GetSelectedInvokeMode: TmaxCronInvokeMode;
+Begin
+  Case cbInvokeMode.ItemIndex Of
+    1: Result := TmaxCronInvokeMode.imMainThread;
+    2: Result := TmaxCronInvokeMode.imTTask;
+    3: Result := TmaxCronInvokeMode.imThread;
+    4: Result := TmaxCronInvokeMode.imMaxAsync;
+  Else
+    Result := TmaxCronInvokeMode.imDefault;
+  End;
+End;
+
+Function TForm2.GetSelectedOverlapMode: TmaxCronOverlapMode;
+Begin
+  Case cbOverlapMode.ItemIndex Of
+    1: Result := TmaxCronOverlapMode.omSkipIfRunning;
+    2: Result := TmaxCronOverlapMode.omSerialize;
+    3: Result := TmaxCronOverlapMode.omSerializeCoalesce;
+  Else
+    Result := TmaxCronOverlapMode.omAllowOverlap;
+  End;
+End;
+
+Function TForm2.GetSelectedMisfirePolicy: TmaxCronMisfirePolicy;
+Begin
+  Case cbMisfirePolicy.ItemIndex Of
+    1: Result := TmaxCronMisfirePolicy.mpSkip;
+    2: Result := TmaxCronMisfirePolicy.mpFireOnceNow;
+    3: Result := TmaxCronMisfirePolicy.mpCatchUpAll;
+  Else
+    Result := TmaxCronMisfirePolicy.mpDefault;
+  End;
 End;
 
 Function TForm2.NormalizeCronField(const aValue, aDefault: string): string;
@@ -509,6 +599,9 @@ Begin
   try
     FDynamicEvent.Dialect := GetSelectedDialect;
     FDynamicEvent.DayMatchMode := GetSelectedDayMatchMode;
+    FDynamicEvent.InvokeMode := GetSelectedInvokeMode;
+    FDynamicEvent.OverlapMode := GetSelectedOverlapMode;
+    FDynamicEvent.MisfirePolicy := GetSelectedMisfirePolicy;
     FDynamicEvent.EventPlan := lPlanText;
     if not FDynamicEvent.Enabled then
       FDynamicEvent.Run;

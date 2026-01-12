@@ -208,6 +208,63 @@ object Form2: TForm2
           TabOrder = 25
           OnChange = cbDayMatchModeChange
         end
+        object stInvokeMode: TStaticText
+          Left = 8
+          Top = 444
+          Width = 101
+          Height = 17
+          Alignment = taRightJustify
+          AutoSize = False
+          Caption = 'Invoke mode'
+          TabOrder = 26
+        end
+        object cbInvokeMode: TComboBox
+          Left = 115
+          Top = 440
+          Width = 190
+          Height = 21
+          Style = csDropDownList
+          TabOrder = 27
+          OnChange = cbInvokeModeChange
+        end
+        object stOverlapMode: TStaticText
+          Left = 8
+          Top = 471
+          Width = 101
+          Height = 17
+          Alignment = taRightJustify
+          AutoSize = False
+          Caption = 'Overlap'
+          TabOrder = 28
+        end
+        object cbOverlapMode: TComboBox
+          Left = 115
+          Top = 467
+          Width = 190
+          Height = 21
+          Style = csDropDownList
+          TabOrder = 29
+          OnChange = cbOverlapModeChange
+        end
+        object stMisfirePolicy: TStaticText
+          Left = 8
+          Top = 498
+          Width = 101
+          Height = 17
+          Alignment = taRightJustify
+          AutoSize = False
+          Caption = 'Misfire'
+          TabOrder = 30
+        end
+        object cbMisfirePolicy: TComboBox
+          Left = 115
+          Top = 494
+          Width = 190
+          Height = 21
+          Style = csDropDownList
+          TabOrder = 31
+          OnChange = cbMisfirePolicyChange
+        end
         object StaticText2: TStaticText
           Left = 8
           Top = 118
