@@ -71,4 +71,5 @@ modules/
 *.log
 .aider*
 AGENTS.md
+agents.md
 conventions.md
