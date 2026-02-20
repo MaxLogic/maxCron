@@ -1,4 +1,9 @@
 # Tasks
+Next task ID: T-028
+
+## Summary
+Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
+Done tasks: 28
 
 ## In Progress
 
@@ -11,8 +16,13 @@
 
 ## Blocked / OnHold
 
+
+
+## Done
+
 ### T-014 Add business calendar/exclusions
 Summary: Support exclusions like holidays, weekdays-only, and blackout windows.
+Done: Added per-event business-day filtering (`WeekdaysOnly`), holiday exclusion lists (`ExcludedDatesCsv`), blackout windows (`BlackoutStartTime`/`BlackoutEndTime`), and unit tests.
 
 Details:
 - Provide an exclusion list or calendar hook.
@@ -21,9 +31,9 @@ Details:
 
 Likely files to touch/read: `maxCron.pas`, `tests/unit/TestScheduleNext.pas`, `README.md`
 
-
 ### T-007 Add per-event timezone + explicit DST policies
 Summary: Add a per-event timezone (default = local) and explicit DST handling rules.
+Done: Added `TimeZoneId` (LOCAL/UTC/UTC±HH:MM), `DstSpringPolicy`, `DstFallPolicy`, timezone-aware next-occurrence calculation, and DST-focused unit tests.
 
 Details:
 - Add `TimeZoneId`/`TimeZone` on events (default local).
@@ -36,6 +46,7 @@ Likely files to touch/read: `maxCron.pas`, `tests/unit/TestScheduleNext.pas`, `t
 
 ### T-009 Add hash/jitter syntax (H) with deterministic seed
 Summary: Support `H` tokens for jittered schedules using a stable hash seed.
+Done: Added deterministic `H` parsing (`H`, `H/step`, `H(min-max)/step`) with a scheduler hash seed (event-name based), plus dedicated unit tests.
 
 Details:
 - Parse `H`, `H/15`, and optional `H(0-29)` range forms.
@@ -43,10 +54,6 @@ Details:
 - Add tests to ensure stable output and range enforcement.
 
 Likely files to touch/read: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `tests/unit/TestScheduleNext.pas`, `README.md`
-
-
-
-## Done
 
 ### T-016 Update README after new features land
 Summary: Refresh README examples and feature list after we add new cron features.

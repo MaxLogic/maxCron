@@ -50,6 +50,18 @@ Type
     mpCatchUpAll    // fire missed occurrences sequentially (bounded per tick)
     );
 
+  TmaxCronDstSpringPolicy = (
+    dspSkip,              // skip invalid local times during spring-forward
+    dspRunAtNextValidTime // shift to the next valid local time
+    );
+
+  TmaxCronDstFallPolicy = (
+    dfpRunOnce,                 // run once (earlier UTC instant)
+    dfpRunTwice,                // run both ambiguous local-time instances
+    dfpRunOncePreferFirstInstance,
+    dfpRunOncePreferSecondInstance
+    );
+
   /// <summary>
   /// How we combine Day-of-Month (DOM) and Day-of-Week (DOW) when both are restricted (not '*').
   /// dmAnd keeps our legacy maxCron behavior; dmOr matches classic crontab OR semantics.
@@ -144,6 +156,9 @@ Type
 
   TmaxCronEvent = class(TObject)
   private
+    type
+      TCronTimeZoneKind = (ctzLocal, ctzUtc, ctzFixedOffset);
+  private
     fCron: TmaxCron;
     fCronToken: IInterface;
     fScheduler: TCronSchedulePlan;
@@ -171,9 +186,21 @@ Type
     fDayMatchMode: TmaxCronDayMatchMode;
     fDialect: TmaxCronDialect;
     fMisfirePolicy: TmaxCronMisfirePolicy;
+    fTimeZoneId: string;
+    fTimeZoneKind: TCronTimeZoneKind;
+    fTimeZoneOffsetMinutes: Integer;
+    fDstSpringPolicy: TmaxCronDstSpringPolicy;
+    fDstFallPolicy: TmaxCronDstFallPolicy;
+    fWeekdaysOnly: Boolean;
+    fExcludedDatesCsv: string;
+    fExcludedDateSerials: TArray<Integer>;
+    fBlackoutStartTime: TDateTime;
+    fBlackoutEndTime: TDateTime;
+    fPendingDstSecondSchedule: TDateTime;
     fRunning: Integer;
     fPendingRuns: Integer;
     fExecDepth: Integer;
+    fAllowDisabledDispatch: Integer;
     fPendingDestroy: Boolean;
     procedure SetName(const Value: string);
     procedure SetOnScheduleEvent(const Value: TmaxCronNotifyEvent);
@@ -191,6 +218,13 @@ Type
     procedure SetDayMatchMode(const Value: TmaxCronDayMatchMode);
     procedure SetDialect(const Value: TmaxCronDialect);
     procedure SetMisfirePolicy(const Value: TmaxCronMisfirePolicy);
+    procedure SetTimeZoneId(const Value: string);
+    procedure SetDstSpringPolicy(const Value: TmaxCronDstSpringPolicy);
+    procedure SetDstFallPolicy(const Value: TmaxCronDstFallPolicy);
+    procedure SetWeekdaysOnly(const Value: Boolean);
+    procedure SetExcludedDatesCsv(const Value: string);
+    procedure SetBlackoutStartTime(const Value: TDateTime);
+    procedure SetBlackoutEndTime(const Value: TDateTime);
     function GetEnabled: boolean;
     function GetNextSchedule: TDateTime;
     function GetLastExecution: TDateTime;
@@ -220,6 +254,14 @@ Type
       const aOverlapMode: TmaxCronOverlapMode);
     procedure MarkPendingDestroy;
     function CanFreeNow: Boolean;
+    function IsTimeInBlackout(const aEventLocalDateTime: TDateTime): Boolean;
+    function IsOccurrenceExcluded(const aEventLocalDateTime: TDateTime): Boolean;
+    function FindNextScheduleWithPolicies(const aBaseSystemLocal: TDateTime; out aNextSystemLocal: TDateTime): Boolean;
+    function SystemLocalToEventLocal(const aSystemLocal: TDateTime): TDateTime;
+    function EventLocalToSystemLocal(const aEventLocal: TDateTime; out aSystemLocal: TDateTime): Boolean;
+    function TryParseTimeZone(const aValue: string; out aKind: TCronTimeZoneKind;
+      out aOffsetMinutes: Integer; out aNormalized: string): Boolean;
+    procedure ParseExcludedDatesCsv(const aValue: string; out aDateSerials: TArray<Integer>);
 
     // this is the main function that will be called by the TmaxCron in a timer
     procedure checkTimer(const aNow: TDateTime);
@@ -251,6 +293,13 @@ Type
     property DayMatchMode: TmaxCronDayMatchMode read GetDayMatchMode write SetDayMatchMode;
     property Dialect: TmaxCronDialect read fDialect write SetDialect;
     property MisfirePolicy: TmaxCronMisfirePolicy read GetMisfirePolicy write SetMisfirePolicy;
+    property TimeZoneId: string read fTimeZoneId write SetTimeZoneId;
+    property DstSpringPolicy: TmaxCronDstSpringPolicy read fDstSpringPolicy write SetDstSpringPolicy;
+    property DstFallPolicy: TmaxCronDstFallPolicy read fDstFallPolicy write SetDstFallPolicy;
+    property WeekdaysOnly: Boolean read fWeekdaysOnly write SetWeekdaysOnly;
+    property ExcludedDatesCsv: string read fExcludedDatesCsv write SetExcludedDatesCsv;
+    property BlackoutStartTime: TDateTime read fBlackoutStartTime write SetBlackoutStartTime;
+    property BlackoutEndTime: TDateTime read fBlackoutEndTime write SetBlackoutEndTime;
 
     /// <summary>
     /// Number of executed callbacks (after overlap rules).
@@ -338,6 +387,7 @@ Type
     fDowValue: Word;
     fDowNth: Word;
     fDowOneBased: Boolean;
+    fHashSeed: string;
 
     procedure Parse;
     procedure SetData(const Value: string);
@@ -351,6 +401,8 @@ Type
     function TryParseDomSpecial(const aToken: string): Boolean;
     function TryParseDowSpecial(const aToken: string): Boolean;
     function NormalizeDowValue(const aValue: Integer): Integer;
+    function Hash32(const aValue: string): Cardinal;
+    function TryParseHashedToken(const aValue: string): Boolean;
     function GetLastDayOfMonth(const aYear, aMonth: Word): Word;
     function GetLastWeekdayOfMonth(const aYear, aMonth: Word; out aDay: Word): Boolean;
     function GetNearestWeekdayTo(const aYear, aMonth, aDay: Word; out aNearestDay: Word): Boolean;
@@ -408,6 +460,7 @@ Type
     fDayMatchMode: TmaxCronDayMatchMode;
     fDialect: TmaxCronDialect;
     fLastPlan: string;
+    fHashSeed: string;
 
     function GetParts(PartKind: TPartKind): TCronPart;
     function DomMatchesDate(const aDate: TDateTime): Boolean;
@@ -450,6 +503,7 @@ Type
     property ExecutionLimit: LongWord read fExecutionLimit;
     property DayMatchMode: TmaxCronDayMatchMode read fDayMatchMode write fDayMatchMode;
     property Dialect: TmaxCronDialect read fDialect write SetDialect;
+    property HashSeed: string read fHashSeed write fHashSeed;
   end;
 
   // you can use this to show the user a preview ow what his schedule will look like.
@@ -464,7 +518,7 @@ procedure SetMaxCronAsyncCallHook(const aHook: TmaxCronAsyncCallHook);
 implementation
 
 uses
-  System.DateUtils, System.Math, System.Threading,
+  System.DateUtils, System.Math, System.StrUtils, System.Threading,
   maxAsync;
 
 {$IFDEF MAXCRON_TESTS}
@@ -786,6 +840,7 @@ begin
   fDayMatchMode := TmaxCronDayMatchMode.dmAnd;
   fDialect := cdMaxCron;
   fLastPlan := '';
+  fHashSeed := '';
   for pk := Low(TPartKind) to High(TPartKind) do
     parts[pk] := TCronPart.Create(pk);
   ApplyDialectToParts;
@@ -1265,7 +1320,10 @@ begin
   plan.text := CronPlan;
 
   for pk := Low(TPartKind) to High(TPartKind) do
+  begin
+    parts[pk].fHashSeed := fHashSeed;
     parts[pk].Data := plan.parts[integer(pk)];
+  end;
 
   fExecutionLimit := 0;
   lText := Trim(plan.ExecutionLimit);
@@ -1496,6 +1554,97 @@ begin
   if aValue = 7 then
     Exit(0);
   Result := aValue;
+end;
+
+function TCronPart.Hash32(const aValue: string): Cardinal;
+var
+  lIndex: Integer;
+  lHash: Cardinal;
+begin
+  lHash := 2166136261;
+  for lIndex := 1 to Length(aValue) do
+  begin
+    lHash := lHash xor Ord(aValue[lIndex]);
+    lHash := lHash * 16777619;
+  end;
+  Result := lHash;
+end;
+
+function TCronPart.TryParseHashedToken(const aValue: string): Boolean;
+var
+  lText: string;
+  lRangeFrom: Integer;
+  lRangeTo: Integer;
+  lStep: Integer;
+  lSlashPos: Integer;
+  lOpenPos: Integer;
+  lClosePos: Integer;
+  lRangeText: string;
+  lDashPos: Integer;
+  lHashValue: Cardinal;
+  lStart: Integer;
+  lValue: Integer;
+  lSeed: string;
+begin
+  Result := False;
+  lText := Trim(aValue);
+  if lText = '' then
+    Exit(False);
+  if UpCase(lText[1]) <> 'H' then
+    Exit(False);
+
+  lRangeFrom := FValidFrom;
+  lRangeTo := FValidTo;
+  lStep := 0;
+
+  lOpenPos := Pos('(', lText);
+  lClosePos := Pos(')', lText);
+  if (lOpenPos > 0) or (lClosePos > 0) then
+  begin
+    if (lOpenPos <> 2) or (lClosePos <= lOpenPos + 1) then
+      raise Exception.Create('Invalid cron token');
+    lRangeText := Copy(lText, lOpenPos + 1, lClosePos - lOpenPos - 1);
+    lDashPos := Pos('-', lRangeText);
+    if lDashPos <= 1 then
+      raise Exception.Create('Invalid cron token');
+    lRangeFrom := StrToInt(Copy(lRangeText, 1, lDashPos - 1));
+    lRangeTo := StrToInt(Copy(lRangeText, lDashPos + 1, MaxInt));
+    if (lRangeFrom < FValidFrom) or (lRangeFrom > FValidTo) then
+      raise Exception.Create('Cron value out of range');
+    if (lRangeTo < FValidFrom) or (lRangeTo > FValidTo) or (lRangeTo < lRangeFrom) then
+      raise Exception.Create('Cron value out of range');
+    Delete(lText, lOpenPos, lClosePos - lOpenPos + 1);
+  end;
+
+  lSlashPos := Pos('/', lText);
+  if lSlashPos > 0 then
+  begin
+    lStep := StrToInt(Copy(lText, lSlashPos + 1, MaxInt));
+    if lStep <= 0 then
+      raise Exception.Create('Invalid cron step');
+    lText := Copy(lText, 1, lSlashPos - 1);
+  end;
+
+  if (lText <> 'H') and (lText <> 'h') then
+    raise Exception.Create('Invalid cron token');
+
+  lSeed := fHashSeed + '|' + IntToStr(Ord(fPartKind)) + '|' + aValue;
+  lHashValue := Hash32(lSeed);
+  lStart := lRangeFrom + Integer(lHashValue mod Cardinal(lRangeTo - lRangeFrom + 1));
+
+  if lStep = 0 then
+    Add2Range(lStart)
+  else
+  begin
+    lValue := lStart;
+    while lValue <= lRangeTo do
+    begin
+      Add2Range(lValue);
+      Inc(lValue, lStep);
+    end;
+  end;
+
+  Result := True;
 end;
 
 function TCronPart.TryParseSpecialToken(const aToken: string): Boolean;
@@ -1962,6 +2111,8 @@ begin
   s := Trim(Value);
   if s = '' then
     raise Exception.Create('Invalid cron token');
+  if TryParseHashedToken(s) then
+    Exit;
   if Pos('?', s) > 0 then
     raise Exception.Create('Invalid cron token');
   case fPartKind of
@@ -2321,14 +2472,27 @@ begin
   fDayMatchMode := TmaxCronDayMatchMode.dmDefault;
   fDialect := cdMaxCron;
   fMisfirePolicy := TmaxCronMisfirePolicy.mpDefault;
+  fTimeZoneId := 'LOCAL';
+  fTimeZoneKind := TCronTimeZoneKind.ctzLocal;
+  fTimeZoneOffsetMinutes := 0;
+  fDstSpringPolicy := TmaxCronDstSpringPolicy.dspSkip;
+  fDstFallPolicy := TmaxCronDstFallPolicy.dfpRunOnce;
+  fWeekdaysOnly := False;
+  fExcludedDatesCsv := '';
+  SetLength(fExcludedDateSerials, 0);
+  fBlackoutStartTime := 0;
+  fBlackoutEndTime := 0;
+  fPendingDstSecondSchedule := 0;
   fRunning := 0;
   fPendingRuns := 0;
   fExecDepth := 0;
+  fAllowDisabledDispatch := 0;
   fPendingDestroy := False;
   FValidFrom := 0;
   FValidTo := 0;
   fScheduler := TCronSchedulePlan.Create;
   fScheduler.Dialect := fDialect;
+  fScheduler.HashSeed := '';
   FEnabled := false;
 end;
 
@@ -2347,16 +2511,14 @@ end;
 
 procedure TmaxCronEvent.ResetSchedule;
 var
-  dt: TDateTime;
+  lBase: TDateTime;
 begin
   if fLastExecutionTime = 0 then
-    dt := now
+    lBase := now
   else
-    dt := fLastExecutionTime;
+    lBase := fLastExecutionTime;
 
-  if not fScheduler.FindNextScheduleDate(dt,
-    fNextSchedule,
-    FValidFrom, FValidTo) then
+  if not FindNextScheduleWithPolicies(lBase, fNextSchedule) then
     FEnabled := False;
 
 end;
@@ -2408,6 +2570,7 @@ begin
       lValidator := TCronSchedulePlan.Create;
       try
         lValidator.Dialect := fDialect;
+        lValidator.HashSeed := FName;
         lValidator.Parse(Value);
       finally
         lValidator.Free;
@@ -2415,6 +2578,7 @@ begin
 
       if fScheduler.Dialect <> fDialect then
         fScheduler.Dialect := fDialect;
+      fScheduler.HashSeed := FName;
       fScheduler.Parse(Value);
       FEventPlan := Value;
       ResetSchedule;
@@ -2428,7 +2592,16 @@ procedure TmaxCronEvent.SetName(const Value: string);
 begin
   fLock.Acquire;
   try
+    if FName = Value then
+      Exit;
     FName := Value;
+    fScheduler.HashSeed := FName;
+    if FEventPlan <> '' then
+    begin
+      fScheduler.Parse(FEventPlan);
+      if FEnabled then
+        ResetSchedule;
+    end;
   finally
     fLock.Release;
   end;
@@ -3195,6 +3368,385 @@ begin
   end;
 end;
 
+procedure TmaxCronEvent.ParseExcludedDatesCsv(const aValue: string; out aDateSerials: TArray<Integer>);
+var
+  lItems: TStringList;
+  lDates: TList<Integer>;
+  lIndex: Integer;
+  lToken: string;
+  lYear: Integer;
+  lMonth: Integer;
+  lDay: Integer;
+  lDash1: Integer;
+  lDash2: Integer;
+  lDate: TDateTime;
+  lSerial: Integer;
+begin
+  SetLength(aDateSerials, 0);
+  if Trim(aValue) = '' then
+    Exit;
+
+  lItems := TStringList.Create;
+  lDates := TList<Integer>.Create;
+  try
+    SplitString(aValue, ',', lItems);
+    for lIndex := 0 to lItems.Count - 1 do
+    begin
+      lToken := Trim(lItems[lIndex]);
+      if lToken = '' then
+        Continue;
+      lDash1 := Pos('-', lToken);
+      lDash2 := LastDelimiter('-', lToken);
+      if (Length(lToken) <> 10) or (lDash1 <> 5) or (lDash2 <> 8) then
+        raise Exception.Create('Invalid excluded date; expected YYYY-MM-DD');
+      lYear := StrToInt(Copy(lToken, 1, 4));
+      lMonth := StrToInt(Copy(lToken, 6, 2));
+      lDay := StrToInt(Copy(lToken, 9, 2));
+      lDate := EncodeDate(lYear, lMonth, lDay);
+      lSerial := Trunc(lDate);
+      if lDates.IndexOf(lSerial) < 0 then
+        lDates.Add(lSerial);
+    end;
+    lDates.Sort;
+    SetLength(aDateSerials, lDates.Count);
+    for lIndex := 0 to lDates.Count - 1 do
+      aDateSerials[lIndex] := lDates[lIndex];
+  finally
+    lDates.Free;
+    lItems.Free;
+  end;
+end;
+
+function TmaxCronEvent.TryParseTimeZone(const aValue: string; out aKind: TCronTimeZoneKind;
+  out aOffsetMinutes: Integer; out aNormalized: string): Boolean;
+var
+  lText: string;
+  lSign: Integer;
+  lOffsetText: string;
+  lColonPos: Integer;
+  lHours: Integer;
+  lMinutes: Integer;
+begin
+  lText := UpperCase(Trim(aValue));
+  if (lText = '') or (lText = 'LOCAL') then
+  begin
+    aKind := TCronTimeZoneKind.ctzLocal;
+    aOffsetMinutes := 0;
+    aNormalized := 'LOCAL';
+    Exit(True);
+  end;
+
+  if (lText = 'UTC') or (lText = 'Z') then
+  begin
+    aKind := TCronTimeZoneKind.ctzUtc;
+    aOffsetMinutes := 0;
+    aNormalized := 'UTC';
+    Exit(True);
+  end;
+
+  if (Copy(lText, 1, 3) <> 'UTC') or (Length(lText) < 5) then
+    Exit(False);
+
+  if lText[4] = '+' then
+    lSign := 1
+  else if lText[4] = '-' then
+    lSign := -1
+  else
+    Exit(False);
+
+  lOffsetText := Copy(lText, 5, MaxInt);
+  lColonPos := Pos(':', lOffsetText);
+  if lColonPos > 0 then
+  begin
+    lHours := StrToIntDef(Copy(lOffsetText, 1, lColonPos - 1), -1);
+    lMinutes := StrToIntDef(Copy(lOffsetText, lColonPos + 1, MaxInt), -1);
+  end else begin
+    lHours := StrToIntDef(lOffsetText, -1);
+    lMinutes := 0;
+  end;
+
+  if (lHours < 0) or (lHours > 14) then
+    Exit(False);
+  if (lMinutes < 0) or (lMinutes > 59) then
+    Exit(False);
+  if (lHours = 14) and (lMinutes <> 0) then
+    Exit(False);
+
+  aKind := TCronTimeZoneKind.ctzFixedOffset;
+  aOffsetMinutes := lSign * (lHours * 60 + lMinutes);
+  aNormalized := Format('UTC%s%.2d:%.2d', [IfThen(lSign >= 0, '+', '-'), lHours, lMinutes]);
+  Result := True;
+end;
+
+procedure TmaxCronEvent.SetTimeZoneId(const Value: string);
+var
+  lKind: TCronTimeZoneKind;
+  lOffsetMinutes: Integer;
+  lNormalized: string;
+begin
+  if not TryParseTimeZone(Value, lKind, lOffsetMinutes, lNormalized) then
+    raise Exception.Create('Invalid timezone; expected LOCAL, UTC, or UTC+/-HH[:MM]');
+
+  fLock.Acquire;
+  try
+    if fTimeZoneId = lNormalized then
+      Exit;
+    fTimeZoneId := lNormalized;
+    fTimeZoneKind := lKind;
+    fTimeZoneOffsetMinutes := lOffsetMinutes;
+    fPendingDstSecondSchedule := 0;
+    if FEnabled then
+      ResetSchedule;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.SetDstSpringPolicy(const Value: TmaxCronDstSpringPolicy);
+begin
+  fLock.Acquire;
+  try
+    fDstSpringPolicy := Value;
+    if FEnabled then
+      ResetSchedule;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.SetDstFallPolicy(const Value: TmaxCronDstFallPolicy);
+begin
+  fLock.Acquire;
+  try
+    fDstFallPolicy := Value;
+    fPendingDstSecondSchedule := 0;
+    if FEnabled then
+      ResetSchedule;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.SetWeekdaysOnly(const Value: Boolean);
+begin
+  fLock.Acquire;
+  try
+    fWeekdaysOnly := Value;
+    if FEnabled then
+      ResetSchedule;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.SetExcludedDatesCsv(const Value: string);
+var
+  lDates: TArray<Integer>;
+  lIndex: Integer;
+begin
+  ParseExcludedDatesCsv(Value, lDates);
+  fLock.Acquire;
+  try
+    fExcludedDatesCsv := Trim(Value);
+    SetLength(fExcludedDateSerials, Length(lDates));
+    for lIndex := 0 to Length(lDates) - 1 do
+      fExcludedDateSerials[lIndex] := lDates[lIndex];
+    if FEnabled then
+      ResetSchedule;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.SetBlackoutStartTime(const Value: TDateTime);
+begin
+  if (Value < 0) or (Value >= 1) then
+    raise Exception.Create('BlackoutStartTime must be in [00:00, 23:59:59]');
+  fLock.Acquire;
+  try
+    fBlackoutStartTime := Frac(Value);
+    if FEnabled then
+      ResetSchedule;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.SetBlackoutEndTime(const Value: TDateTime);
+begin
+  if (Value < 0) or (Value >= 1) then
+    raise Exception.Create('BlackoutEndTime must be in [00:00, 23:59:59]');
+  fLock.Acquire;
+  try
+    fBlackoutEndTime := Frac(Value);
+    if FEnabled then
+      ResetSchedule;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.SystemLocalToEventLocal(const aSystemLocal: TDateTime): TDateTime;
+var
+  lUtc: TDateTime;
+begin
+  lUtc := TTimeZone.Local.ToUniversalTime(aSystemLocal);
+  case fTimeZoneKind of
+    TCronTimeZoneKind.ctzUtc:
+      Result := lUtc;
+    TCronTimeZoneKind.ctzFixedOffset:
+      Result := lUtc + (fTimeZoneOffsetMinutes / (24 * 60));
+  else
+    Result := TTimeZone.Local.ToLocalTime(lUtc);
+  end;
+end;
+
+function TmaxCronEvent.EventLocalToSystemLocal(const aEventLocal: TDateTime; out aSystemLocal: TDateTime): Boolean;
+var
+  lUseLocal: TDateTime;
+  lUtc: TDateTime;
+  lOffsetFirst: Integer;
+  lOffsetSecond: Integer;
+  lDeltaSeconds: Integer;
+begin
+  lUseLocal := aEventLocal;
+  case fTimeZoneKind of
+    TCronTimeZoneKind.ctzLocal:
+      begin
+        if TTimeZone.Local.IsInvalidTime(lUseLocal) then
+        begin
+          if fDstSpringPolicy = TmaxCronDstSpringPolicy.dspSkip then
+            Exit(False);
+          while TTimeZone.Local.IsInvalidTime(lUseLocal) do
+            lUseLocal := IncMinute(lUseLocal, 1);
+        end;
+
+        if TTimeZone.Local.IsAmbiguousTime(lUseLocal) then
+        begin
+          lOffsetFirst := Round(TTimeZone.Local.GetUtcOffset(lUseLocal, False).TotalSeconds);
+          lOffsetSecond := Round(TTimeZone.Local.GetUtcOffset(lUseLocal, True).TotalSeconds);
+          lDeltaSeconds := Abs(lOffsetFirst - lOffsetSecond);
+          if lDeltaSeconds <= 0 then
+            lDeltaSeconds := 3600;
+
+          case fDstFallPolicy of
+            TmaxCronDstFallPolicy.dfpRunOncePreferSecondInstance:
+              lUseLocal := IncSecond(lUseLocal, lDeltaSeconds);
+            TmaxCronDstFallPolicy.dfpRunTwice:
+              if fPendingDstSecondSchedule = 0 then
+                fPendingDstSecondSchedule := IncSecond(lUseLocal, lDeltaSeconds);
+          end;
+        end;
+
+        aSystemLocal := lUseLocal;
+        Result := True;
+      end;
+    TCronTimeZoneKind.ctzUtc:
+      begin
+        aSystemLocal := TTimeZone.Local.ToLocalTime(aEventLocal);
+        Result := True;
+      end;
+  else
+    begin
+      lUtc := aEventLocal - (fTimeZoneOffsetMinutes / (24 * 60));
+      aSystemLocal := TTimeZone.Local.ToLocalTime(lUtc);
+      Result := True;
+    end;
+  end;
+end;
+
+function TmaxCronEvent.IsTimeInBlackout(const aEventLocalDateTime: TDateTime): Boolean;
+var
+  lTimeOnly: TDateTime;
+begin
+  if (fBlackoutStartTime = 0) and (fBlackoutEndTime = 0) then
+    Exit(False);
+  if fBlackoutStartTime = fBlackoutEndTime then
+    Exit(False);
+  lTimeOnly := Frac(aEventLocalDateTime);
+  if fBlackoutStartTime < fBlackoutEndTime then
+    Exit((lTimeOnly >= fBlackoutStartTime) and (lTimeOnly < fBlackoutEndTime));
+  Result := (lTimeOnly >= fBlackoutStartTime) or (lTimeOnly < fBlackoutEndTime);
+end;
+
+function TmaxCronEvent.IsOccurrenceExcluded(const aEventLocalDateTime: TDateTime): Boolean;
+var
+  lDow: Integer;
+  lDateSerial: Integer;
+  lLow: Integer;
+  lHigh: Integer;
+  lMid: Integer;
+begin
+  if fWeekdaysOnly then
+  begin
+    lDow := DayOfTheWeek(aEventLocalDateTime);
+    if (lDow = 1) or (lDow = 7) then
+      Exit(True);
+  end;
+
+  lDateSerial := Trunc(aEventLocalDateTime);
+  lLow := 0;
+  lHigh := Length(fExcludedDateSerials) - 1;
+  while lLow <= lHigh do
+  begin
+    lMid := (lLow + lHigh) shr 1;
+    if fExcludedDateSerials[lMid] < lDateSerial then
+      lLow := lMid + 1
+    else if fExcludedDateSerials[lMid] > lDateSerial then
+      lHigh := lMid - 1
+    else
+      Exit(True);
+  end;
+
+  Result := IsTimeInBlackout(aEventLocalDateTime);
+end;
+
+function TmaxCronEvent.FindNextScheduleWithPolicies(const aBaseSystemLocal: TDateTime; out aNextSystemLocal: TDateTime): Boolean;
+const
+  cMaxAttempts = 4096;
+var
+  lEventBase: TDateTime;
+  lEventCursor: TDateTime;
+  lEventNext: TDateTime;
+  lEventValidFrom: TDateTime;
+  lEventValidTo: TDateTime;
+  lAttempt: Integer;
+begin
+  Result := False;
+  if fPendingDstSecondSchedule > 0 then
+  begin
+    aNextSystemLocal := fPendingDstSecondSchedule;
+    fPendingDstSecondSchedule := 0;
+    Exit(True);
+  end;
+
+  lEventBase := SystemLocalToEventLocal(aBaseSystemLocal);
+  lEventValidFrom := 0;
+  lEventValidTo := 0;
+  if FValidFrom > 0 then
+    lEventValidFrom := SystemLocalToEventLocal(FValidFrom);
+  if FValidTo > 0 then
+    lEventValidTo := SystemLocalToEventLocal(FValidTo);
+  lEventCursor := lEventBase;
+
+  for lAttempt := 1 to cMaxAttempts do
+  begin
+    if not fScheduler.FindNextScheduleDate(lEventCursor, lEventNext, lEventValidFrom, lEventValidTo) then
+      Exit(False);
+    if IsOccurrenceExcluded(lEventNext) then
+    begin
+      lEventCursor := lEventNext;
+      Continue;
+    end;
+    if not EventLocalToSystemLocal(lEventNext, aNextSystemLocal) then
+    begin
+      lEventCursor := lEventNext;
+      Continue;
+    end;
+    Exit(True);
+  end;
+end;
+
 procedure TmaxCronEvent.SetDialect(const Value: TmaxCronDialect);
 var
   lValidator: TCronSchedulePlan;
@@ -3208,6 +3760,7 @@ begin
       lValidator := TCronSchedulePlan.Create;
       try
         lValidator.Dialect := Value;
+        lValidator.HashSeed := FName;
         lValidator.Parse(FEventPlan);
       finally
         lValidator.Free;
@@ -3216,6 +3769,7 @@ begin
 
     fDialect := Value;
     fScheduler.Dialect := Value;
+    fScheduler.HashSeed := FName;
     if FEventPlan <> '' then
     begin
       fScheduler.Parse(FEventPlan);
@@ -3315,7 +3869,8 @@ begin
     if fPendingDestroy then
       Exit(False);
     if not FEnabled then
-      Exit(False);
+      if TInterlocked.CompareExchange(fAllowDisabledDispatch, 0, 0) = 0 then
+        Exit(False);
     if (fScheduler.ExecutionLimit <> 0) and (fNumOfDue >= fScheduler.ExecutionLimit) then
     begin
       FEnabled := False;
@@ -3740,6 +4295,7 @@ var
   lHasCallbacks: Boolean;
   lCatchUpLimit: Cardinal;
   lCatchUpCount: Cardinal;
+  lAllowDisabledDispatch: Boolean;
 begin
   lOnEvent := nil;
   lOnProc := nil;
@@ -3799,6 +4355,7 @@ begin
   lCatchUpCount := 0;
   while True do
   begin
+    lAllowDisabledDispatch := False;
     fLock.Acquire;
     try
       if not FEnabled then Exit;
@@ -3814,7 +4371,7 @@ begin
       case lMisfire of
         TmaxCronMisfirePolicy.mpSkip:
           begin
-            if not fScheduler.FindNextScheduleDate(aNow, fNextSchedule, FValidFrom, FValidTo) then
+            if not FindNextScheduleWithPolicies(aNow, fNextSchedule) then
               FEnabled := False;
             Exit;
           end;
@@ -3823,15 +4380,22 @@ begin
             lFireAt := fNextSchedule;
             fLastExecutionTime := lFireAt;
             if FEnabled then
-              if not fScheduler.FindNextScheduleDate(aNow, fNextSchedule, FValidFrom, FValidTo) then
+              if not FindNextScheduleWithPolicies(aNow, fNextSchedule) then
+              begin
                 FEnabled := False;
+                lAllowDisabledDispatch := True;
+              end;
           end;
       else
         begin
           lFireAt := fNextSchedule;
           fLastExecutionTime := lFireAt;
           if FEnabled then
-            ResetSchedule;
+            if not FindNextScheduleWithPolicies(fLastExecutionTime, fNextSchedule) then
+            begin
+              FEnabled := False;
+              lAllowDisabledDispatch := True;
+            end;
         end;
       end;
     finally
@@ -3841,7 +4405,14 @@ begin
     if not lHasCallbacks then
       Exit;
 
-    DispatchScheduledCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+    if lAllowDisabledDispatch then
+      TInterlocked.Exchange(fAllowDisabledDispatch, 1);
+    try
+      DispatchScheduledCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+    finally
+      if lAllowDisabledDispatch then
+        TInterlocked.Exchange(fAllowDisabledDispatch, 0);
+    end;
 
     Inc(lCatchUpCount);
     if lMisfire <> TmaxCronMisfirePolicy.mpCatchUpAll then

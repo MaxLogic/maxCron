@@ -12,6 +12,9 @@ Homepage: https://maxlogic.eu/portfolio/maxcron-scheduler-for-delphi/
 - Quartz-style DOM/DOW modifiers and cron macros
 - Per-event overlap, invoke, and misfire policies
 - Execution limits and ValidFrom/ValidTo ranges
+- Per-event timezone + DST handling policies
+- Business calendar controls (weekdays-only, holiday list, blackout windows)
+- Deterministic hash/jitter syntax (`H`, `H/step`, `H(min-max)/step`)
 - Schedule previews and human-readable descriptions
 - Comments and flexible whitespace support
 
@@ -111,6 +114,59 @@ Policies:
 - `mpSkip`: skip missed occurrences and advance to the next time after `now`.
 - `mpFireOnceNow`: execute once, then advance to the next time after `now`.
 - `mpCatchUpAll`: execute missed occurrences sequentially, bounded per tick by `DefaultMisfireCatchUpLimit`.
+
+## Timezone + DST policies (per-event)
+
+Each event can evaluate cron time in its own timezone:
+
+```delphi
+NewSchedule.TimeZoneId := 'LOCAL';      // default
+NewSchedule.TimeZoneId := 'UTC';
+NewSchedule.TimeZoneId := 'UTC+02:30';  // fixed offset
+```
+
+DST behavior is configurable per event:
+
+```delphi
+NewSchedule.DstSpringPolicy := dspSkip;              // default
+NewSchedule.DstSpringPolicy := dspRunAtNextValidTime;
+
+NewSchedule.DstFallPolicy := dfpRunOnce;             // default
+NewSchedule.DstFallPolicy := dfpRunTwice;
+NewSchedule.DstFallPolicy := dfpRunOncePreferFirstInstance;
+NewSchedule.DstFallPolicy := dfpRunOncePreferSecondInstance;
+```
+
+## Business calendar exclusions
+
+We can apply common exclusion filters per event:
+
+```delphi
+NewSchedule.WeekdaysOnly := True;                              // skip Sat/Sun
+NewSchedule.ExcludedDatesCsv := '2031-01-02,2031-01-03';      // YYYY-MM-DD list
+NewSchedule.BlackoutStartTime := EncodeTime(9, 0, 0, 0);      // skip 09:00..
+NewSchedule.BlackoutEndTime := EncodeTime(17, 0, 0, 0);       // ..until 17:00
+```
+
+These exclusions are applied after cron matching and before callback dispatch.
+
+## Hash / jitter tokens
+
+`H` picks deterministic values from a stable hash seed (event name).
+
+```delphi
+NewSchedule := CronScheduler.Add('ShardA');
+NewSchedule.EventPlan := 'H * * * * * 0 0';         // hashed minute
+
+NewSchedule := CronScheduler.Add('ShardB');
+NewSchedule.EventPlan := 'H(0-29)/5 * * * * * 0 0'; // hashed start + step
+```
+
+Supported forms:
+- `H`
+- `H/step`
+- `H(min-max)`
+- `H(min-max)/step`
 
 ## DOM / DOW matching
 

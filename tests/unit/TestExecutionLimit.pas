@@ -145,11 +145,12 @@ begin
       lWaitRes := lFinished.WaitFor(2000);
       Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes);
 
-      lCron.TickAt(IncSecond(lStartTick, 3));
-
       lSw := TStopwatch.StartNew;
       while (TInterlocked.CompareExchange(lCount, 0, 0) < 2) and (lSw.ElapsedMilliseconds < 3000) do
+      begin
+        lCron.TickAt(IncSecond(lStartTick, 3 + (lSw.ElapsedMilliseconds div 250)));
         TThread.Sleep(10);
+      end;
 
       Assert.AreEqual(2, TInterlocked.CompareExchange(lCount, 0, 0));
     finally

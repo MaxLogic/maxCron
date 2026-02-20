@@ -13,7 +13,9 @@ uses
   TestCronInvalidCorpus in 'unit\TestCronInvalidCorpus.pas',
   TestCronParsing in 'unit\TestCronParsing.pas',
   TestCronUtilsCorpus in 'unit\TestCronUtilsCorpus.pas',
+  TestCalendarTimeZone in 'unit\TestCalendarTimeZone.pas',
   TestExecutionLimit in 'unit\TestExecutionLimit.pas',
+  TestHashJitter in 'unit\TestHashJitter.pas',
   TestInvokeModes in 'unit\TestInvokeModes.pas',
   TestLifecycle in 'unit\TestLifecycle.pas',
   TestMisfirePolicy in 'unit\TestMisfirePolicy.pas',
@@ -32,7 +34,9 @@ begin
     TDUnitX.RegisterTestFixture(TTestCronInvalidCorpus);
     TDUnitX.RegisterTestFixture(TTestCronParsing);
     TDUnitX.RegisterTestFixture(TTestCronUtilsCorpus);
+    TDUnitX.RegisterTestFixture(TTestCalendarTimeZone);
     TDUnitX.RegisterTestFixture(TTestExecutionLimit);
+    TDUnitX.RegisterTestFixture(TTestHashJitter);
     TDUnitX.RegisterTestFixture(TTestInvokeModes);
     TDUnitX.RegisterTestFixture(TTestLifecycle);
     TDUnitX.RegisterTestFixture(TTestMisfirePolicy);

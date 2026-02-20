@@ -12,6 +12,9 @@ All notable user-visible changes to this project will be documented in this file
 - Added `TCronSchedulePlan.GetNextOccurrences` for schedule previews. (T-011)
 - Added basic human-readable schedule descriptions. (T-012)
 - Added misfire policies (Skip, FireOnceNow, CatchUpAll) with a bounded catch-up limit. (T-013)
+- Added per-event timezone support (`LOCAL`, `UTC`, `UTC±HH:MM`) and DST policies (`DstSpringPolicy`, `DstFallPolicy`). (T-007)
+- Added business-calendar exclusions (`WeekdaysOnly`, `ExcludedDatesCsv`, `BlackoutStartTime`/`BlackoutEndTime`). (T-014)
+- Added deterministic hash/jitter cron tokens: `H`, `H/step`, `H(min-max)`, `H(min-max)/step`. (T-009)
 
 ### Changed
 - Changed the VCL help dialog to open help in an external browser instead of the legacy embedded control. (T-017)
@@ -39,3 +42,4 @@ All notable user-visible changes to this project will be documented in this file
 - Fixed Quartz day-of-week numbering to use 1-7 in seconds-first dialect. (T-021)
 - Fixed TPlan.Text output to respect the selected dialect. (T-021)
 - Fixed EventPlan parsing to validate before applying updates. (T-021)
+- Fixed flaky skip-if-running execution-limit test behavior by making retry timing deterministic. (T-027)
