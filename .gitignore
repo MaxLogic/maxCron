@@ -70,3 +70,5 @@ modules/
 *.cmds
 *.log
 .aider*
+AGENTS.md
+conventions.md
