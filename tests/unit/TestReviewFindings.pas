@@ -15,6 +15,9 @@ type
     procedure Free_FromOwnCallback_ShouldNotDeadlock;
 
     [Test]
+    procedure Free_FromOtherThreadWhileCallbackRunning_ShouldFailFast;
+
+    [Test]
     procedure QueuedMainThread_DeleteBeforeAcquire_ShouldNotAccessFreedEvent;
   end;
 
@@ -70,6 +73,83 @@ begin
     if lCron <> nil then
       lCron.Free;
     lCallbackFinished.Free;
+    lCallbackEntered.Free;
+  end;
+end;
+
+procedure TTestReviewFindings.Free_FromOtherThreadWhileCallbackRunning_ShouldFailFast;
+var
+  lCron: TmaxCron;
+  lEvent: TmaxCronEvent;
+  lCallbackEntered: TEvent;
+  lCallbackGate: TEvent;
+  lFreeDone: TEvent;
+  lFreeRaised: Integer;
+  lFreeSucceeded: Integer;
+  lFreeReturned: Integer;
+  lWaitRes: TWaitResult;
+  lFreeThread: TThread;
+begin
+  lCron := nil;
+  lFreeThread := nil;
+  lCallbackEntered := TEvent.Create(nil, True, False, '');
+  lCallbackGate := TEvent.Create(nil, True, False, '');
+  lFreeDone := TEvent.Create(nil, True, False, '');
+  lFreeRaised := 0;
+  lFreeSucceeded := 0;
+  lFreeReturned := 0;
+  try
+    lCron := TmaxCron.Create(ctPortable);
+
+    lEvent := lCron.Add('CrossThreadFree');
+    lEvent.EventPlan := '* * * * * * * 1';
+    lEvent.InvokeMode := imThread;
+    lEvent.OverlapMode := omSerialize;
+    lEvent.OnScheduleProc :=
+      procedure(aSender: TmaxCronEvent)
+      begin
+        lCallbackEntered.SetEvent;
+        lCallbackGate.WaitFor(3000);
+      end;
+    lEvent.Run;
+
+    lCron.TickAt(lEvent.NextSchedule);
+
+    lWaitRes := lCallbackEntered.WaitFor(2000);
+    Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes, 'Callback did not start');
+
+    lFreeThread := TThread.CreateAnonymousThread(
+      procedure
+      begin
+        try
+          lCron.Free;
+          TInterlocked.Exchange(lFreeSucceeded, 1);
+        except
+          on Exception do
+            TInterlocked.Exchange(lFreeRaised, 1);
+        end;
+        TInterlocked.Exchange(lFreeReturned, 1);
+        lFreeDone.SetEvent;
+      end);
+    lFreeThread.FreeOnTerminate := True;
+    lFreeThread.Start;
+
+    TThread.Sleep(100);
+    lCallbackGate.SetEvent;
+
+    lWaitRes := lFreeDone.WaitFor(3000);
+    Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes, 'Free did not return in time');
+    Assert.AreEqual(1, TInterlocked.CompareExchange(lFreeRaised, 0, 0),
+      'Expected fail-fast re-entrant free protection while callback is active');
+  finally
+    lCallbackGate.SetEvent;
+    lFreeDone.WaitFor(3000);
+    if (lCron <> nil) and
+      (TInterlocked.CompareExchange(lFreeSucceeded, 0, 0) = 0) and
+      (TInterlocked.CompareExchange(lFreeReturned, 0, 0) = 1) then
+      lCron.Free;
+    lFreeDone.Free;
+    lCallbackGate.Free;
     lCallbackEntered.Free;
   end;
 end;

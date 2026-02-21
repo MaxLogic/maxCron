@@ -145,18 +145,9 @@ var
   lEventRunOnce: TmaxCronEvent;
   lEventPreferFirst: TmaxCronEvent;
   lEventPreferSecond: TmaxCronEvent;
-  lOffsetFirstSeconds: Integer;
-  lOffsetSecondSeconds: Integer;
-  lDeltaSeconds: Integer;
 begin
   if not TryFindAmbiguousLocalTime(lAmbiguous) then
     Exit;
-
-  lOffsetFirstSeconds := Round(TTimeZone.Local.GetUtcOffset(lAmbiguous, False).TotalSeconds);
-  lOffsetSecondSeconds := Round(TTimeZone.Local.GetUtcOffset(lAmbiguous, True).TotalSeconds);
-  lDeltaSeconds := Abs(lOffsetFirstSeconds - lOffsetSecondSeconds);
-  if lDeltaSeconds <= 0 then
-    lDeltaSeconds := 3600;
 
   lPlan := BuildOneShotPlan(lAmbiguous);
   lCron := TmaxCron.Create(ctPortable);
@@ -182,9 +173,12 @@ begin
     lEventPreferSecond.ValidFrom := IncSecond(lAmbiguous, -1);
     lEventPreferSecond.Run;
 
+    Assert.IsTrue(TTimeZone.Local.IsAmbiguousTime(lEventRunOnce.NextSchedule));
+    Assert.IsTrue(TTimeZone.Local.IsAmbiguousTime(lEventPreferFirst.NextSchedule));
+    Assert.IsTrue(TTimeZone.Local.IsAmbiguousTime(lEventPreferSecond.NextSchedule));
     Assert.AreEqual(lAmbiguous, lEventRunOnce.NextSchedule, 0.0);
     Assert.AreEqual(lAmbiguous, lEventPreferFirst.NextSchedule, 0.0);
-    Assert.AreEqual(IncSecond(lAmbiguous, lDeltaSeconds), lEventPreferSecond.NextSchedule, 0.0);
+    Assert.AreEqual(lAmbiguous, lEventPreferSecond.NextSchedule, 0.0);
   finally
     lCron.Free;
   end;
@@ -217,12 +211,6 @@ begin
     lEvent.TimeZoneId := 'UTC-5:30';
     Assert.AreEqual('UTC-05:30', lEvent.TimeZoneId);
 
-    lEvent.TimeZoneId := 'UTC+2:3';
-    Assert.AreEqual('UTC+02:03', lEvent.TimeZoneId);
-
-    lEvent.TimeZoneId := 'UTC++2';
-    Assert.AreEqual('UTC+02:00', lEvent.TimeZoneId);
-
     lEvent.TimeZoneId := 'UTC+14:00';
     Assert.AreEqual('UTC+14:00', lEvent.TimeZoneId);
   finally
@@ -232,10 +220,12 @@ end;
 
 procedure TTestRobustCoverage.TimeZoneId_InvalidValues_Raise;
 const
-  cInvalidValues: array [0 .. 7] of string = (
+  cInvalidValues: array [0 .. 9] of string = (
     'GMT',
     'UTC+',
     'UTC- ',
+    'UTC++2',
+    'UTC+2:3',
     'UTC+14:01',
     'UTC+15',
     'UTC+02:60',

@@ -107,6 +107,7 @@ Type
     fPendingFree: TList<TmaxCronEvent>;
     fTickDepth: Integer;
     fTickQueued: Integer;
+    fCallbackDepth: Integer;
     fQueueToken: IInterface;
     fAsyncKeepAlive: TList<IInterface>;
     fAsyncLock: TCriticalSection;
@@ -522,7 +523,7 @@ procedure SetMaxCronBeforeQueuedAcquireHook(const aHook: TmaxCronBeforeQueuedAcq
 implementation
 
 uses
-  System.DateUtils, System.Math, System.StrUtils, System.Threading,
+  System.DateUtils, System.Diagnostics, System.Math, System.StrUtils, System.Threading,
   maxAsync;
 
 {$IFDEF MAXCRON_TESTS}
@@ -2983,6 +2984,7 @@ begin
   fAsyncLock := TCriticalSection.Create;
   fAsyncKeepAlive := TList<IInterface>.Create;
   fTickQueued := 0;
+  fCallbackDepth := 0;
   fQueueToken := TCronQueueToken.Create(Self);
   CreateTimer(aTimerBackend);
 end;
@@ -3145,12 +3147,30 @@ begin
 end;
 
 destructor TmaxCron.Destroy;
+const
+  cCallbackDrainGraceMs = 75;
 var
   lToken: ICronQueueToken;
   lDone: Boolean;
+  lWait: TStopwatch;
 begin
   if Pointer(Self) = gMaxCronExecutingCron then
     raise Exception.Create('TmaxCron.Free cannot be called from one of its own callbacks');
+
+  if TInterlocked.CompareExchange(fCallbackDepth, 0, 0) > 0 then
+  begin
+    lWait := TStopwatch.StartNew;
+    while (TInterlocked.CompareExchange(fCallbackDepth, 0, 0) > 0) and (lWait.ElapsedMilliseconds < cCallbackDrainGraceMs) do
+    begin
+      if TThread.CurrentThread.ThreadID = MainThreadID then
+        CheckSynchronize(1)
+      else
+        TThread.Sleep(1);
+    end;
+
+    if TInterlocked.CompareExchange(fCallbackDepth, 0, 0) > 0 then
+      raise Exception.Create('TmaxCron.Free cannot be called from one of its own callbacks');
+  end;
 
   if Supports(fQueueToken, ICronQueueToken, lToken) then
     lToken.Detach;
@@ -3486,9 +3506,14 @@ var
   lSign: Integer;
   lOffsetText: string;
   lColonPos: Integer;
+  lSecondColonPos: Integer;
+  lHoursText: string;
+  lMinutesText: string;
   lHours: Integer;
   lMinutes: Integer;
+  lIndex: Integer;
 begin
+  Result := False;
   lText := UpperCase(Trim(aValue));
   if (lText = '') or (lText = 'LOCAL') then
   begin
@@ -3520,10 +3545,34 @@ begin
   lColonPos := Pos(':', lOffsetText);
   if lColonPos > 0 then
   begin
-    lHours := StrToIntDef(Copy(lOffsetText, 1, lColonPos - 1), -1);
-    lMinutes := StrToIntDef(Copy(lOffsetText, lColonPos + 1, MaxInt), -1);
+    lSecondColonPos := PosEx(':', lOffsetText, lColonPos + 1);
+    if lSecondColonPos > 0 then
+      Exit(False);
+
+    lHoursText := Copy(lOffsetText, 1, lColonPos - 1);
+    lMinutesText := Copy(lOffsetText, lColonPos + 1, MaxInt);
+    if (Length(lHoursText) < 1) or (Length(lHoursText) > 2) then
+      Exit(False);
+    if Length(lMinutesText) <> 2 then
+      Exit(False);
+
+    for lIndex := 1 to Length(lHoursText) do
+      if (lHoursText[lIndex] < '0') or (lHoursText[lIndex] > '9') then
+        Exit(False);
+    for lIndex := 1 to Length(lMinutesText) do
+      if (lMinutesText[lIndex] < '0') or (lMinutesText[lIndex] > '9') then
+        Exit(False);
+
+    lHours := StrToInt(lHoursText);
+    lMinutes := StrToInt(lMinutesText);
   end else begin
-    lHours := StrToIntDef(lOffsetText, -1);
+    if (Length(lOffsetText) < 1) or (Length(lOffsetText) > 2) then
+      Exit(False);
+    for lIndex := 1 to Length(lOffsetText) do
+      if (lOffsetText[lIndex] < '0') or (lOffsetText[lIndex] > '9') then
+        Exit(False);
+
+    lHours := StrToInt(lOffsetText);
     lMinutes := 0;
   end;
 
@@ -3667,9 +3716,6 @@ function TmaxCronEvent.EventLocalToSystemLocal(const aEventLocal: TDateTime; out
 var
   lUseLocal: TDateTime;
   lUtc: TDateTime;
-  lOffsetFirst: Integer;
-  lOffsetSecond: Integer;
-  lDeltaSeconds: Integer;
 begin
   lUseLocal := aEventLocal;
   case fTimeZoneKind of
@@ -3685,15 +3731,13 @@ begin
 
         if TTimeZone.Local.IsAmbiguousTime(lUseLocal) then
         begin
-          lOffsetFirst := Round(TTimeZone.Local.GetUtcOffset(lUseLocal, False).TotalSeconds);
-          lOffsetSecond := Round(TTimeZone.Local.GetUtcOffset(lUseLocal, True).TotalSeconds);
-          lDeltaSeconds := Abs(lOffsetFirst - lOffsetSecond);
-          if lDeltaSeconds <= 0 then
-            lDeltaSeconds := 3600;
-
           case fDstFallPolicy of
             TmaxCronDstFallPolicy.dfpRunOncePreferSecondInstance:
-              lUseLocal := IncSecond(lUseLocal, lDeltaSeconds);
+              begin
+                // Keep the same wall-clock time and select the standard-time instance.
+                lUtc := TTimeZone.Local.ToUniversalTime(lUseLocal, False);
+                lUseLocal := TTimeZone.Local.ToLocalTime(lUtc);
+              end;
             TmaxCronDstFallPolicy.dfpRunTwice:
               if fPendingDstSecondSchedule = 0 then
                 fPendingDstSecondSchedule := lUseLocal;
@@ -4182,6 +4226,7 @@ procedure TmaxCronEvent.ExecuteOnce(const aInvokeMode: TmaxCronInvokeMode;
 var
   lToken: ICronEventToken;
   lEvent: TmaxCronEvent;
+  lCron: TmaxCron;
   lPreviousCron: Pointer;
 begin
   try
@@ -4197,8 +4242,12 @@ begin
       fLock.Release;
     end;
 
+    lCron := fCron;
+    if lCron <> nil then
+      TInterlocked.Increment(lCron.fCallbackDepth);
+
     lPreviousCron := gMaxCronExecutingCron;
-    gMaxCronExecutingCron := Pointer(fCron);
+    gMaxCronExecutingCron := Pointer(lCron);
     try
       if Assigned(aOnEvent) then
         aOnEvent(lEvent);
@@ -4206,6 +4255,8 @@ begin
         aOnProc(lEvent);
     finally
       gMaxCronExecutingCron := lPreviousCron;
+      if lCron <> nil then
+        TInterlocked.Decrement(lCron.fCallbackDepth);
     end;
   finally
     if (aOverlapMode = TmaxCronOverlapMode.omAllowOverlap) or (aOverlapMode = TmaxCronOverlapMode.omSkipIfRunning) then
