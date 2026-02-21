@@ -24,6 +24,7 @@ All notable user-visible changes to this project will be documented in this file
 - ExecutionLimit now counts actual executions after overlap rules, not skipped/coalesced due hits. (T-027)
 - Updated the demo UI with invoke/overlap/misfire controls and expanded samples. (T-015)
 - Updated README to reflect misfire policies, macros, and planned features. (T-016)
+- Expanded unit and stress robustness coverage for DST fall variants, timezone/exclusion/blackout parser edges, hash token failures, default-policy propagation, final-dispatch regressions, and mixed-feature concurrency. (T-028, T-029, T-030, T-031, T-032, T-033, T-034, T-035, T-036)
 
 ### Fixed
 - Fixed @reboot macro to be rejected outside cdMaxCron where ExecutionLimit is unavailable. (T-025)

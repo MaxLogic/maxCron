@@ -10,7 +10,8 @@ uses
   DUnitX.Loggers.Console,
   DUnitX.RunResults,
   maxCron in '..\maxCron.pas',
-  TestHeavyStress in 'unit\TestHeavyStress.pas';
+  TestHeavyStress in 'unit\TestHeavyStress.pas',
+  TestHeavyStressMixed in 'unit\TestHeavyStressMixed.pas';
 
 var
   Runner: ITestRunner;
@@ -20,6 +21,7 @@ begin
   try
     TDUnitX.CheckCommandLine;
     TDUnitX.RegisterTestFixture(TTestHeavyStress);
+    TDUnitX.RegisterTestFixture(TTestHeavyStressMixed);
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));

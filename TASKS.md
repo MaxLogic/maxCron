@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-028
+Next task ID: T-037
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 28
+Done tasks: 37
 
 ## In Progress
 
@@ -19,6 +19,42 @@ Done tasks: 28
 
 
 ## Done
+
+### T-036 [TEST] Add mixed-feature stress coverage
+Summary: Extend stress tests with mixed timezone/exclusion/hash/misfire/overlap configurations under concurrent `TickAt`.
+Done: Added `TestHeavyStressMixed` and registered it in the stress runner; stress gates pass.
+
+### T-035 [TEST] Cover scheduler default propagation paths
+Summary: Add tests for default day-match/dialect/invoke/misfire-limit propagation behavior.
+Done: Added default propagation tests for `DefaultDayMatchMode`, `DefaultDialect`, `DefaultInvokeMode`, and catch-up-limit clamping.
+
+### T-034 [TEST] Guard disabled-final-dispatch behavior
+Summary: Ensure final due callbacks are dispatched even when the event disables during next-schedule recalculation.
+Done: Added regression tests for `mpFireOnceNow` and `mpDefault` catch-up paths where `Enabled` becomes `False` but callback still fires once.
+
+### T-033 [TEST] Verify rehash on event rename
+Summary: Ensure hashed schedules reseed when an event name changes.
+Done: Added deterministic rename test proving schedule changes on new name and reverts when restoring the original name.
+
+### T-032 [TEST] Add invalid hash token coverage
+Summary: Expand negative coverage for malformed `H` token shapes.
+Done: Added parser failure tests for invalid hash forms and extended `tests/data/cron-invalid.txt` with `H` invalid corpus entries.
+
+### T-031 [TEST] Add blackout boundary and validation tests
+Summary: Cover blackout edge semantics and invalid setter inputs.
+Done: Added tests for overnight blackout behavior, equal start/end no-op behavior, and invalid blackout value rejection.
+
+### T-030 [TEST] Add ExcludedDatesCsv parser robustness tests
+Summary: Cover CSV dedupe/sort/empty-token handling and invalid-date rejection.
+Done: Added tests validating dedupe/skip behavior and fail-fast handling for malformed or impossible dates.
+
+### T-029 [TEST] Add timezone parser and normalization edge tests
+Summary: Cover timezone alias/offset normalization and malformed value rejection.
+Done: Added tests for accepted aliases and edge offset forms plus negative parsing cases.
+
+### T-028 [TEST] Cover all DST fall policy branches
+Summary: Ensure DST fall behavior is verified for run-once variants.
+Done: Added branch tests for `dfpRunOnce`, `dfpRunOncePreferFirstInstance`, and `dfpRunOncePreferSecondInstance`.
 
 ### T-014 Add business calendar/exclusions
 Summary: Support exclusions like holidays, weekdays-only, and blackout windows.

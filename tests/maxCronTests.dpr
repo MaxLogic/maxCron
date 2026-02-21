@@ -20,6 +20,7 @@ uses
   TestLifecycle in 'unit\TestLifecycle.pas',
   TestMisfirePolicy in 'unit\TestMisfirePolicy.pas',
   TestMaxCron in 'unit\TestMaxCron.pas',
+  TestRobustCoverage in 'unit\TestRobustCoverage.pas',
   TestScheduleNext in 'unit\TestScheduleNext.pas',
   TestStress in 'unit\TestStress.pas',
   TestValidRange in 'unit\TestValidRange.pas';
@@ -41,6 +42,7 @@ begin
     TDUnitX.RegisterTestFixture(TTestLifecycle);
     TDUnitX.RegisterTestFixture(TTestMisfirePolicy);
     TDUnitX.RegisterTestFixture(TTestMaxCron);
+    TDUnitX.RegisterTestFixture(TTestRobustCoverage);
     TDUnitX.RegisterTestFixture(TTestScheduleNext);
     TDUnitX.RegisterTestFixture(TTestStress);
     TDUnitX.RegisterTestFixture(TTestValidRange);
