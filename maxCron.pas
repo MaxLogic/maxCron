@@ -82,6 +82,7 @@ Type
 
   {$IFDEF MAXCRON_TESTS}
   TmaxCronAsyncCallHook = reference to function(const aProc: TThreadProcedure; const aTaskName: string): IInterface;
+  TmaxCronBeforeQueuedAcquireHook = reference to procedure(const aEvent: TmaxCronEvent);
   {$ENDIF}
 
   ICronTimer = interface
@@ -515,6 +516,7 @@ function MakePreview(const SchedulePlan: string; const Dialect: TmaxCronDialect;
 
 {$IFDEF MAXCRON_TESTS}
 procedure SetMaxCronAsyncCallHook(const aHook: TmaxCronAsyncCallHook);
+procedure SetMaxCronBeforeQueuedAcquireHook(const aHook: TmaxCronBeforeQueuedAcquireHook);
 {$ENDIF}
 
 implementation
@@ -526,12 +528,21 @@ uses
 {$IFDEF MAXCRON_TESTS}
 var
   gMaxCronAsyncCallHook: TmaxCronAsyncCallHook = nil;
+  gMaxCronBeforeQueuedAcquireHook: TmaxCronBeforeQueuedAcquireHook = nil;
 
 procedure SetMaxCronAsyncCallHook(const aHook: TmaxCronAsyncCallHook);
 begin
   gMaxCronAsyncCallHook := aHook;
 end;
+
+procedure SetMaxCronBeforeQueuedAcquireHook(const aHook: TmaxCronBeforeQueuedAcquireHook);
+begin
+  gMaxCronBeforeQueuedAcquireHook := aHook;
+end;
 {$ENDIF}
+
+threadvar
+  gMaxCronExecutingCron: Pointer;
 
 type
   ICronQueueToken = interface
@@ -577,6 +588,7 @@ type
     ['{1AD0B7CE-0C85-4490-9B3E-3E0E1C6115E6}']
     procedure Detach;
     function TryGetEvent(out aEvent: TmaxCronEvent): Boolean;
+    function TryAcquireEvent(out aEvent: TmaxCronEvent): Boolean;
   end;
 
   TCronEventToken = class(TInterfacedObject, ICronEventToken)
@@ -588,6 +600,7 @@ type
     destructor Destroy; override;
     procedure Detach;
     function TryGetEvent(out aEvent: TmaxCronEvent): Boolean;
+    function TryAcquireEvent(out aEvent: TmaxCronEvent): Boolean;
   end;
 
   IAsyncKeepAliveEntry = interface
@@ -2882,6 +2895,22 @@ begin
   end;
 end;
 
+function TCronEventToken.TryAcquireEvent(out aEvent: TmaxCronEvent): Boolean;
+begin
+  fLock.Acquire;
+  try
+    aEvent := fEvent;
+    if aEvent = nil then
+      Exit(False);
+
+    Result := aEvent.TryAcquireExecution;
+    if not Result then
+      aEvent := nil;
+  finally
+    fLock.Release;
+  end;
+end;
+
 constructor TAsyncKeepAliveEntry.Create(const aOwnerToken: ICronQueueToken);
 begin
   inherited Create;
@@ -3120,6 +3149,9 @@ var
   lToken: ICronQueueToken;
   lDone: Boolean;
 begin
+  if Pointer(Self) = gMaxCronExecutingCron then
+    raise Exception.Create('TmaxCron.Free cannot be called from one of its own callbacks');
+
   if Supports(fQueueToken, ICronQueueToken, lToken) then
     lToken.Detach;
 
@@ -3197,28 +3229,34 @@ procedure TmaxCron.DoTickAt(const aNow: TDateTime);
 var
   x: integer;
   lSnapshot: TArray<TmaxCronEvent>;
+  lDepthIncreased: Boolean;
 begin
-  fItemsLock.Acquire;
+  lDepthIncreased := False;
   try
-    Inc(fTickDepth);
-    SetLength(lSnapshot, fItems.Count);
-    for x := 0 to fItems.Count - 1 do
-      lSnapshot[x] := fItems[x];
-  finally
-    fItemsLock.Release;
-  end;
+    fItemsLock.Acquire;
+    try
+      Inc(fTickDepth);
+      lDepthIncreased := True;
+      SetLength(lSnapshot, fItems.Count);
+      for x := 0 to fItems.Count - 1 do
+        lSnapshot[x] := fItems[x];
+    finally
+      fItemsLock.Release;
+    end;
 
-  try
     for x := 0 to Length(lSnapshot) - 1 do
       if (lSnapshot[x] <> nil) then
         lSnapshot[x].checkTimer(aNow);
   finally
-    fItemsLock.Acquire;
-    try
-      Dec(fTickDepth);
-      FlushPendingFreeLocked;
-    finally
-      fItemsLock.Release;
+    if lDepthIncreased then
+    begin
+      fItemsLock.Acquire;
+      try
+        Dec(fTickDepth);
+        FlushPendingFreeLocked;
+      finally
+        fItemsLock.Release;
+      end;
     end;
   end;
 end;
@@ -4144,6 +4182,7 @@ procedure TmaxCronEvent.ExecuteOnce(const aInvokeMode: TmaxCronInvokeMode;
 var
   lToken: ICronEventToken;
   lEvent: TmaxCronEvent;
+  lPreviousCron: Pointer;
 begin
   try
     lEvent := nil;
@@ -4158,10 +4197,16 @@ begin
       fLock.Release;
     end;
 
-    if Assigned(aOnEvent) then
-      aOnEvent(lEvent);
-    if Assigned(aOnProc) then
-      aOnProc(lEvent);
+    lPreviousCron := gMaxCronExecutingCron;
+    gMaxCronExecutingCron := Pointer(fCron);
+    try
+      if Assigned(aOnEvent) then
+        aOnEvent(lEvent);
+      if Assigned(aOnProc) then
+        aOnProc(lEvent);
+    finally
+      gMaxCronExecutingCron := lPreviousCron;
+    end;
   finally
     if (aOverlapMode = TmaxCronOverlapMode.omAllowOverlap) or (aOverlapMode = TmaxCronOverlapMode.omSkipIfRunning) then
       ReleaseExecution;
@@ -4177,11 +4222,11 @@ var
 begin
   if aToken = nil then Exit;
   if not aToken.TryGetEvent(lEvent) then Exit;
-  if not lEvent.TryAcquireExecution then
-  begin
-    lEvent.HandleQueuedAcquireFailure(aOverlapMode);
-    Exit;
-  end;
+  {$IFDEF MAXCRON_TESTS}
+  if Assigned(gMaxCronBeforeQueuedAcquireHook) then
+    gMaxCronBeforeQueuedAcquireHook(lEvent);
+  {$ENDIF}
+  if not aToken.TryAcquireEvent(lEvent) then Exit;
 
   lEvent.ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
 end;

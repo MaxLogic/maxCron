@@ -21,6 +21,7 @@ uses
   TestMisfirePolicy in 'unit\TestMisfirePolicy.pas',
   TestMaxCron in 'unit\TestMaxCron.pas',
   TestRobustCoverage in 'unit\TestRobustCoverage.pas',
+  TestReviewFindings in 'unit\TestReviewFindings.pas',
   TestScheduleNext in 'unit\TestScheduleNext.pas',
   TestStress in 'unit\TestStress.pas',
   TestValidRange in 'unit\TestValidRange.pas';
@@ -43,6 +44,7 @@ begin
     TDUnitX.RegisterTestFixture(TTestMisfirePolicy);
     TDUnitX.RegisterTestFixture(TTestMaxCron);
     TDUnitX.RegisterTestFixture(TTestRobustCoverage);
+    TDUnitX.RegisterTestFixture(TTestReviewFindings);
     TDUnitX.RegisterTestFixture(TTestScheduleNext);
     TDUnitX.RegisterTestFixture(TTestStress);
     TDUnitX.RegisterTestFixture(TTestValidRange);

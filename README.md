@@ -85,6 +85,10 @@ NewSchedule.Run;
 
 Note: if we execute off the VCL main thread, we must not touch UI directly.
 
+Safety note: we must not call `TmaxCron.Free` from one of its own callbacks.
+That re-entrant shutdown path is now rejected with an exception to prevent deadlocks.
+Free the scheduler from outside callback context.
+
 ## Overlap handling (per-event)
 
 When a schedule fires again while a previous execution is still running:

@@ -48,3 +48,6 @@ All notable user-visible changes to this project will be documented in this file
 - Fixed TPlan.Text output to respect the selected dialect. (T-021)
 - Fixed EventPlan parsing to validate before applying updates. (T-021)
 - Fixed flaky skip-if-running execution-limit test behavior by making retry timing deterministic. (T-027)
+- Fixed a queued main-thread callback lifetime race by atomically acquiring event execution before dispatch.
+- Fixed re-entrant scheduler shutdown deadlocks by rejecting `TmaxCron.Free` from inside scheduler-owned callbacks.
+- Fixed `DoTickAt` tick-depth unwinding to remain balanced even when snapshot preparation raises.
