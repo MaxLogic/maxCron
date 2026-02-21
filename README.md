@@ -71,6 +71,8 @@ CronScheduler := TmaxCron.Create(ctVcl);
 CronScheduler := TmaxCron.Create(ctPortable);
 ```
 
+`ctVcl` must be created on the VCL main thread. Creating `ctVcl` from a worker thread now raises an exception.
+
 ## How a job is executed (per-event)
 
 Each event can override how its callback is invoked:
@@ -84,6 +86,8 @@ NewSchedule.Run;
 ```
 
 Note: if we execute off the VCL main thread, we must not touch UI directly.
+
+If async dispatch startup fails (for example, task/thread launch raises), maxCron now rolls back overlap state so future ticks continue normally.
 
 Safety note: we must not call `TmaxCron.Free` from one of its own callbacks.
 That re-entrant shutdown path is now rejected with an exception to prevent deadlocks.

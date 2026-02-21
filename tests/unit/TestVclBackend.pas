@@ -17,6 +17,9 @@ type
 
     [Test]
     procedure VclTimer_Fires_OnMainThread;
+
+    [Test]
+    procedure CreateCtVcl_OnWorkerThread_Raises;
   end;
 
 implementation
@@ -72,6 +75,44 @@ begin
     Assert.AreEqual(0, TInterlocked.CompareExchange(BadThread, 0, 0), 'Expected callback on main thread');
   finally
     Cron.Free;
+  end;
+end;
+
+procedure TTestVclBackend.CreateCtVcl_OnWorkerThread_Raises;
+var
+  lDone: TEvent;
+  lRaised: Integer;
+  lThread: TThread;
+begin
+  lDone := TEvent.Create(nil, True, False, '');
+  lRaised := 0;
+  try
+    lThread := TThread.CreateAnonymousThread(
+      procedure
+      var
+        lCron: TmaxCron;
+      begin
+        lCron := nil;
+        try
+          try
+            lCron := TmaxCron.Create(ctVcl);
+          except
+            on Exception do
+              TInterlocked.Exchange(lRaised, 1);
+          end;
+        finally
+          lCron.Free;
+          lDone.SetEvent;
+        end;
+      end);
+    lThread.FreeOnTerminate := True;
+    lThread.Start;
+
+    Assert.AreEqual(TWaitResult.wrSignaled, lDone.WaitFor(3000), 'Worker did not complete');
+    Assert.AreEqual(1, TInterlocked.CompareExchange(lRaised, 0, 0),
+      'Expected ctVcl creation off the main thread to fail');
+  finally
+    lDone.Free;
   end;
 end;
 

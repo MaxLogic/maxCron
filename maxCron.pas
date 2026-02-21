@@ -83,6 +83,7 @@ Type
   {$IFDEF MAXCRON_TESTS}
   TmaxCronAsyncCallHook = reference to function(const aProc: TThreadProcedure; const aTaskName: string): IInterface;
   TmaxCronBeforeQueuedAcquireHook = reference to procedure(const aEvent: TmaxCronEvent);
+  TmaxCronBeforeDispatchHook = reference to procedure(const aInvokeMode: TmaxCronInvokeMode);
   {$ENDIF}
 
   ICronTimer = interface
@@ -250,6 +251,7 @@ Type
     function TryAcquireExecution: Boolean;
     procedure ReleaseExecution;
     procedure HandleQueuedAcquireFailure(const aOverlapMode: TmaxCronOverlapMode);
+    procedure RollbackDispatchStartFailure(const aOverlapMode: TmaxCronOverlapMode);
     procedure QueueMainThreadCallbacks(const aInvokeMode: TmaxCronInvokeMode;
       const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
       const aOverlapMode: TmaxCronOverlapMode);
@@ -518,6 +520,7 @@ function MakePreview(const SchedulePlan: string; const Dialect: TmaxCronDialect;
 {$IFDEF MAXCRON_TESTS}
 procedure SetMaxCronAsyncCallHook(const aHook: TmaxCronAsyncCallHook);
 procedure SetMaxCronBeforeQueuedAcquireHook(const aHook: TmaxCronBeforeQueuedAcquireHook);
+procedure SetMaxCronBeforeDispatchHook(const aHook: TmaxCronBeforeDispatchHook);
 {$ENDIF}
 
 implementation
@@ -530,6 +533,7 @@ uses
 var
   gMaxCronAsyncCallHook: TmaxCronAsyncCallHook = nil;
   gMaxCronBeforeQueuedAcquireHook: TmaxCronBeforeQueuedAcquireHook = nil;
+  gMaxCronBeforeDispatchHook: TmaxCronBeforeDispatchHook = nil;
 
 procedure SetMaxCronAsyncCallHook(const aHook: TmaxCronAsyncCallHook);
 begin
@@ -539,6 +543,11 @@ end;
 procedure SetMaxCronBeforeQueuedAcquireHook(const aHook: TmaxCronBeforeQueuedAcquireHook);
 begin
   gMaxCronBeforeQueuedAcquireHook := aHook;
+end;
+
+procedure SetMaxCronBeforeDispatchHook(const aHook: TmaxCronBeforeDispatchHook);
+begin
+  gMaxCronBeforeDispatchHook := aHook;
 end;
 {$ENDIF}
 
@@ -3080,6 +3089,10 @@ end;
 
 procedure TmaxCron.CreateTimer(const aRequestedBackend: TmaxCronTimerBackend);
 begin
+  if (aRequestedBackend = TmaxCronTimerBackend.ctVcl) and
+    (TThread.CurrentThread.ThreadID <> MainThreadID) then
+    raise Exception.Create('ctVcl backend requires creation on the VCL main thread');
+
   fRequestedTimerBackend := aRequestedBackend;
   fActiveTimerBackend := aRequestedBackend;
 
@@ -4115,6 +4128,31 @@ begin
     lCron.FlushPendingFree;
 end;
 
+procedure TmaxCronEvent.RollbackDispatchStartFailure(const aOverlapMode: TmaxCronOverlapMode);
+var
+  lCron: TmaxCron;
+  lOwnerToken: ICronQueueToken;
+begin
+  case aOverlapMode of
+    TmaxCronOverlapMode.omAllowOverlap:
+      ReleaseExecution;
+    TmaxCronOverlapMode.omSkipIfRunning:
+      begin
+        TInterlocked.Exchange(fRunning, 0);
+        ReleaseExecution;
+      end;
+    TmaxCronOverlapMode.omSerialize,
+    TmaxCronOverlapMode.omSerializeCoalesce:
+      begin
+        TInterlocked.Exchange(fRunning, 0);
+        ReleaseExecution;
+      end;
+  end;
+
+  if Supports(fCronToken, ICronQueueToken, lOwnerToken) and lOwnerToken.TryGetOwner(lCron) then
+    lCron.FlushPendingFree;
+end;
+
 procedure TmaxCronEvent.QueueMainThreadCallbacks(const aInvokeMode: TmaxCronInvokeMode;
   const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
   const aOverlapMode: TmaxCronOverlapMode);
@@ -4294,6 +4332,10 @@ var
   lAsync: IInterface;
 begin
   if (not Assigned(aOnEvent)) and (not Assigned(aOnProc)) then Exit;
+  {$IFDEF MAXCRON_TESTS}
+  if Assigned(gMaxCronBeforeDispatchHook) then
+    gMaxCronBeforeDispatchHook(aInvokeMode);
+  {$ENDIF}
 
   case aInvokeMode of
     TmaxCronInvokeMode.imMainThread:
@@ -4398,7 +4440,12 @@ begin
           Exit;
         end;
         if not TryAcquireExecution then Exit;
-        DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+        try
+          DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+        except
+          RollbackDispatchStartFailure(aOverlapMode);
+          raise;
+        end;
       end;
     TmaxCronOverlapMode.omSkipIfRunning:
       begin
@@ -4418,7 +4465,12 @@ begin
           TInterlocked.Exchange(fRunning, 0);
           Exit;
         end;
-        DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+        try
+          DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+        except
+          RollbackDispatchStartFailure(aOverlapMode);
+          raise;
+        end;
       end;
     TmaxCronOverlapMode.omSerialize:
       begin
@@ -4439,7 +4491,12 @@ begin
             TInterlocked.Exchange(fRunning, 0);
             Exit;
           end;
-          DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+          try
+            DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+          except
+            RollbackDispatchStartFailure(aOverlapMode);
+            raise;
+          end;
         end else begin
           if not TryReserveExecution then
             Exit;
@@ -4465,7 +4522,12 @@ begin
             TInterlocked.Exchange(fRunning, 0);
             Exit;
           end;
-          DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+          try
+            DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+          except
+            RollbackDispatchStartFailure(aOverlapMode);
+            raise;
+          end;
         end else begin
           if TInterlocked.CompareExchange(fPendingRuns, 1, 0) = 0 then
           begin

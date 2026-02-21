@@ -15,6 +15,8 @@ All notable user-visible changes to this project will be documented in this file
 - Added per-event timezone support (`LOCAL`, `UTC`, `UTC±HH:MM`) and DST policies (`DstSpringPolicy`, `DstFallPolicy`). (T-007)
 - Added business-calendar exclusions (`WeekdaysOnly`, `ExcludedDatesCsv`, `BlackoutStartTime`/`BlackoutEndTime`). (T-014)
 - Added deterministic hash/jitter cron tokens: `H`, `H/step`, `H(min-max)`, `H(min-max)/step`. (T-009)
+- Added regression tests for invoke-dispatch startup failures to ensure overlap state recovers after launch exceptions.
+- Added a VCL backend test that enforces `ctVcl` creation only on the VCL main thread.
 
 ### Changed
 - Changed the VCL help dialog to open help in an external browser instead of the legacy embedded control. (T-017)
@@ -28,6 +30,8 @@ All notable user-visible changes to this project will be documented in this file
 - Expanded unit and stress robustness coverage for DST fall variants, timezone/exclusion/blackout parser edges, hash token failures, default-policy propagation, final-dispatch regressions, and mixed-feature concurrency. (T-028, T-029, T-030, T-031, T-032, T-033, T-034, T-035, T-036)
 
 ### Fixed
+- Fixed overlap-state rollback when invoke dispatch startup fails (thread/task launch exception), preventing `omSkipIfRunning`/serialize lock-up and shutdown hangs.
+- Fixed `ctVcl` backend creation to fail fast off the VCL main thread instead of creating an unsafe VCL timer instance.
 - Fixed callback shutdown protection to reject `TmaxCron.Free` while callbacks are still executing across threads, preventing cross-thread callback/destructor deadlocks.
 - Fixed `DstFallPolicy=dfpRunOncePreferSecondInstance` to keep the same ambiguous local wall-clock schedule time instead of shifting by DST delta.
 - Fixed timezone offset parsing to reject malformed values like `UTC++2` and `UTC+2:3`; accepted format remains `UTC+/-HH[:MM]`.

@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-037
+Next task ID: T-038
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 37
+Done tasks: 38
 
 ## In Progress
 
@@ -19,6 +19,10 @@ Done tasks: 37
 
 
 ## Done
+
+### T-037 [TEST] Guard dispatch-launch rollback and VCL backend thread affinity
+Summary: Add failing regressions for invoke dispatch-start failures and worker-thread `ctVcl` creation, then harden runtime behavior and docs.
+Done: Added dispatch-start failure regression tests/hooks, rollback handling in scheduler overlap paths, fail-fast `ctVcl` main-thread enforcement, and README/CHANGELOG updates.
 
 ### T-036 [TEST] Add mixed-feature stress coverage
 Summary: Extend stress tests with mixed timezone/exclusion/hash/misfire/overlap configurations under concurrent `TickAt`.
