@@ -51,6 +51,9 @@ type
     procedure Parse_RebootMacro_DialectRestrictions;
 
     [Test]
+    procedure Parse_Macros_QuartzSecondsFirst;
+
+    [Test]
     procedure Parse_Dialect_Standard_Exact5;
 
     [Test]
@@ -228,6 +231,15 @@ procedure TTestCronParsing.Parse_RebootMacro_DialectRestrictions;
 begin
   AssertRaisesOnParseDialect('@reboot', cdStandard);
   AssertRaisesOnParseDialect('@reboot', cdQuartzSecondsFirst);
+end;
+
+procedure TTestCronParsing.Parse_Macros_QuartzSecondsFirst;
+begin
+  AssertParsesDialect('@yearly', cdQuartzSecondsFirst);
+  AssertParsesDialect('@monthly', cdQuartzSecondsFirst);
+  AssertParsesDialect('@weekly', cdQuartzSecondsFirst);
+  AssertParsesDialect('@daily', cdQuartzSecondsFirst);
+  AssertParsesDialect('@hourly', cdQuartzSecondsFirst);
 end;
 
 procedure TTestCronParsing.Parse_Dialect_Standard_Exact5;

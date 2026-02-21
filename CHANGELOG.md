@@ -31,6 +31,7 @@ All notable user-visible changes to this project will be documented in this file
 - Expanded unit and stress robustness coverage for DST fall variants, timezone/exclusion/blackout parser edges, hash token failures, default-policy propagation, final-dispatch regressions, and mixed-feature concurrency. (T-028, T-029, T-030, T-031, T-032, T-033, T-034, T-035, T-036)
 
 ### Fixed
+- Fixed `@weekly` macro expansion in `cdQuartzSecondsFirst` to use Quartz DOW numbering (`1=Sun`) instead of `0`, so macro parsing now works consistently across dialects. (T-039)
 - Fixed overlap-state rollback when invoke dispatch startup fails (thread/task launch exception), preventing `omSkipIfRunning`/serialize lock-up and shutdown hangs.
 - Fixed dispatch-start rollback to restore reserved execution budget so failed launches do not consume `ExecutionLimit`. (T-038)
 - Fixed `ctVcl` backend creation to fail fast off the VCL main thread instead of creating an unsafe VCL timer instance.

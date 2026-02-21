@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-039
+Next task ID: T-040
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 39
+Done tasks: 40
 
 ## In Progress
 
@@ -19,6 +19,10 @@ Done tasks: 39
 
 
 ## Done
+
+### T-039 [TEST] Fix @weekly macro in Quartz seconds-first dialect
+Summary: Add a fail-first regression for Quartz macro parsing and align @weekly DOW expansion with Quartz numbering.
+Done: Added `Parse_Macros_QuartzSecondsFirst` regression and fixed `@weekly` macro expansion to use `1` (Sunday) in `cdQuartzSecondsFirst`.
 
 ### T-038 [TEST] Preserve ExecutionLimit budget on dispatch-start rollback
 Summary: Prove that injected invoke launch failures do not consume execution budget and keep retry behavior deterministic.

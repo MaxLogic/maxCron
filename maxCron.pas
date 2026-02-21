@@ -804,7 +804,10 @@ begin
     aPlan.Hour := '0';
     aPlan.DayOfTheMonth := '*';
     aPlan.Month := '*';
-    aPlan.DayOfTheWeek := '0';
+    if aPlan.Dialect = cdQuartzSecondsFirst then
+      aPlan.DayOfTheWeek := '1'
+    else
+      aPlan.DayOfTheWeek := '0';
     Exit(True);
   end;
 
