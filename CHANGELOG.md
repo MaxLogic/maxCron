@@ -16,6 +16,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added business-calendar exclusions (`WeekdaysOnly`, `ExcludedDatesCsv`, `BlackoutStartTime`/`BlackoutEndTime`). (T-014)
 - Added deterministic hash/jitter cron tokens: `H`, `H/step`, `H(min-max)`, `H(min-max)/step`. (T-009)
 - Added regression tests for invoke-dispatch startup failures to ensure overlap state recovers after launch exceptions.
+- Added regression tests that verify `ExecutionLimit` retries correctly after injected dispatch-start failures (`imThread` and `imTTask`). (T-038)
 - Added a VCL backend test that enforces `ctVcl` creation only on the VCL main thread.
 
 ### Changed
@@ -31,6 +32,7 @@ All notable user-visible changes to this project will be documented in this file
 
 ### Fixed
 - Fixed overlap-state rollback when invoke dispatch startup fails (thread/task launch exception), preventing `omSkipIfRunning`/serialize lock-up and shutdown hangs.
+- Fixed dispatch-start rollback to restore reserved execution budget so failed launches do not consume `ExecutionLimit`. (T-038)
 - Fixed `ctVcl` backend creation to fail fast off the VCL main thread instead of creating an unsafe VCL timer instance.
 - Fixed callback shutdown protection to reject `TmaxCron.Free` while callbacks are still executing across threads, preventing cross-thread callback/destructor deadlocks.
 - Fixed `DstFallPolicy=dfpRunOncePreferSecondInstance` to keep the same ambiguous local wall-clock schedule time instead of shifting by DST delta.

@@ -3,7 +3,7 @@ unit TestDispatchStartFailures;
 interface
 
 uses
-  System.SyncObjs, System.SysUtils,
+  System.DateUtils, System.SyncObjs, System.SysUtils,
   DUnitX.TestFramework,
   maxCron;
 
@@ -12,12 +12,19 @@ type
   TTestDispatchStartFailures = class
   private
     procedure RunDispatchStartFailureRecovery(const aInvokeMode: TmaxCronInvokeMode);
+    procedure RunDispatchStartFailureExecutionLimitRetry(const aInvokeMode: TmaxCronInvokeMode);
   public
     [Test]
     procedure DispatchStartFailure_TTask_ReleasesOverlapState;
 
     [Test]
     procedure DispatchStartFailure_Thread_ReleasesOverlapState;
+
+    [Test]
+    procedure DispatchStartFailure_ExecutionLimitRetry_TTask;
+
+    [Test]
+    procedure DispatchStartFailure_ExecutionLimitRetry_Thread;
   end;
 
 implementation
@@ -87,6 +94,72 @@ begin
   end;
 end;
 
+procedure TTestDispatchStartFailures.RunDispatchStartFailureExecutionLimitRetry(const aInvokeMode: TmaxCronInvokeMode);
+var
+  lCron: TmaxCron;
+  lEvent: TmaxCronEvent;
+  lFired: TEvent;
+  lRaised: Boolean;
+  lDispatchCount: Integer;
+  lFirstAt: TDateTime;
+  lSecondAt: TDateTime;
+  lWaitRes: TWaitResult;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  lFired := TEvent.Create(nil, True, False, '');
+  lRaised := False;
+  lDispatchCount := 0;
+  try
+    lEvent := lCron.Add('DispatchStartFailureLimit');
+    lEvent.EventPlan := '* * * * * * * 1';
+    lEvent.InvokeMode := aInvokeMode;
+    lEvent.OverlapMode := omSkipIfRunning;
+    lEvent.OnScheduleProc :=
+      procedure(aSender: TmaxCronEvent)
+      begin
+        lFired.SetEvent;
+      end;
+    lEvent.Run;
+    lFirstAt := lEvent.NextSchedule;
+
+    SetMaxCronBeforeDispatchHook(
+      procedure(const aDispatchMode: TmaxCronInvokeMode)
+      begin
+        if (aDispatchMode = aInvokeMode) and (TInterlocked.Increment(lDispatchCount) = 1) then
+          raise Exception.Create('injected dispatch-start failure');
+      end);
+    try
+      try
+        lCron.TickAt(lFirstAt);
+      except
+        on Exception do
+          lRaised := True;
+      end;
+    finally
+      SetMaxCronBeforeDispatchHook(nil);
+    end;
+
+    Assert.IsTrue(lRaised, 'Expected injected dispatch-start failure');
+
+    lSecondAt := IncSecond(lFirstAt, 5);
+    lCron.TickAt(lSecondAt);
+    lWaitRes := lFired.WaitFor(1500);
+    if lWaitRes <> TWaitResult.wrSignaled then
+    begin
+      lCron.TickAt(IncSecond(lSecondAt, 5));
+      lWaitRes := lFired.WaitFor(1500);
+    end;
+    Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes,
+      'ExecutionLimit should count only actual callback executions');
+    Assert.AreEqual(UInt64(1), lEvent.NumOfExecutionsPerformed,
+      'Expected exactly one successful callback execution after retry');
+  finally
+    SetMaxCronBeforeDispatchHook(nil);
+    lFired.Free;
+    lCron.Free;
+  end;
+end;
+
 procedure TTestDispatchStartFailures.DispatchStartFailure_TTask_ReleasesOverlapState;
 begin
   RunDispatchStartFailureRecovery(imTTask);
@@ -95,6 +168,16 @@ end;
 procedure TTestDispatchStartFailures.DispatchStartFailure_Thread_ReleasesOverlapState;
 begin
   RunDispatchStartFailureRecovery(imThread);
+end;
+
+procedure TTestDispatchStartFailures.DispatchStartFailure_ExecutionLimitRetry_TTask;
+begin
+  RunDispatchStartFailureExecutionLimitRetry(imTTask);
+end;
+
+procedure TTestDispatchStartFailures.DispatchStartFailure_ExecutionLimitRetry_Thread;
+begin
+  RunDispatchStartFailureExecutionLimitRetry(imThread);
 end;
 
 end.

@@ -87,7 +87,7 @@ NewSchedule.Run;
 
 Note: if we execute off the VCL main thread, we must not touch UI directly.
 
-If async dispatch startup fails (for example, task/thread launch raises), maxCron now rolls back overlap state so future ticks continue normally.
+If async dispatch startup fails (for example, task/thread launch raises), maxCron rolls back overlap state and execution reservations so future ticks continue normally and `ExecutionLimit` is not consumed by failed launches.
 
 Safety note: we must not call `TmaxCron.Free` from one of its own callbacks.
 That re-entrant shutdown path is now rejected with an exception to prevent deadlocks.

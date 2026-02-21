@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-038
+Next task ID: T-039
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 38
+Done tasks: 39
 
 ## In Progress
 
@@ -19,6 +19,10 @@ Done tasks: 38
 
 
 ## Done
+
+### T-038 [TEST] Preserve ExecutionLimit budget on dispatch-start rollback
+Summary: Prove that injected invoke launch failures do not consume execution budget and keep retry behavior deterministic.
+Done: Added fail-first regressions for `imThread`/`imTTask` `ExecutionLimit=1` launch failures, fixed reservation rollback in failure paths, and updated README/CHANGELOG notes.
 
 ### T-037 [TEST] Guard dispatch-launch rollback and VCL backend thread affinity
 Summary: Add failing regressions for invoke dispatch-start failures and worker-thread `ctVcl` creation, then harden runtime behavior and docs.

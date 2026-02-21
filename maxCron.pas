@@ -250,6 +250,7 @@ Type
     function TryReserveExecution: Boolean;
     function TryAcquireExecution: Boolean;
     procedure ReleaseExecution;
+    procedure RollbackReservedExecution;
     procedure HandleQueuedAcquireFailure(const aOverlapMode: TmaxCronOverlapMode);
     procedure RollbackDispatchStartFailure(const aOverlapMode: TmaxCronOverlapMode);
     procedure QueueMainThreadCallbacks(const aInvokeMode: TmaxCronInvokeMode;
@@ -4075,8 +4076,6 @@ begin
     end;
 
     Inc(fNumOfDue);
-    if (fScheduler.ExecutionLimit <> 0) and (fNumOfDue >= fScheduler.ExecutionLimit) then
-      FEnabled := False;
     Result := True;
   finally
     fLock.Release;
@@ -4108,11 +4107,24 @@ begin
   end;
 end;
 
+procedure TmaxCronEvent.RollbackReservedExecution;
+begin
+  fLock.Acquire;
+  try
+    if fNumOfDue > 0 then
+      Dec(fNumOfDue);
+  finally
+    fLock.Release;
+  end;
+end;
+
 procedure TmaxCronEvent.HandleQueuedAcquireFailure(const aOverlapMode: TmaxCronOverlapMode);
 var
   lCron: TmaxCron;
   lOwnerToken: ICronQueueToken;
 begin
+  RollbackReservedExecution;
+
   case aOverlapMode of
     TmaxCronOverlapMode.omSkipIfRunning:
       TInterlocked.Exchange(fRunning, 0);
@@ -4133,6 +4145,8 @@ var
   lCron: TmaxCron;
   lOwnerToken: ICronQueueToken;
 begin
+  RollbackReservedExecution;
+
   case aOverlapMode of
     TmaxCronOverlapMode.omAllowOverlap:
       ReleaseExecution;
