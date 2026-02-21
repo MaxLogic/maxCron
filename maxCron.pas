@@ -78,6 +78,7 @@ Type
 
   TDates = array of TDateTime;
   TWordArray = array of Word;
+  TFindNextScheduleResult = (fnsFound, fnsNotFound, fnsSearchLimitReached);
 
   {$IFDEF MAXCRON_TESTS}
   TmaxCronAsyncCallHook = reference to function(const aProc: TThreadProcedure; const aTaskName: string): IInterface;
@@ -197,6 +198,7 @@ Type
     fBlackoutStartTime: TDateTime;
     fBlackoutEndTime: TDateTime;
     fPendingDstSecondSchedule: TDateTime;
+    fNextScheduleNeedsResolve: Boolean;
     fRunning: Integer;
     fPendingRuns: Integer;
     fExecDepth: Integer;
@@ -256,7 +258,7 @@ Type
     function CanFreeNow: Boolean;
     function IsTimeInBlackout(const aEventLocalDateTime: TDateTime): Boolean;
     function IsOccurrenceExcluded(const aEventLocalDateTime: TDateTime): Boolean;
-    function FindNextScheduleWithPolicies(const aBaseSystemLocal: TDateTime; out aNextSystemLocal: TDateTime): Boolean;
+    function FindNextScheduleWithPolicies(const aBaseSystemLocal: TDateTime; out aNextSystemLocal: TDateTime): TFindNextScheduleResult;
     function SystemLocalToEventLocal(const aSystemLocal: TDateTime): TDateTime;
     function EventLocalToSystemLocal(const aEventLocal: TDateTime; out aSystemLocal: TDateTime): Boolean;
     function TryParseTimeZone(const aValue: string; out aKind: TCronTimeZoneKind;
@@ -2483,6 +2485,7 @@ begin
   fBlackoutStartTime := 0;
   fBlackoutEndTime := 0;
   fPendingDstSecondSchedule := 0;
+  fNextScheduleNeedsResolve := False;
   fRunning := 0;
   fPendingRuns := 0;
   fExecDepth := 0;
@@ -2512,14 +2515,25 @@ end;
 procedure TmaxCronEvent.ResetSchedule;
 var
   lBase: TDateTime;
+  lFindResult: TFindNextScheduleResult;
 begin
   if fLastExecutionTime = 0 then
     lBase := now
   else
     lBase := fLastExecutionTime;
 
-  if not FindNextScheduleWithPolicies(lBase, fNextSchedule) then
-    FEnabled := False;
+  lFindResult := FindNextScheduleWithPolicies(lBase, fNextSchedule);
+  case lFindResult of
+    TFindNextScheduleResult.fnsFound:
+      fNextScheduleNeedsResolve := False;
+    TFindNextScheduleResult.fnsNotFound:
+      begin
+        fNextScheduleNeedsResolve := False;
+        FEnabled := False;
+      end;
+    TFindNextScheduleResult.fnsSearchLimitReached:
+      fNextScheduleNeedsResolve := True;
+  end;
 
 end;
 
@@ -3304,16 +3318,26 @@ function TmaxCron.Add(const aName, aEventPlan: string;
   const aOnScheduleEvent: TmaxCronNotifyEvent): TmaxCronEvent;
 begin
   Result := Add(aName);
-  Result.EventPlan := aEventPlan;
-  Result.OnScheduleEvent := aOnScheduleEvent;
+  try
+    Result.EventPlan := aEventPlan;
+    Result.OnScheduleEvent := aOnScheduleEvent;
+  except
+    Delete(Result);
+    raise;
+  end;
 end;
 
 function TmaxCron.Add(const aName, aEventPlan: string;
   const aOnScheduleEvent: TmaxCronNotifyProc): TmaxCronEvent;
 begin
   Result := Add(aName);
-  Result.EventPlan := aEventPlan;
-  Result.OnScheduleProc := aOnScheduleEvent;
+  try
+    Result.EventPlan := aEventPlan;
+    Result.OnScheduleProc := aOnScheduleEvent;
+  except
+    Delete(Result);
+    raise;
+  end;
 end;
 
 procedure TmaxCronEvent.SetInvokeMode(const Value: TmaxCronInvokeMode);
@@ -3634,7 +3658,7 @@ begin
               lUseLocal := IncSecond(lUseLocal, lDeltaSeconds);
             TmaxCronDstFallPolicy.dfpRunTwice:
               if fPendingDstSecondSchedule = 0 then
-                fPendingDstSecondSchedule := IncSecond(lUseLocal, lDeltaSeconds);
+                fPendingDstSecondSchedule := lUseLocal;
           end;
         end;
 
@@ -3701,7 +3725,7 @@ begin
   Result := IsTimeInBlackout(aEventLocalDateTime);
 end;
 
-function TmaxCronEvent.FindNextScheduleWithPolicies(const aBaseSystemLocal: TDateTime; out aNextSystemLocal: TDateTime): Boolean;
+function TmaxCronEvent.FindNextScheduleWithPolicies(const aBaseSystemLocal: TDateTime; out aNextSystemLocal: TDateTime): TFindNextScheduleResult;
 const
   cMaxAttempts = 4096;
 var
@@ -3711,13 +3735,25 @@ var
   lEventValidFrom: TDateTime;
   lEventValidTo: TDateTime;
   lAttempt: Integer;
+  lDateSerial: Integer;
+  lLow: Integer;
+  lHigh: Integer;
+  lMid: Integer;
+  lDow: Integer;
+  lWeekendExcluded: Boolean;
+  lDateExcluded: Boolean;
+  lBlackoutExcluded: Boolean;
+  lAdvanceCursor: TDateTime;
+  lDateBase: TDateTime;
+  lTimeOnly: TDateTime;
+  lBlackoutEnd: TDateTime;
 begin
-  Result := False;
+  Result := TFindNextScheduleResult.fnsNotFound;
   if fPendingDstSecondSchedule > 0 then
   begin
     aNextSystemLocal := fPendingDstSecondSchedule;
     fPendingDstSecondSchedule := 0;
-    Exit(True);
+    Exit(TFindNextScheduleResult.fnsFound);
   end;
 
   lEventBase := SystemLocalToEventLocal(aBaseSystemLocal);
@@ -3731,20 +3767,86 @@ begin
 
   for lAttempt := 1 to cMaxAttempts do
   begin
-    if not fScheduler.FindNextScheduleDate(lEventCursor, lEventNext, lEventValidFrom, lEventValidTo) then
-      Exit(False);
-    if IsOccurrenceExcluded(lEventNext) then
+    if fPendingDstSecondSchedule > 0 then
     begin
-      lEventCursor := lEventNext;
+      aNextSystemLocal := fPendingDstSecondSchedule;
+      fPendingDstSecondSchedule := 0;
+      Exit(TFindNextScheduleResult.fnsFound);
+    end;
+
+    if not fScheduler.FindNextScheduleDate(lEventCursor, lEventNext, lEventValidFrom, lEventValidTo) then
+      Exit(TFindNextScheduleResult.fnsNotFound);
+
+    lWeekendExcluded := False;
+    if fWeekdaysOnly then
+    begin
+      lDow := DayOfTheWeek(lEventNext);
+      lWeekendExcluded := (lDow = 1) or (lDow = 7);
+    end;
+
+    lDateExcluded := False;
+    if not lWeekendExcluded then
+    begin
+      lDateSerial := Trunc(lEventNext);
+      lLow := 0;
+      lHigh := Length(fExcludedDateSerials) - 1;
+      while lLow <= lHigh do
+      begin
+        lMid := (lLow + lHigh) shr 1;
+        if fExcludedDateSerials[lMid] < lDateSerial then
+          lLow := lMid + 1
+        else if fExcludedDateSerials[lMid] > lDateSerial then
+          lHigh := lMid - 1
+        else
+        begin
+          lDateExcluded := True;
+          Break;
+        end;
+      end;
+    end;
+
+    lBlackoutExcluded := False;
+    if (not lWeekendExcluded) and (not lDateExcluded) then
+      lBlackoutExcluded := IsTimeInBlackout(lEventNext);
+
+    if lWeekendExcluded or lDateExcluded or lBlackoutExcluded then
+    begin
+      lAdvanceCursor := lEventNext;
+
+      if lWeekendExcluded or lDateExcluded then
+        lAdvanceCursor := Trunc(lEventNext) + 1 - OneSecond
+      else if lBlackoutExcluded then
+      begin
+        lDateBase := Trunc(lEventNext);
+        if fBlackoutStartTime < fBlackoutEndTime then
+          lBlackoutEnd := lDateBase + fBlackoutEndTime
+        else begin
+          lTimeOnly := Frac(lEventNext);
+          if lTimeOnly >= fBlackoutStartTime then
+            lBlackoutEnd := lDateBase + 1 + fBlackoutEndTime
+          else
+            lBlackoutEnd := lDateBase + fBlackoutEndTime;
+        end;
+        lAdvanceCursor := lBlackoutEnd - OneSecond;
+      end;
+
+      if lAdvanceCursor <= lEventNext then
+        lAdvanceCursor := lEventNext;
+
+      lEventCursor := lAdvanceCursor;
       Continue;
     end;
+
     if not EventLocalToSystemLocal(lEventNext, aNextSystemLocal) then
     begin
       lEventCursor := lEventNext;
       Continue;
     end;
-    Exit(True);
+    Exit(TFindNextScheduleResult.fnsFound);
   end;
+
+  aNextSystemLocal := IncSecond(aBaseSystemLocal, 1);
+  Result := TFindNextScheduleResult.fnsSearchLimitReached;
 end;
 
 procedure TmaxCronEvent.SetDialect(const Value: TmaxCronDialect);
@@ -4296,6 +4398,7 @@ var
   lCatchUpLimit: Cardinal;
   lCatchUpCount: Cardinal;
   lAllowDisabledDispatch: Boolean;
+  lFindResult: TFindNextScheduleResult;
 begin
   lOnEvent := nil;
   lOnProc := nil;
@@ -4303,10 +4406,28 @@ begin
   lOverlap := TmaxCronOverlapMode.omAllowOverlap;
   lMisfire := TmaxCronMisfirePolicy.mpDefault;
   lCatchUpLimit := 1;
+  lFindResult := TFindNextScheduleResult.fnsNotFound;
 
   fLock.Acquire;
   try
     if not FEnabled then Exit;
+    if fNextScheduleNeedsResolve then
+    begin
+      if aNow < fNextSchedule then Exit;
+      lFindResult := FindNextScheduleWithPolicies(aNow, fNextSchedule);
+      case lFindResult of
+        TFindNextScheduleResult.fnsFound:
+          fNextScheduleNeedsResolve := False;
+        TFindNextScheduleResult.fnsNotFound:
+          begin
+            fNextScheduleNeedsResolve := False;
+            FEnabled := False;
+          end;
+        TFindNextScheduleResult.fnsSearchLimitReached:
+          fNextScheduleNeedsResolve := True;
+      end;
+      Exit;
+    end;
     if aNow < fNextSchedule then Exit;
 
     if fScheduler.ExecutionLimit <> 0 then
@@ -4359,6 +4480,23 @@ begin
     fLock.Acquire;
     try
       if not FEnabled then Exit;
+      if fNextScheduleNeedsResolve then
+      begin
+        if aNow < fNextSchedule then Exit;
+        lFindResult := FindNextScheduleWithPolicies(aNow, fNextSchedule);
+        case lFindResult of
+          TFindNextScheduleResult.fnsFound:
+            fNextScheduleNeedsResolve := False;
+          TFindNextScheduleResult.fnsNotFound:
+            begin
+              fNextScheduleNeedsResolve := False;
+              FEnabled := False;
+            end;
+          TFindNextScheduleResult.fnsSearchLimitReached:
+            fNextScheduleNeedsResolve := True;
+        end;
+        Exit;
+      end;
       if aNow < fNextSchedule then Exit;
 
       if fScheduler.ExecutionLimit <> 0 then
@@ -4371,8 +4509,18 @@ begin
       case lMisfire of
         TmaxCronMisfirePolicy.mpSkip:
           begin
-            if not FindNextScheduleWithPolicies(aNow, fNextSchedule) then
-              FEnabled := False;
+            lFindResult := FindNextScheduleWithPolicies(aNow, fNextSchedule);
+            case lFindResult of
+              TFindNextScheduleResult.fnsFound:
+                fNextScheduleNeedsResolve := False;
+              TFindNextScheduleResult.fnsNotFound:
+                begin
+                  fNextScheduleNeedsResolve := False;
+                  FEnabled := False;
+                end;
+              TFindNextScheduleResult.fnsSearchLimitReached:
+                fNextScheduleNeedsResolve := True;
+            end;
             Exit;
           end;
         TmaxCronMisfirePolicy.mpFireOnceNow:
@@ -4380,22 +4528,42 @@ begin
             lFireAt := fNextSchedule;
             fLastExecutionTime := lFireAt;
             if FEnabled then
-              if not FindNextScheduleWithPolicies(aNow, fNextSchedule) then
-              begin
-                FEnabled := False;
-                lAllowDisabledDispatch := True;
+            begin
+              lFindResult := FindNextScheduleWithPolicies(aNow, fNextSchedule);
+              case lFindResult of
+                TFindNextScheduleResult.fnsFound:
+                  fNextScheduleNeedsResolve := False;
+                TFindNextScheduleResult.fnsNotFound:
+                  begin
+                    fNextScheduleNeedsResolve := False;
+                    FEnabled := False;
+                    lAllowDisabledDispatch := True;
+                  end;
+                TFindNextScheduleResult.fnsSearchLimitReached:
+                  fNextScheduleNeedsResolve := True;
               end;
+            end;
           end;
       else
         begin
           lFireAt := fNextSchedule;
           fLastExecutionTime := lFireAt;
           if FEnabled then
-            if not FindNextScheduleWithPolicies(fLastExecutionTime, fNextSchedule) then
-            begin
-              FEnabled := False;
-              lAllowDisabledDispatch := True;
+          begin
+            lFindResult := FindNextScheduleWithPolicies(fLastExecutionTime, fNextSchedule);
+            case lFindResult of
+              TFindNextScheduleResult.fnsFound:
+                fNextScheduleNeedsResolve := False;
+              TFindNextScheduleResult.fnsNotFound:
+                begin
+                  fNextScheduleNeedsResolve := False;
+                  FEnabled := False;
+                  lAllowDisabledDispatch := True;
+                end;
+              TFindNextScheduleResult.fnsSearchLimitReached:
+                fNextScheduleNeedsResolve := True;
             end;
+          end;
         end;
       end;
     finally

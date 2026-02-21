@@ -115,6 +115,8 @@ Policies:
 - `mpFireOnceNow`: execute once, then advance to the next time after `now`.
 - `mpCatchUpAll`: execute missed occurrences sequentially, bounded per tick by `DefaultMisfireCatchUpLimit`.
 
+When exclusions (weekdays/holidays/blackout) create long filtered ranges, maxCron advances the search cursor in larger steps and keeps the event enabled until a true terminal condition is reached.
+
 ## Timezone + DST policies (per-event)
 
 Each event can evaluate cron time in its own timezone:
@@ -136,6 +138,8 @@ NewSchedule.DstFallPolicy := dfpRunTwice;
 NewSchedule.DstFallPolicy := dfpRunOncePreferFirstInstance;
 NewSchedule.DstFallPolicy := dfpRunOncePreferSecondInstance;
 ```
+
+`dfpRunTwice` executes both ambiguous fall-back instances at the same local wall-clock time.
 
 ## Business calendar exclusions
 
@@ -192,6 +196,8 @@ Negative corpus (expected to fail parse) is stored in `tests/data/cron-invalid.t
 Optional runners:
 - `tests/maxCronVclTests.dpr` (GUI/VCL message pump; tests `ctVcl` / `ctAuto` behavior)
 - `tests/maxCronStressTests.dpr` (heavier concurrency stress tests; ~30s)
+
+`Add(name, plan, callback)` overloads are atomic: if `plan` is invalid, no partial event is kept in the scheduler.
 
 # Using the TPlan helper:
 TPlan is a small record that lets us set parts in a friendly way and then convert them to a cron string.
@@ -339,12 +345,6 @@ Additional syntax we support:
 - Note: we accept `?` for Quartz compatibility and treat it as "any" when matching schedules.
 - Macros: `@yearly`/`@annually`, `@monthly`, `@weekly`, `@daily`/`@midnight`, `@hourly`, `@reboot` (runs once on the next scheduler tick; `@reboot` is supported only in `cdMaxCron`).
 - Comments and whitespace: trailing `# comment` is ignored; extra spaces/tabs and spaces after commas are accepted.
-
-Not yet supported (planned):
-
-- Per-event time zones and explicit DST policies.
-- Jitter/hash syntax (`H`, `H/15`, `H(0-29)`).
-- Business calendar exclusions (holidays, blackout windows).
 
 Examples:
 

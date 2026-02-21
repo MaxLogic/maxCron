@@ -12,6 +12,7 @@ type
   TTestRobustCoverage = class
   private
     procedure AssertRaises(const aProc: TProc; const aMessage: string = 'Expected exception');
+    procedure NoopSchedule(aSender: TmaxCronEvent);
     function BuildOneShotPlan(const aDateTime: TDateTime): string;
     function FindNextForPlan(const aPlan: string; const aBase: TDateTime;
       const aDayMatchMode: TmaxCronDayMatchMode): TDateTime;
@@ -64,6 +65,12 @@ type
 
     [Test]
     procedure DefaultMisfireCatchUpLimit_ClampsToOne;
+
+    [Test]
+    procedure MisfireCatchUp_MaxAttempts_DoesNotDisableSchedulableEvent;
+
+    [Test]
+    procedure AddOverloads_InvalidPlan_DoNotKeepPartiallyAddedEvents;
   end;
 
 implementation
@@ -82,6 +89,10 @@ begin
 
   if not lRaised then
     Assert.Fail(aMessage);
+end;
+
+procedure TTestRobustCoverage.NoopSchedule(aSender: TmaxCronEvent);
+begin
 end;
 
 function TTestRobustCoverage.BuildOneShotPlan(const aDateTime: TDateTime): string;
@@ -667,6 +678,60 @@ begin
   try
     lCron.DefaultMisfireCatchUpLimit := 0;
     Assert.AreEqual(1, Integer(lCron.DefaultMisfireCatchUpLimit));
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestRobustCoverage.MisfireCatchUp_MaxAttempts_DoesNotDisableSchedulableEvent;
+var
+  lCron: TmaxCron;
+  lEvent: TmaxCronEvent;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lCron.DefaultMisfirePolicy := TmaxCronMisfirePolicy.mpCatchUpAll;
+    lCron.DefaultMisfireCatchUpLimit := 1;
+
+    lEvent := lCron.Add('MaxAttemptsBlackout');
+    lEvent.EventPlan := '* * * * * * * 0';
+    lEvent.BlackoutStartTime := EncodeTime(0, 0, 0, 0);
+    lEvent.BlackoutEndTime := EncodeTime(23, 0, 0, 0);
+    lEvent.ValidFrom := EncodeDateTime(2032, 3, 20, 0, 0, 0, 0);
+    lEvent.MisfirePolicy := TmaxCronMisfirePolicy.mpCatchUpAll;
+    lEvent.Run;
+
+    Assert.IsTrue(lEvent.Enabled, 'Event should remain enabled because 23:00:00 is schedulable');
+    Assert.AreEqual(EncodeDateTime(2032, 3, 20, 23, 0, 0, 0), lEvent.NextSchedule, 0.0);
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestRobustCoverage.AddOverloads_InvalidPlan_DoNotKeepPartiallyAddedEvents;
+var
+  lCron: TmaxCron;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    AssertRaises(
+      procedure
+      begin
+        lCron.Add('InvalidPlanProc', '0 0 0 * * *',
+          procedure(aSender: TmaxCronEvent)
+          begin
+          end);
+      end,
+      'Expected parse failure for proc overload');
+    Assert.AreEqual(0, lCron.Count, 'Proc overload must not keep partially-added events');
+
+    AssertRaises(
+      procedure
+      begin
+        lCron.Add('InvalidPlanEvent', '0 0 0 * * *', NoopSchedule);
+      end,
+      'Expected parse failure for event overload');
+    Assert.AreEqual(0, lCron.Count, 'Event overload must not keep partially-added events');
   finally
     lCron.Free;
   end;

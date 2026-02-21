@@ -20,6 +20,7 @@ All notable user-visible changes to this project will be documented in this file
 - Changed the VCL help dialog to open help in an external browser instead of the legacy embedded control. (T-017)
 - Updated the demo to include dialect/day-match selectors and samples for Quartz modifiers and rollover cases. (T-019)
 - Updated the help dialog temp-file path handling to use RTL helpers and report ShellExecute failures. (T-020)
+- Added regression tests that expose DST fall-back second-instance semantics, `cMaxAttempts` false-disable behavior with long blackout windows, and non-atomic `Add(...)` overload behavior on invalid plans.
 - `NumOfExecutionsPerformed` now counts executed callbacks (after overlap rules). (T-021)
 - ExecutionLimit now counts actual executions after overlap rules, not skipped/coalesced due hits. (T-027)
 - Updated the demo UI with invoke/overlap/misfire controls and expanded samples. (T-015)
@@ -27,6 +28,9 @@ All notable user-visible changes to this project will be documented in this file
 - Expanded unit and stress robustness coverage for DST fall variants, timezone/exclusion/blackout parser edges, hash token failures, default-policy propagation, final-dispatch regressions, and mixed-feature concurrency. (T-028, T-029, T-030, T-031, T-032, T-033, T-034, T-035, T-036)
 
 ### Fixed
+- Fixed `DstFallPolicy=dfpRunTwice` to schedule both ambiguous fall-back instances at the same local wall-clock time.
+- Fixed long exclusion windows to avoid false scheduler disable when search iteration limits are reached.
+- Fixed `Add(name, plan, callback)` overloads to be atomic: invalid plans no longer leave partially-added events.
 - Fixed @reboot macro to be rejected outside cdMaxCron where ExecutionLimit is unavailable. (T-025)
 - Fixed ctPortable timers to run ticks directly without requiring a main-thread queue. (T-026)
 - Fixed ExecutionLimit parsing to reject invalid, negative, or overflow values instead of silently defaulting. (T-024)

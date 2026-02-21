@@ -284,10 +284,11 @@ begin
     lEvent.Run;
 
     lFirstNext := lEvent.NextSchedule;
+    Assert.IsTrue(TTimeZone.Local.IsAmbiguousTime(lFirstNext));
     lCron.TickAt(lFirstNext);
     lSecondNext := lEvent.NextSchedule;
 
-    Assert.IsTrue(lSecondNext > lFirstNext);
+    Assert.IsTrue(TTimeZone.Local.IsAmbiguousTime(lSecondNext));
     lCron.TickAt(lSecondNext);
     Assert.AreEqual(2, lCount);
   finally
