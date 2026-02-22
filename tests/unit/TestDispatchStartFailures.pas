@@ -3,7 +3,7 @@ unit TestDispatchStartFailures;
 interface
 
 uses
-  System.Classes, System.DateUtils, System.SyncObjs, System.SysUtils,
+  System.Classes, System.DateUtils, System.Diagnostics, System.SyncObjs, System.SysUtils,
   DUnitX.TestFramework,
   maxCron;
 
@@ -14,6 +14,7 @@ type
     procedure RunDispatchStartFailureRecovery(const aInvokeMode: TmaxCronInvokeMode);
     procedure RunDispatchStartFailureExecutionLimitRetry(const aInvokeMode: TmaxCronInvokeMode);
     procedure RunQueuedMainThreadAcquireFailureExecutionLimitRetry;
+    procedure RunSerializeChainDispatchStartFailureRetry(const aInvokeMode: TmaxCronInvokeMode);
   public
     [Test]
     procedure DispatchStartFailure_TTask_ReleasesOverlapState;
@@ -29,6 +30,9 @@ type
 
     [Test]
     procedure QueuedMainThread_PreAcquireFailure_ExecutionLimitRetry;
+
+    [Test]
+    procedure SerializeChain_DispatchStartFailure_RetriesAfterRollback;
   end;
 
 implementation
@@ -289,6 +293,111 @@ begin
   end;
 end;
 
+procedure TTestDispatchStartFailures.RunSerializeChainDispatchStartFailureRetry(const aInvokeMode: TmaxCronInvokeMode);
+var
+  lCron: TmaxCron;
+  lEvent: TmaxCronEvent;
+  lFirstStarted: TEvent;
+  lFirstFinished: TEvent;
+  lFirstGate: TEvent;
+  lSecondStarted: TEvent;
+  lDispatchAttempts: Integer;
+  lCallbackCount: Integer;
+  lFirstAt: TDateTime;
+  lSecondAt: TDateTime;
+  lThirdAt: TDateTime;
+  lFourthAt: TDateTime;
+  lWaitRes: TWaitResult;
+  lCanFreeCron: Boolean;
+  lWaitSw: TStopwatch;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  lFirstStarted := TEvent.Create(nil, True, False, '');
+  lFirstFinished := TEvent.Create(nil, True, False, '');
+  lFirstGate := TEvent.Create(nil, True, False, '');
+  lSecondStarted := TEvent.Create(nil, True, False, '');
+  lDispatchAttempts := 0;
+  lCallbackCount := 0;
+  lCanFreeCron := False;
+  try
+    lEvent := lCron.Add('SerializeFinalizeDispatchFailure');
+    lEvent.EventPlan := '* * * * * * * 0';
+    lEvent.InvokeMode := aInvokeMode;
+    lEvent.OverlapMode := omSerialize;
+    lEvent.OnScheduleProc :=
+      procedure(aSender: TmaxCronEvent)
+      var
+        lRunNo: Integer;
+      begin
+        lRunNo := TInterlocked.Increment(lCallbackCount);
+        if lRunNo = 1 then
+        begin
+          lFirstStarted.SetEvent;
+          lFirstGate.WaitFor(3000);
+          lFirstFinished.SetEvent;
+        end else begin
+          lSecondStarted.SetEvent;
+        end;
+      end;
+    lEvent.Run;
+    lFirstAt := lEvent.NextSchedule;
+
+    SetMaxCronBeforeDispatchHook(
+      procedure(const aDispatchMode: TmaxCronInvokeMode)
+      begin
+        if (aDispatchMode = aInvokeMode) and (TInterlocked.Increment(lDispatchAttempts) = 2) then
+          raise Exception.Create('injected serialize-chain dispatch-start failure');
+      end);
+    try
+      lCron.TickAt(lFirstAt);
+      lWaitRes := lFirstStarted.WaitFor(2000);
+      Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes, 'First serialized callback did not start');
+
+      lSecondAt := lEvent.NextSchedule;
+      lCron.TickAt(lSecondAt);
+      lThirdAt := lEvent.NextSchedule;
+      lFourthAt := IncSecond(lThirdAt, 1);
+      lFirstGate.SetEvent;
+      lWaitRes := lFirstFinished.WaitFor(2000);
+      Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes, 'First serialized callback did not finish');
+
+      lWaitSw := TStopwatch.StartNew;
+      while (TInterlocked.CompareExchange(lDispatchAttempts, 0, 0) < 2) and
+        (lWaitSw.ElapsedMilliseconds < 2000) do
+        TThread.Sleep(10);
+    finally
+      SetMaxCronBeforeDispatchHook(nil);
+    end;
+
+    if TInterlocked.CompareExchange(lDispatchAttempts, 0, 0) < 2 then
+      lCanFreeCron := True;
+    Assert.IsTrue(TInterlocked.CompareExchange(lDispatchAttempts, 0, 0) >= 2,
+      'Expected injected dispatch-start failure in serialized finalize chain');
+
+    lCron.TickAt(lThirdAt);
+    lWaitRes := lSecondStarted.WaitFor(2000);
+    if lWaitRes <> TWaitResult.wrSignaled then
+    begin
+      lCron.TickAt(lFourthAt);
+      lWaitRes := lSecondStarted.WaitFor(2000);
+    end;
+    Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes,
+      'Serialized chain should recover after dispatch-start rollback');
+    Assert.AreEqual(2, TInterlocked.CompareExchange(lCallbackCount, 0, 0),
+      'Expected exactly two callback executions after retry');
+    lCanFreeCron := True;
+  finally
+    SetMaxCronBeforeDispatchHook(nil);
+    lFirstGate.SetEvent;
+    lSecondStarted.Free;
+    lFirstGate.Free;
+    lFirstFinished.Free;
+    lFirstStarted.Free;
+    if lCanFreeCron then
+      lCron.Free;
+  end;
+end;
+
 procedure TTestDispatchStartFailures.DispatchStartFailure_TTask_ReleasesOverlapState;
 begin
   RunDispatchStartFailureRecovery(imTTask);
@@ -312,6 +421,11 @@ end;
 procedure TTestDispatchStartFailures.QueuedMainThread_PreAcquireFailure_ExecutionLimitRetry;
 begin
   RunQueuedMainThreadAcquireFailureExecutionLimitRetry;
+end;
+
+procedure TTestDispatchStartFailures.SerializeChain_DispatchStartFailure_RetriesAfterRollback;
+begin
+  RunSerializeChainDispatchStartFailureRetry(imThread);
 end;
 
 end.

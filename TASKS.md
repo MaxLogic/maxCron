@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-044
+Next task ID: T-045
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 44
+Done tasks: 45
 
 ## In Progress
 
@@ -19,6 +19,11 @@ Done tasks: 44
 
 
 ## Done
+
+### T-044 [TEST] Roll back serialized-chain dispatch-start failures
+Outcome: Serialized overlap continuation now rolls back reservation/overlap state when chained dispatch startup fails, so retry ticks can execute instead of leaving the event wedged.
+Proof: `./build-delphi.sh tests/maxCronTests.dproj -config release` succeeds; `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronTests.exe -cm:Quiet -r:TestDispatchStartFailures.TTestDispatchStartFailures.SerializeChain_DispatchStartFailure_RetriesAfterRollback"` fails pre-fix (1/1 failed with `wrTimeout`) and passes post-fix (1/1); `./build-and-run-tests.sh` passes (Stress 2/2, Core 114/114, VCL 3/3); `timeout 180 ./build-and-run-tests-stress.sh -cm:Quiet` completes within timeout and passes (Stress 2/2, Core 114/114, VCL 3/3).
+Touches: `maxCron.pas`, `tests/unit/TestDispatchStartFailures.pas`, `README.md`, `CHANGELOG.md`
 
 ### T-043 [TEST] Normalize scheduler default misfire policy sentinel
 Outcome: Scheduler-level `DefaultMisfirePolicy := mpDefault` now normalizes to `mpCatchUpAll`, preventing sentinel leakage and preserving configured catch-up-limit behavior for `mpDefault` events.

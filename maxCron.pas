@@ -4302,15 +4302,38 @@ begin
         if TInterlocked.CompareExchange(fPendingRuns, 0, 0) > 0 then
         begin
           TInterlocked.Decrement(fPendingRuns);
-          if (aInvokeMode = TmaxCronInvokeMode.imMainThread) and (TThread.CurrentThread.ThreadID = MainThreadID) then
-          begin
-            {$IFDEF ForceQueueNotAvailable}
-            TThread.Queue(nil, procedure begin DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode); end);
-            {$ELSE}
-            TThread.ForceQueue(nil, procedure begin DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode); end);
-            {$ENDIF}
-          end else begin
-            DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+          try
+            if (aInvokeMode = TmaxCronInvokeMode.imMainThread) and (TThread.CurrentThread.ThreadID = MainThreadID) then
+            begin
+              {$IFDEF ForceQueueNotAvailable}
+              TThread.Queue(nil,
+                procedure
+                begin
+                  try
+                    DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+                  except
+                    RollbackDispatchStartFailure(aOverlapMode);
+                    raise;
+                  end;
+                end);
+              {$ELSE}
+              TThread.ForceQueue(nil,
+                procedure
+                begin
+                  try
+                    DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+                  except
+                    RollbackDispatchStartFailure(aOverlapMode);
+                    raise;
+                  end;
+                end);
+              {$ENDIF}
+            end else begin
+              DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+            end;
+          except
+            RollbackDispatchStartFailure(aOverlapMode);
+            raise;
           end;
           Exit; // keep execution acquired for the serialized chain
         end;
