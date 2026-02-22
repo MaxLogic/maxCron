@@ -171,23 +171,29 @@ end;
 procedure TTestDispatchStartFailures.RunQueuedMainThreadAcquireFailureExecutionLimitRetry;
 var
   lCron: TmaxCron;
+  lCronToFree: TmaxCron;
   lEvent: TmaxCronEvent;
   lFired: TEvent;
   lWorkerDone: TEvent;
+  lFreeDone: TEvent;
   lHookInjectCount: Integer;
   lDispatchCount: Integer;
   lFirstAt: TDateTime;
   lSecondAt: TDateTime;
   lWaitRes: TWaitResult;
   lWorker: TThread;
+  lFreeThread: TThread;
   lCanFreeCron: Boolean;
 begin
   lCron := TmaxCron.Create(ctPortable);
+  lCronToFree := nil;
   lFired := TEvent.Create(nil, True, False, '');
   lWorkerDone := TEvent.Create(nil, True, False, '');
+  lFreeDone := TEvent.Create(nil, True, False, '');
   lHookInjectCount := 0;
   lDispatchCount := 0;
   lWorker := nil;
+  lFreeThread := nil;
   lCanFreeCron := False;
   try
     lEvent := lCron.Add('QueuedPreAcquireFailure');
@@ -289,7 +295,26 @@ begin
     lWorkerDone.Free;
     lFired.Free;
     if lCanFreeCron then
-      lCron.Free;
+    begin
+      lCronToFree := lCron;
+      lCron := nil;
+      lFreeDone.ResetEvent;
+      lFreeThread := TThread.CreateAnonymousThread(
+        procedure
+        begin
+          try
+            lCronToFree.Free;
+          finally
+            lFreeDone.SetEvent;
+          end;
+        end);
+      lFreeThread.FreeOnTerminate := True;
+      lFreeThread.Start;
+      lWaitRes := lFreeDone.WaitFor(3000);
+      Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes,
+        'TmaxCron.Free should not hang after queued pre-acquire failure path');
+    end;
+    lFreeDone.Free;
   end;
 end;
 

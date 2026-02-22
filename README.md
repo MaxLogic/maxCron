@@ -214,6 +214,7 @@ Optional runners:
 - `tests/maxCronStressTests.dpr` (heavier concurrency stress tests; ~30s)
 
 `Add(name, plan, callback)` overloads are atomic: if `plan` is invalid, no partial event is kept in the scheduler.
+Queued main-thread pre-acquire failure regressions use `SetMaxCronBeforeQueuedAcquireHook`; injected failures roll back state and exit the queued path without rethrowing through `CheckSynchronize`.
 
 # Using the TPlan helper:
 TPlan is a small record that lets us set parts in a friendly way and then convert them to a cron string.

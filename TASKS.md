@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-045
+Next task ID: T-046
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 45
+Done tasks: 46
 
 ## In Progress
 
@@ -19,6 +19,11 @@ Done tasks: 45
 
 
 ## Done
+
+### T-045 [TEST] Stabilize queued pre-acquire failure regression teardown
+Outcome: The MAXCRON_TESTS queued pre-acquire hook now rolls back and exits the queued path without rethrowing through `CheckSynchronize`, and the queued pre-acquire regression now bounds teardown by asserting `TmaxCron.Free` completes within 3 seconds on a worker thread.
+Proof: `./build-delphi.sh tests/maxCronTests.dproj -config release` succeeds; pre-fix evidence showed `/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command "$ErrorActionPreference='Stop'; $p = Start-Process -FilePath 'F:\\projects\\MaxLogic\\maxCron\\maxCron\\tests\\maxCronTests.exe' -ArgumentList '--consolemode:quiet','--run:TestDispatchStartFailures.TTestDispatchStartFailures.QueuedMainThread_PreAcquireFailure_ExecutionLimitRetry' -NoNewWindow -PassThru -RedirectStandardOutput 'C:\\Users\\pawel\\AppData\\Local\\Temp\\reg_pre.out' -RedirectStandardError 'C:\\Users\\pawel\\AppData\\Local\\Temp\\reg_pre.err'; if (-not $p.WaitForExit(20000)) { try { $p.Kill() } catch {}; exit 124 }; exit $p.ExitCode"` timed out (`124`); post-fix `/mnt/c/Windows/System32/cmd.exe /C "tests\\maxCronTests.exe --consolemode:quiet --run:TestDispatchStartFailures.TTestDispatchStartFailures.QueuedMainThread_PreAcquireFailure_ExecutionLimitRetry"` passes repeatedly (5/5); `./build-and-run-tests.sh` passes (Stress 2/2, Core 114/114, VCL 3/3); `./build-and-run-tests-stress.sh` passes on rerun (Stress 2/2, Core 114/114, VCL 3/3).
+Touches: `maxCron.pas`, `tests/unit/TestDispatchStartFailures.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
 
 ### T-044 [TEST] Roll back serialized-chain dispatch-start failures
 Outcome: Serialized overlap continuation now rolls back reservation/overlap state when chained dispatch startup fails, so retry ticks can execute instead of leaving the event wedged.

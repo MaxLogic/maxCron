@@ -4409,7 +4409,7 @@ begin
     except
       if aToken.TryGetEvent(lEvent) and (lEvent <> nil) then
         lEvent.HandleQueuedAcquireFailure(aOverlapMode);
-      raise;
+      Exit;
     end;
   end;
   {$ENDIF}
