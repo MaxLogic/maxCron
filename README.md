@@ -199,6 +199,8 @@ NewSchedule.DayMatchMode := dmOr;
 ```
 For standard cron-like behavior in tools, we should set `DayMatchMode := dmOr`.
 
+When we change `DayMatchMode` on an enabled event, or change scheduler `DefaultDayMatchMode` for enabled `dmDefault` events, maxCron recalculates `NextSchedule` immediately.
+
 ## Unit tests
 
 DUnitX tests live under `tests/` (runner: `tests/maxCronTests.dpr`).

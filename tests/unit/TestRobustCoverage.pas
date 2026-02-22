@@ -58,6 +58,12 @@ type
     procedure DefaultDayMatchMode_PropagatesToDefaultEvents;
 
     [Test]
+    procedure DayMatchMode_ChangeWhileEnabled_RecalculatesNextSchedule;
+
+    [Test]
+    procedure DefaultDayMatchMode_ChangeWhileEnabled_RecalculatesNextSchedule;
+
+    [Test]
     procedure DefaultDialect_AppliesToNewEvents;
 
     [Test]
@@ -595,6 +601,76 @@ begin
     lEvent.ValidFrom := lBase;
 
     Assert.AreEqual(lExpectedOr, lEvent.NextSchedule, 0.0);
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestRobustCoverage.DayMatchMode_ChangeWhileEnabled_RecalculatesNextSchedule;
+var
+  lCron: TmaxCron;
+  lEvent: TmaxCronEvent;
+  lPlan: string;
+  lBase: TDateTime;
+  lExpectedAnd: TDateTime;
+  lExpectedOr: TDateTime;
+begin
+  lPlan := '0 0 1 * 1 * 0 0';
+  lBase := EncodeDateTime(2030, 1, 1, 23, 59, 59, 0);
+  lExpectedAnd := FindNextForPlan(lPlan, lBase, TmaxCronDayMatchMode.dmAnd);
+  lExpectedOr := FindNextForPlan(lPlan, lBase, TmaxCronDayMatchMode.dmOr);
+
+  Assert.IsTrue(lExpectedOr <= lExpectedAnd);
+
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lEvent := lCron.Add('DayMatchModeImmediateRecalc');
+    lEvent.EventPlan := lPlan;
+    lEvent.ValidFrom := lBase;
+    lEvent.DayMatchMode := TmaxCronDayMatchMode.dmAnd;
+    lEvent.Run;
+
+    Assert.AreEqual(lExpectedAnd, lEvent.NextSchedule, 0.0);
+
+    lEvent.DayMatchMode := TmaxCronDayMatchMode.dmOr;
+    Assert.AreEqual(lExpectedOr, lEvent.NextSchedule, 0.0,
+      'Changing DayMatchMode on an enabled event should recalculate NextSchedule immediately');
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestRobustCoverage.DefaultDayMatchMode_ChangeWhileEnabled_RecalculatesNextSchedule;
+var
+  lCron: TmaxCron;
+  lEvent: TmaxCronEvent;
+  lPlan: string;
+  lBase: TDateTime;
+  lExpectedAnd: TDateTime;
+  lExpectedOr: TDateTime;
+begin
+  lPlan := '0 0 1 * 1 * 0 0';
+  lBase := EncodeDateTime(2030, 1, 1, 23, 59, 59, 0);
+  lExpectedAnd := FindNextForPlan(lPlan, lBase, TmaxCronDayMatchMode.dmAnd);
+  lExpectedOr := FindNextForPlan(lPlan, lBase, TmaxCronDayMatchMode.dmOr);
+
+  Assert.IsTrue(lExpectedOr <= lExpectedAnd);
+
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lCron.DefaultDayMatchMode := TmaxCronDayMatchMode.dmAnd;
+
+    lEvent := lCron.Add('DefaultDayMatchModeImmediateRecalc');
+    lEvent.EventPlan := lPlan;
+    lEvent.DayMatchMode := TmaxCronDayMatchMode.dmDefault;
+    lEvent.ValidFrom := lBase;
+    lEvent.Run;
+
+    Assert.AreEqual(lExpectedAnd, lEvent.NextSchedule, 0.0);
+
+    lCron.DefaultDayMatchMode := TmaxCronDayMatchMode.dmOr;
+    Assert.AreEqual(lExpectedOr, lEvent.NextSchedule, 0.0,
+      'Changing scheduler DefaultDayMatchMode should recalculate enabled dmDefault events immediately');
   finally
     lCron.Free;
   end;

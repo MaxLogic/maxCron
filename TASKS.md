@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-042
+Next task ID: T-043
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 42
+Done tasks: 43
 
 ## In Progress
 
@@ -19,6 +19,11 @@ Done tasks: 42
 
 
 ## Done
+
+### T-042 [TEST] Recalculate next schedule immediately after day-match mode changes
+Outcome: Enabled events now recompute `NextSchedule` immediately when `DayMatchMode` changes directly or when scheduler `DefaultDayMatchMode` changes for events that still use `dmDefault`.
+Proof: `./build-delphi.sh tests/maxCronTests.dproj -config release` succeeds; `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronTests.exe -cm:Quiet -r:TestRobustCoverage.TTestRobustCoverage.DayMatchMode_ChangeWhileEnabled_RecalculatesNextSchedule,TestRobustCoverage.TTestRobustCoverage.DefaultDayMatchMode_ChangeWhileEnabled_RecalculatesNextSchedule"` passes (2/2); `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronTests.exe -cm:Quiet"` passes (111/111); `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronVclTests.exe -cm:Quiet"` passes (3/3); `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && set MAXCRON_STRESS=1 && tests\maxCronStressTests.exe -cm:Quiet"` passes (2/2); `timeout 180 ./build-and-run-tests-stress.sh` exits 0 (Stress 2/2, Core 111/111, VCL 3/3).
+Touches: `maxCron.pas`, `tests/unit/TestRobustCoverage.pas`, `README.md`, `CHANGELOG.md`
 
 ### T-041 [TEST] Roll back queued pre-acquire failures without consuming execution budget
 Outcome: Queued main-thread dispatch now rolls back reserved execution/overlap state when pre-acquire startup fails, so retries remain possible and `ExecutionLimit` is not consumed by failed starts.

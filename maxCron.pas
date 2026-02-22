@@ -3045,7 +3045,16 @@ begin
   try
     for x := 0 to fItems.Count - 1 do
       if fItems[x].fDayMatchMode = TmaxCronDayMatchMode.dmDefault then
-        fItems[x].fScheduler.DayMatchMode := fDefaultDayMatchMode;
+      begin
+        fItems[x].fLock.Acquire;
+        try
+          fItems[x].fScheduler.DayMatchMode := fDefaultDayMatchMode;
+          if fItems[x].FEnabled then
+            fItems[x].ResetSchedule;
+        finally
+          fItems[x].fLock.Release;
+        end;
+      end;
   finally
     fItemsLock.Release;
   end;
@@ -3482,6 +3491,8 @@ begin
   try
     fDayMatchMode := Value;
     fScheduler.DayMatchMode := lMode;
+    if FEnabled then
+      ResetSchedule;
   finally
     fLock.Release;
   end;

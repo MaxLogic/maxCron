@@ -45,6 +45,7 @@ All notable user-visible changes to this project will be documented in this file
 - Fixed `DstFallPolicy=dfpRunTwice` to schedule both ambiguous fall-back instances at the same local wall-clock time.
 - Fixed long exclusion windows to avoid false scheduler disable when search iteration limits are reached.
 - Fixed `Add(name, plan, callback)` overloads to be atomic: invalid plans no longer leave partially-added events.
+- Fixed day-match mode setters to recalculate `NextSchedule` immediately for enabled events when we change `DayMatchMode` directly or update scheduler `DefaultDayMatchMode` for `dmDefault` events.
 - Fixed @reboot macro to be rejected outside cdMaxCron where ExecutionLimit is unavailable. (T-025)
 - Fixed ctPortable timers to run ticks directly without requiring a main-thread queue. (T-026)
 - Fixed ExecutionLimit parsing to reject invalid, negative, or overflow values instead of silently defaulting. (T-024)
