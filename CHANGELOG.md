@@ -32,6 +32,7 @@ All notable user-visible changes to this project will be documented in this file
 - Expanded unit and stress robustness coverage for DST fall variants, timezone/exclusion/blackout parser edges, hash token failures, default-policy propagation, final-dispatch regressions, and mixed-feature concurrency. (T-028, T-029, T-030, T-031, T-032, T-033, T-034, T-035, T-036)
 
 ### Fixed
+- Fixed scheduler `DefaultMisfirePolicy := mpDefault` handling by normalizing to `mpCatchUpAll`, so default-policy events keep honoring configured catch-up limits. (T-043)
 - Fixed Quartz seconds-first hashed DOW ranges to accept one-based values (`H(1-7)` / `H(1-7)/step`) consistently with Quartz numbering.
 - Fixed scheduler default invoke-mode handling by normalizing `DefaultInvokeMode := imDefault` to `imMainThread`, preventing inline worker-thread dispatch from sentinel mode.
 - Fixed `@weekly` macro expansion in `cdQuartzSecondsFirst` to use Quartz DOW numbering (`1=Sun`) instead of `0`, so macro parsing now works consistently across dialects. (T-039)

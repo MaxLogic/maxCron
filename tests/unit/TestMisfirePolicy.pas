@@ -19,6 +19,12 @@ type
 
     [Test]
     procedure Misfire_CatchUpAll_Bounded;
+
+    [Test]
+    procedure DefaultMisfirePolicy_ImDefault_NormalizesToCatchUpAll;
+
+    [Test]
+    procedure DefaultMisfirePolicy_ImDefault_UsesConfiguredCatchUpLimit;
   end;
 
 implementation
@@ -137,6 +143,52 @@ begin
     Assert.IsTrue(lEvt.NextSchedule < lTickTime);
   finally
     lDone.Free;
+    lCron.Free;
+  end;
+end;
+
+procedure TTestMisfirePolicy.DefaultMisfirePolicy_ImDefault_NormalizesToCatchUpAll;
+var
+  lCron: TmaxCron;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lCron.DefaultMisfirePolicy := TmaxCronMisfirePolicy.mpDefault;
+    Assert.AreEqual(TmaxCronMisfirePolicy.mpCatchUpAll, lCron.DefaultMisfirePolicy);
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestMisfirePolicy.DefaultMisfirePolicy_ImDefault_UsesConfiguredCatchUpLimit;
+var
+  lCron: TmaxCron;
+  lEvt: TmaxCronEvent;
+  lCount: Integer;
+  lTickTime: TDateTime;
+begin
+  lCount := 0;
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lCron.DefaultMisfirePolicy := TmaxCronMisfirePolicy.mpDefault;
+    lCron.DefaultMisfireCatchUpLimit := 3;
+
+    lEvt := lCron.Add('MisfireDefaultPolicyNormalization');
+    lEvt.EventPlan := '* * * * * * * 0';
+    lEvt.InvokeMode := imMainThread;
+    lEvt.OnScheduleProc :=
+      procedure(aSender: TmaxCronEvent)
+      begin
+        Inc(lCount);
+      end;
+    lEvt.Run;
+
+    lTickTime := IncSecond(lEvt.NextSchedule, 5);
+    lCron.TickAt(lTickTime);
+
+    Assert.AreEqual(3, lCount, 'Expected catch-up to honor DefaultMisfireCatchUpLimit after normalization');
+    Assert.IsTrue(lEvt.NextSchedule < lTickTime);
+  finally
     lCron.Free;
   end;
 end;

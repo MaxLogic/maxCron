@@ -125,6 +125,8 @@ Policies:
 - `mpFireOnceNow`: execute once, then advance to the next time after `now`.
 - `mpCatchUpAll`: execute missed occurrences sequentially, bounded per tick by `DefaultMisfireCatchUpLimit`.
 
+If we assign `mpDefault` to `CronScheduler.DefaultMisfirePolicy`, maxCron normalizes it to `mpCatchUpAll`.
+
 When exclusions (weekdays/holidays/blackout) create long filtered ranges, maxCron advances the search cursor in larger steps and keeps the event enabled until a true terminal condition is reached.
 
 ## Timezone + DST policies (per-event)

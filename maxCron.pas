@@ -126,6 +126,7 @@ Type
     procedure SetDefaultInvokeMode(const aValue: TmaxCronInvokeMode);
     procedure SetDefaultDayMatchMode(const Value: TmaxCronDayMatchMode);
     procedure SetDefaultDialect(const Value: TmaxCronDialect);
+    procedure SetDefaultMisfirePolicy(const aValue: TmaxCronMisfirePolicy);
     procedure SetDefaultMisfireCatchUpLimit(const Value: Cardinal);
 
   public
@@ -150,7 +151,7 @@ Type
     property DefaultInvokeMode: TmaxCronInvokeMode read fDefaultInvokeMode write SetDefaultInvokeMode;
     property DefaultDayMatchMode: TmaxCronDayMatchMode read fDefaultDayMatchMode write SetDefaultDayMatchMode;
     property DefaultDialect: TmaxCronDialect read fDefaultDialect write SetDefaultDialect;
-    property DefaultMisfirePolicy: TmaxCronMisfirePolicy read fDefaultMisfirePolicy write fDefaultMisfirePolicy;
+    property DefaultMisfirePolicy: TmaxCronMisfirePolicy read fDefaultMisfirePolicy write SetDefaultMisfirePolicy;
     property DefaultMisfireCatchUpLimit: Cardinal read fDefaultMisfireCatchUpLimit write SetDefaultMisfireCatchUpLimit;
 
     {$IFDEF MAXCRON_TESTS}
@@ -3063,6 +3064,14 @@ end;
 procedure TmaxCron.SetDefaultDialect(const Value: TmaxCronDialect);
 begin
   fDefaultDialect := Value;
+end;
+
+procedure TmaxCron.SetDefaultMisfirePolicy(const aValue: TmaxCronMisfirePolicy);
+begin
+  if aValue = TmaxCronMisfirePolicy.mpDefault then
+    fDefaultMisfirePolicy := TmaxCronMisfirePolicy.mpCatchUpAll
+  else
+    fDefaultMisfirePolicy := aValue;
 end;
 
 procedure TmaxCron.SetDefaultMisfireCatchUpLimit(const Value: Cardinal);

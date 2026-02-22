@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-043
+Next task ID: T-044
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 43
+Done tasks: 44
 
 ## In Progress
 
@@ -19,6 +19,11 @@ Done tasks: 43
 
 
 ## Done
+
+### T-043 [TEST] Normalize scheduler default misfire policy sentinel
+Outcome: Scheduler-level `DefaultMisfirePolicy := mpDefault` now normalizes to `mpCatchUpAll`, preventing sentinel leakage and preserving configured catch-up-limit behavior for `mpDefault` events.
+Proof: `./build-delphi.sh tests/maxCronTests.dproj -config release` succeeds; `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronTests.exe -cm:Quiet -r:TestMisfirePolicy.TTestMisfirePolicy.DefaultMisfirePolicy_ImDefault_NormalizesToCatchUpAll,TestMisfirePolicy.TTestMisfirePolicy.DefaultMisfirePolicy_ImDefault_UsesConfiguredCatchUpLimit"` fails pre-fix (2/2 failed) then passes post-fix (2/2); `./build-and-run-tests.sh` passes (Stress 2/2, Core 113/113, VCL 3/3); `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe -cm:Quiet"` passes (2/2); `timeout 300 ./build-and-run-tests-stress.sh -cm:Quiet` was bounded and repeatedly stalled while `tests\maxCronTests.exe` was running in stress mode.
+Touches: `maxCron.pas`, `tests/unit/TestMisfirePolicy.pas`, `README.md`, `CHANGELOG.md`
 
 ### T-042 [TEST] Recalculate next schedule immediately after day-match mode changes
 Outcome: Enabled events now recompute `NextSchedule` immediately when `DayMatchMode` changes directly or when scheduler `DefaultDayMatchMode` changes for events that still use `dmDefault`.
