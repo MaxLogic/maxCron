@@ -23,7 +23,7 @@ Homepage: https://maxlogic.eu/portfolio/maxcron-scheduler-for-delphi/
 ```delphi
 procedure TForm1.FormCreate(Sender: TObject);
 var
-  NewSchedule: TmaxCronEvent ;
+  NewSchedule: IMaxCronEvent ;
 begin 
   
   // create new TCronScheduler that will hold events
@@ -41,7 +41,7 @@ begin
   // you can use anonymous methods as well
   NewSchedule := CronScheduler.Add('Event2');
   NewSchedule.EventPlan := '*/2 * * * * *';
-  NewSchedule.OnScheduleproc := procedure(aEvent: TmaxCronEvent)
+  NewSchedule.OnScheduleproc := procedure(aEvent: IMaxCronEvent)
     begin
       OnScheduleTrigger(aEvent);
     end;
@@ -50,7 +50,7 @@ begin
   
   // using a shorter adding syntax
   NewSchedule := CronScheduler.Add('Event4', '1 * * * * *',
-    procedure(aEvent: TmaxCronEvent)
+    procedure(aEvent: IMaxCronEvent)
     begin
       OnScheduleTrigger(aEvent);
     end).Run;
@@ -100,7 +100,7 @@ Free the scheduler from outside callback context.
 
 For safe production use we should follow these lifecycle rules:
 
-- We must not free `TmaxCronEvent` instances directly. Events are owned by `TmaxCron`; remove them with `CronScheduler.Delete(Event)`, `CronScheduler.Delete(Index)`, or `CronScheduler.Clear`.
+- `IMaxCronEvent` is an interface handle. Event registration lifetime is managed by `TmaxCron`; remove schedules with `CronScheduler.Delete(Event)`, `CronScheduler.Delete(Index)`, or `CronScheduler.Clear`.
 - We should free `TmaxCron` only from outside its callback context.
 - We should treat `Count`/`Events[]` reads as volatile when other threads can mutate the scheduler. If we need stable iteration, we should guard access with our own app-level synchronization.
 - We should avoid long-blocking callbacks during shutdown; if callbacks can block, we should first stop upstream work and let callbacks drain before destroying the scheduler.

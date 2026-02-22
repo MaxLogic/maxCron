@@ -29,7 +29,7 @@ implementation
 procedure TTestStress.Invoke_MainThread_QueuedFromWorker;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   CalledOnMain: Boolean;
   WorkerId: Cardinal;
   Called: TEvent;
@@ -49,7 +49,7 @@ begin
       Evt.EventPlan := '* * * * * * * 0';
       Evt.InvokeMode := imMainThread;
       Evt.OnScheduleProc :=
-        procedure(Sender: TmaxCronEvent)
+        procedure(Sender: IMaxCronEvent)
         begin
           CalledOnMain := (TThread.CurrentThread.ThreadID = MainThreadID);
           Called.SetEvent;
@@ -87,7 +87,7 @@ end;
 procedure TTestStress.SerializeCoalesce_BurstBacklogCapped;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   ExecCount: Integer;
   StartAt: TDateTime;
   Sw: TStopwatch;
@@ -102,7 +102,7 @@ begin
     Evt.InvokeMode := imThread;
     Evt.OverlapMode := omSerializeCoalesce;
     Evt.OnScheduleProc :=
-      procedure(Sender: TmaxCronEvent)
+      procedure(Sender: IMaxCronEvent)
       begin
         TInterlocked.Increment(ExecCount);
         TThread.Sleep(250);
@@ -129,7 +129,7 @@ end;
 procedure TTestStress.DeleteQueuedCallback_DoesNotCrash;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Done: TEvent;
   NextAt: TDateTime;
   Worker: TThread;
@@ -141,7 +141,7 @@ begin
     Evt.EventPlan := '* * * * * * * 0';
     Evt.InvokeMode := imMainThread;
     Evt.OnScheduleProc :=
-      procedure(Sender: TmaxCronEvent)
+      procedure(Sender: IMaxCronEvent)
       begin
         // our queued target should be safe even if the event is deleted before this runs
       end;
@@ -177,7 +177,7 @@ const
 var
   Cron: TmaxCron;
   i: Integer;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Sw: TStopwatch;
   Base: TDateTime;
 begin

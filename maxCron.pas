@@ -19,11 +19,11 @@ uses
 Type
   // forward declarations
   TmaxCron = class;
-  TmaxCronEvent = class;
+  IMaxCronEvent = interface;
   TCronSchedulePlan = class;
 
-  TmaxCronNotifyEvent = procedure(Sender: TmaxCronEvent) of object;
-  TmaxCronNotifyProc = reference to procedure(Sender: TmaxCronEvent);
+  TmaxCronNotifyEvent = procedure(Sender: IMaxCronEvent) of object;
+  TmaxCronNotifyProc = reference to procedure(Sender: IMaxCronEvent);
 
   TmaxCronInvokeMode = (
     imDefault,    // use scheduler DefaultInvokeMode
@@ -80,9 +80,87 @@ Type
   TWordArray = array of Word;
   TFindNextScheduleResult = (fnsFound, fnsNotFound, fnsSearchLimitReached);
 
+  IMaxCronEvent = interface
+    ['{FA8F7A40-5E06-4C8A-B908-6CB2D9FC2C89}']
+    function Run: IMaxCronEvent;
+    procedure Stop;
+    function GetEventPlan: string;
+    procedure SetEventPlan(const aValue: string);
+    function GetNextSchedule: TDateTime;
+    function GetName: string;
+    procedure SetName(const aValue: string);
+    function GetLastExecution: TDateTime;
+    function GetTag: Integer;
+    procedure SetTag(const aValue: Integer);
+    function GetUserData: Pointer;
+    procedure SetUserData(const aValue: Pointer);
+    function GetUserDataInterface: IInterface;
+    procedure SetUserDataInterface(const aValue: IInterface);
+    function GetOnScheduleEvent: TmaxCronNotifyEvent;
+    procedure SetOnScheduleEvent(const aValue: TmaxCronNotifyEvent);
+    function GetOnScheduleProc: TmaxCronNotifyProc;
+    procedure SetOnScheduleProc(const aValue: TmaxCronNotifyProc);
+    function GetEnabled: Boolean;
+    procedure SetEnabled(const aValue: Boolean);
+    function GetInvokeMode: TmaxCronInvokeMode;
+    procedure SetInvokeMode(const aValue: TmaxCronInvokeMode);
+    function GetOverlapMode: TmaxCronOverlapMode;
+    procedure SetOverlapMode(const aValue: TmaxCronOverlapMode);
+    function GetDayMatchMode: TmaxCronDayMatchMode;
+    procedure SetDayMatchMode(const aValue: TmaxCronDayMatchMode);
+    function GetDialect: TmaxCronDialect;
+    procedure SetDialect(const aValue: TmaxCronDialect);
+    function GetMisfirePolicy: TmaxCronMisfirePolicy;
+    procedure SetMisfirePolicy(const aValue: TmaxCronMisfirePolicy);
+    function GetTimeZoneId: string;
+    procedure SetTimeZoneId(const aValue: string);
+    function GetDstSpringPolicy: TmaxCronDstSpringPolicy;
+    procedure SetDstSpringPolicy(const aValue: TmaxCronDstSpringPolicy);
+    function GetDstFallPolicy: TmaxCronDstFallPolicy;
+    procedure SetDstFallPolicy(const aValue: TmaxCronDstFallPolicy);
+    function GetWeekdaysOnly: Boolean;
+    procedure SetWeekdaysOnly(const aValue: Boolean);
+    function GetExcludedDatesCsv: string;
+    procedure SetExcludedDatesCsv(const aValue: string);
+    function GetBlackoutStartTime: TDateTime;
+    procedure SetBlackoutStartTime(const aValue: TDateTime);
+    function GetBlackoutEndTime: TDateTime;
+    procedure SetBlackoutEndTime(const aValue: TDateTime);
+    function GetNumOfExecutionsPerformed: UInt64;
+    function GetValidFrom: TDateTime;
+    procedure SetValidFrom(const aValue: TDateTime);
+    function GetValidTo: TDateTime;
+    procedure SetValidTo(const aValue: TDateTime);
+    property EventPlan: string read GetEventPlan write SetEventPlan;
+    property NextSchedule: TDateTime read GetNextSchedule;
+    property Name: string read GetName write SetName;
+    property LastExecution: TDateTime read GetLastExecution;
+    property Tag: Integer read GetTag write SetTag;
+    property UserData: Pointer read GetUserData write SetUserData;
+    property UserDataInterface: IInterface read GetUserDataInterface write SetUserDataInterface;
+    property OnScheduleEvent: TmaxCronNotifyEvent read GetOnScheduleEvent write SetOnScheduleEvent;
+    property OnScheduleProc: TmaxCronNotifyProc read GetOnScheduleProc write SetOnScheduleProc;
+    property Enabled: Boolean read GetEnabled write SetEnabled;
+    property InvokeMode: TmaxCronInvokeMode read GetInvokeMode write SetInvokeMode;
+    property OverlapMode: TmaxCronOverlapMode read GetOverlapMode write SetOverlapMode;
+    property DayMatchMode: TmaxCronDayMatchMode read GetDayMatchMode write SetDayMatchMode;
+    property Dialect: TmaxCronDialect read GetDialect write SetDialect;
+    property MisfirePolicy: TmaxCronMisfirePolicy read GetMisfirePolicy write SetMisfirePolicy;
+    property TimeZoneId: string read GetTimeZoneId write SetTimeZoneId;
+    property DstSpringPolicy: TmaxCronDstSpringPolicy read GetDstSpringPolicy write SetDstSpringPolicy;
+    property DstFallPolicy: TmaxCronDstFallPolicy read GetDstFallPolicy write SetDstFallPolicy;
+    property WeekdaysOnly: Boolean read GetWeekdaysOnly write SetWeekdaysOnly;
+    property ExcludedDatesCsv: string read GetExcludedDatesCsv write SetExcludedDatesCsv;
+    property BlackoutStartTime: TDateTime read GetBlackoutStartTime write SetBlackoutStartTime;
+    property BlackoutEndTime: TDateTime read GetBlackoutEndTime write SetBlackoutEndTime;
+    property NumOfExecutionsPerformed: UInt64 read GetNumOfExecutionsPerformed;
+    property ValidFrom: TDateTime read GetValidFrom write SetValidFrom;
+    property ValidTo: TDateTime read GetValidTo write SetValidTo;
+  end;
+
   {$IFDEF MAXCRON_TESTS}
   TmaxCronAsyncCallHook = reference to function(const aProc: TThreadProcedure; const aTaskName: string): IInterface;
-  TmaxCronBeforeQueuedAcquireHook = reference to procedure(const aEvent: TmaxCronEvent);
+  TmaxCronBeforeQueuedAcquireHook = reference to procedure(const aEvent: IMaxCronEvent);
   TmaxCronBeforeDispatchHook = reference to procedure(const aInvokeMode: TmaxCronInvokeMode);
   {$ENDIF}
 
@@ -103,9 +181,9 @@ Type
     fDefaultMisfirePolicy: TmaxCronMisfirePolicy;
     fDefaultMisfireCatchUpLimit: Cardinal;
     fTimer: ICronTimer;
-    fItems: TObjectList<TmaxCronEvent>;
+    fItems: TList<IMaxCronEvent>;
     fItemsLock: TCriticalSection;
-    fPendingFree: TList<TmaxCronEvent>;
+    fPendingFree: TList<IMaxCronEvent>;
     fTickDepth: Integer;
     fTickQueued: Integer;
     fCallbackDepth: Integer;
@@ -113,7 +191,7 @@ Type
     fAsyncKeepAlive: TList<IInterface>;
     fAsyncLock: TCriticalSection;
     function GetCount: integer;
-    function GetEvents(index: integer): TmaxCronEvent;
+    function GetEvents(index: integer): IMaxCronEvent;
     procedure TimerTimer(Sender: TObject);
     procedure CreateTimer(const aRequestedBackend: TmaxCronTimerBackend);
     procedure DoTick;
@@ -136,16 +214,16 @@ Type
 
     procedure Clear;
 
-    Function Add(const aName: string): TmaxCronEvent; overload;
-    Function Add(const aName, aEventPlan: string; const aOnScheduleEvent: TmaxCronNotifyEvent): TmaxCronEvent; overload;
-    Function Add(const aName, aEventPlan: string; const aOnScheduleEvent: TmaxCronNotifyProc): TmaxCronEvent; overload;
+    Function Add(const aName: string): IMaxCronEvent; overload;
+    Function Add(const aName, aEventPlan: string; const aOnScheduleEvent: TmaxCronNotifyEvent): IMaxCronEvent; overload;
+    Function Add(const aName, aEventPlan: string; const aOnScheduleEvent: TmaxCronNotifyProc): IMaxCronEvent; overload;
 
     function Delete(index: integer): boolean; overload;
-    function Delete(event: TmaxCronEvent): boolean; overload;
-    function IndexOf(event: TmaxCronEvent): integer;
+    function Delete(event: IMaxCronEvent): boolean; overload;
+    function IndexOf(event: IMaxCronEvent): integer;
 
     property Count: integer read GetCount;
-    property Events[index: integer]: TmaxCronEvent read GetEvents;
+    property Events[index: integer]: IMaxCronEvent read GetEvents;
     property RequestedTimerBackend: TmaxCronTimerBackend read fRequestedTimerBackend;
     property ActiveTimerBackend: TmaxCronTimerBackend read fActiveTimerBackend;
     property DefaultInvokeMode: TmaxCronInvokeMode read fDefaultInvokeMode write SetDefaultInvokeMode;
@@ -158,165 +236,6 @@ Type
     procedure TickAt(const aNow: TDateTime);
     procedure StartTimerForTests(const aIntervalMs: Cardinal);
     {$ENDIF}
-  end;
-
-  TmaxCronEvent = class(TObject)
-  private
-    type
-      TCronTimeZoneKind = (ctzLocal, ctzUtc, ctzFixedOffset);
-  private
-    fCron: TmaxCron;
-    fCronToken: IInterface;
-    fScheduler: TCronSchedulePlan;
-    FEventPlan: string;
-
-    FName: string;
-    FOnScheduleEvent: TmaxCronNotifyEvent;
-
-    FTag: integer;
-    FUserData: Pointer;
-    FUserDataInterface: iInterface;
-
-    FEnabled: boolean;
-    fNextSchedule: TDateTime;
-    FValidFrom: TDateTime;
-    FValidTo: TDateTime;
-    FOnScheduleProc: TmaxCronNotifyProc;
-    fNumOfExecutions: uint64;
-    fNumOfDue: uint64;
-    fLastExecutionTime: TDateTime;
-    fInvokeMode: TmaxCronInvokeMode;
-    fLock: TCriticalSection;
-    fEventToken: IInterface;
-    fOverlapMode: TmaxCronOverlapMode;
-    fDayMatchMode: TmaxCronDayMatchMode;
-    fDialect: TmaxCronDialect;
-    fMisfirePolicy: TmaxCronMisfirePolicy;
-    fTimeZoneId: string;
-    fTimeZoneKind: TCronTimeZoneKind;
-    fTimeZoneOffsetMinutes: Integer;
-    fDstSpringPolicy: TmaxCronDstSpringPolicy;
-    fDstFallPolicy: TmaxCronDstFallPolicy;
-    fWeekdaysOnly: Boolean;
-    fExcludedDatesCsv: string;
-    fExcludedDateSerials: TArray<Integer>;
-    fBlackoutStartTime: TDateTime;
-    fBlackoutEndTime: TDateTime;
-    fPendingDstSecondSchedule: TDateTime;
-    fNextScheduleNeedsResolve: Boolean;
-    fRunning: Integer;
-    fPendingRuns: Integer;
-    fExecDepth: Integer;
-    fAllowDisabledDispatch: Integer;
-    fPendingDestroy: Boolean;
-    procedure SetName(const Value: string);
-    procedure SetOnScheduleEvent(const Value: TmaxCronNotifyEvent);
-    procedure SetTag(const Value: integer);
-    procedure SetUserData(const Value: Pointer);
-    procedure SetEventPlan(const Value: string);
-    procedure SetEnabled(const Value: boolean);
-    procedure SetNumOfExecutions(const Value: uint64);
-    procedure SetValidFrom(const Value: TDateTime);
-    procedure SetValidTo(const Value: TDateTime);
-    procedure SetUserDataInterface(const Value: iInterface);
-    procedure SetOnScheduleProc(const Value: TmaxCronNotifyProc);
-    procedure SetInvokeMode(const Value: TmaxCronInvokeMode);
-    procedure SetOverlapMode(const Value: TmaxCronOverlapMode);
-    procedure SetDayMatchMode(const Value: TmaxCronDayMatchMode);
-    procedure SetDialect(const Value: TmaxCronDialect);
-    procedure SetMisfirePolicy(const Value: TmaxCronMisfirePolicy);
-    procedure SetTimeZoneId(const Value: string);
-    procedure SetDstSpringPolicy(const Value: TmaxCronDstSpringPolicy);
-    procedure SetDstFallPolicy(const Value: TmaxCronDstFallPolicy);
-    procedure SetWeekdaysOnly(const Value: Boolean);
-    procedure SetExcludedDatesCsv(const Value: string);
-    procedure SetBlackoutStartTime(const Value: TDateTime);
-    procedure SetBlackoutEndTime(const Value: TDateTime);
-    function GetEnabled: boolean;
-    function GetNextSchedule: TDateTime;
-    function GetLastExecution: TDateTime;
-    function GetNumOfExecutionsPerformed: uint64;
-    function GetEffectiveInvokeMode: TmaxCronInvokeMode;
-    function GetOverlapMode: TmaxCronOverlapMode;
-    function GetDayMatchMode: TmaxCronDayMatchMode;
-    function GetMisfirePolicy: TmaxCronMisfirePolicy;
-    procedure DispatchCallbacks(const aInvokeMode: TmaxCronInvokeMode;
-      const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-      const aOverlapMode: TmaxCronOverlapMode);
-    procedure FinalizeOverlap(const aInvokeMode: TmaxCronInvokeMode;
-      const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-      const aOverlapMode: TmaxCronOverlapMode);
-    procedure ExecuteOnce(const aInvokeMode: TmaxCronInvokeMode;
-      const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-      const aOverlapMode: TmaxCronOverlapMode);
-    function TryReserveExecution: Boolean;
-    function TryAcquireExecution: Boolean;
-    procedure ReleaseExecution;
-    procedure RollbackReservedExecution;
-    procedure HandleQueuedAcquireFailure(const aOverlapMode: TmaxCronOverlapMode);
-    procedure RollbackDispatchStartFailure(const aOverlapMode: TmaxCronOverlapMode);
-    procedure QueueMainThreadCallbacks(const aInvokeMode: TmaxCronInvokeMode;
-      const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-      const aOverlapMode: TmaxCronOverlapMode);
-    procedure DispatchScheduledCallbacks(const aInvokeMode: TmaxCronInvokeMode;
-      const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-      const aOverlapMode: TmaxCronOverlapMode);
-    procedure MarkPendingDestroy;
-    function CanFreeNow: Boolean;
-    function IsTimeInBlackout(const aEventLocalDateTime: TDateTime): Boolean;
-    function IsOccurrenceExcluded(const aEventLocalDateTime: TDateTime): Boolean;
-    function FindNextScheduleWithPolicies(const aBaseSystemLocal: TDateTime; out aNextSystemLocal: TDateTime): TFindNextScheduleResult;
-    function SystemLocalToEventLocal(const aSystemLocal: TDateTime): TDateTime;
-    function EventLocalToSystemLocal(const aEventLocal: TDateTime; out aSystemLocal: TDateTime): Boolean;
-    function TryParseTimeZone(const aValue: string; out aKind: TCronTimeZoneKind;
-      out aOffsetMinutes: Integer; out aNormalized: string): Boolean;
-    procedure ParseExcludedDatesCsv(const aValue: string; out aDateSerials: TArray<Integer>);
-
-    // this is the main function that will be called by the TmaxCron in a timer
-    procedure checkTimer(const aNow: TDateTime);
-    procedure ResetSchedule;
-  public
-    constructor Create;
-    destructor Destroy; override;
-
-    function Run: TmaxCronEvent;
-    procedure Stop;
-
-    property EventPlan: string read FEventPlan write SetEventPlan;
-    property NextSchedule: TDateTime read GetNextSchedule;
-    property Name: string read FName write SetName;
-    property LastExecution: TDateTime read GetLastExecution;
-
-    // User data
-    property Tag: integer read FTag write SetTag;
-    property UserData: Pointer read FUserData write SetUserData;
-    Property UserDataInterface: iInterface read FUserDataInterface write SetUserDataInterface;
-
-    property OnScheduleEvent: TmaxCronNotifyEvent read FOnScheduleEvent write SetOnScheduleEvent;
-    // you can use an anonymous method as well
-    property OnScheduleProc: TmaxCronNotifyProc read FOnScheduleProc write SetOnScheduleProc;
-
-    property Enabled: boolean read GetEnabled write SetEnabled;
-    property InvokeMode: TmaxCronInvokeMode read fInvokeMode write SetInvokeMode;
-    property OverlapMode: TmaxCronOverlapMode read GetOverlapMode write SetOverlapMode;
-    property DayMatchMode: TmaxCronDayMatchMode read GetDayMatchMode write SetDayMatchMode;
-    property Dialect: TmaxCronDialect read fDialect write SetDialect;
-    property MisfirePolicy: TmaxCronMisfirePolicy read GetMisfirePolicy write SetMisfirePolicy;
-    property TimeZoneId: string read fTimeZoneId write SetTimeZoneId;
-    property DstSpringPolicy: TmaxCronDstSpringPolicy read fDstSpringPolicy write SetDstSpringPolicy;
-    property DstFallPolicy: TmaxCronDstFallPolicy read fDstFallPolicy write SetDstFallPolicy;
-    property WeekdaysOnly: Boolean read fWeekdaysOnly write SetWeekdaysOnly;
-    property ExcludedDatesCsv: string read fExcludedDatesCsv write SetExcludedDatesCsv;
-    property BlackoutStartTime: TDateTime read fBlackoutStartTime write SetBlackoutStartTime;
-    property BlackoutEndTime: TDateTime read fBlackoutEndTime write SetBlackoutEndTime;
-
-    /// <summary>
-    /// Number of executed callbacks (after overlap rules).
-    /// </summary>
-    property NumOfExecutionsPerformed: uint64 read GetNumOfExecutionsPerformed;
-
-    Property ValidFrom: TDateTime read FValidFrom write SetValidFrom;
-    property ValidTo: TDateTime read FValidTo write SetValidTo;
   end;
 
   // those are the parts as they appear in that order
@@ -597,6 +516,182 @@ type
     procedure SetOnTimer(const aValue: TNotifyEvent);
   end;
 
+  TmaxCronEvent = class;
+
+  ICronEventInternal = interface
+    ['{E5E7D6F4-98F9-4E4B-8B5C-8A6F9026C8D4}']
+    function AsEventObject: TmaxCronEvent;
+  end;
+
+  TmaxCronEvent = class(TInterfacedObject, IMaxCronEvent, ICronEventInternal)
+  private
+    type
+      TCronTimeZoneKind = (ctzLocal, ctzUtc, ctzFixedOffset);
+  private
+    fCron: TmaxCron;
+    fCronToken: IInterface;
+    fScheduler: TCronSchedulePlan;
+    FEventPlan: string;
+
+    FName: string;
+    FOnScheduleEvent: TmaxCronNotifyEvent;
+
+    FTag: Integer;
+    FUserData: Pointer;
+    FUserDataInterface: IInterface;
+
+    FEnabled: Boolean;
+    fNextSchedule: TDateTime;
+    FValidFrom: TDateTime;
+    FValidTo: TDateTime;
+    FOnScheduleProc: TmaxCronNotifyProc;
+    fNumOfExecutions: UInt64;
+    fNumOfDue: UInt64;
+    fLastExecutionTime: TDateTime;
+    fInvokeMode: TmaxCronInvokeMode;
+    fLock: TCriticalSection;
+    fEventToken: IInterface;
+    fOverlapMode: TmaxCronOverlapMode;
+    fDayMatchMode: TmaxCronDayMatchMode;
+    fDialect: TmaxCronDialect;
+    fMisfirePolicy: TmaxCronMisfirePolicy;
+    fTimeZoneId: string;
+    fTimeZoneKind: TCronTimeZoneKind;
+    fTimeZoneOffsetMinutes: Integer;
+    fDstSpringPolicy: TmaxCronDstSpringPolicy;
+    fDstFallPolicy: TmaxCronDstFallPolicy;
+    fWeekdaysOnly: Boolean;
+    fExcludedDatesCsv: string;
+    fExcludedDateSerials: TArray<Integer>;
+    fBlackoutStartTime: TDateTime;
+    fBlackoutEndTime: TDateTime;
+    fPendingDstSecondSchedule: TDateTime;
+    fNextScheduleNeedsResolve: Boolean;
+    fRunning: Integer;
+    fPendingRuns: Integer;
+    fExecDepth: Integer;
+    fAllowDisabledDispatch: Integer;
+    fPendingDestroy: Boolean;
+
+    function GetEventPlan: string;
+    function GetName: string;
+    function GetTag: Integer;
+    function GetUserData: Pointer;
+    function GetUserDataInterface: IInterface;
+    function GetOnScheduleEvent: TmaxCronNotifyEvent;
+    function GetOnScheduleProc: TmaxCronNotifyProc;
+    function GetInvokeMode: TmaxCronInvokeMode;
+    function GetDialect: TmaxCronDialect;
+    function GetTimeZoneId: string;
+    function GetDstSpringPolicy: TmaxCronDstSpringPolicy;
+    function GetDstFallPolicy: TmaxCronDstFallPolicy;
+    function GetWeekdaysOnly: Boolean;
+    function GetExcludedDatesCsv: string;
+    function GetBlackoutStartTime: TDateTime;
+    function GetBlackoutEndTime: TDateTime;
+    function GetValidFrom: TDateTime;
+    function GetValidTo: TDateTime;
+
+    procedure SetName(const Value: string);
+    procedure SetOnScheduleEvent(const Value: TmaxCronNotifyEvent);
+    procedure SetTag(const Value: Integer);
+    procedure SetUserData(const Value: Pointer);
+    procedure SetEventPlan(const Value: string);
+    procedure SetEnabled(const Value: Boolean);
+    procedure SetNumOfExecutions(const Value: UInt64);
+    procedure SetValidFrom(const Value: TDateTime);
+    procedure SetValidTo(const Value: TDateTime);
+    procedure SetUserDataInterface(const Value: IInterface);
+    procedure SetOnScheduleProc(const Value: TmaxCronNotifyProc);
+    procedure SetInvokeMode(const Value: TmaxCronInvokeMode);
+    procedure SetOverlapMode(const Value: TmaxCronOverlapMode);
+    procedure SetDayMatchMode(const Value: TmaxCronDayMatchMode);
+    procedure SetDialect(const Value: TmaxCronDialect);
+    procedure SetMisfirePolicy(const Value: TmaxCronMisfirePolicy);
+    procedure SetTimeZoneId(const Value: string);
+    procedure SetDstSpringPolicy(const Value: TmaxCronDstSpringPolicy);
+    procedure SetDstFallPolicy(const Value: TmaxCronDstFallPolicy);
+    procedure SetWeekdaysOnly(const Value: Boolean);
+    procedure SetExcludedDatesCsv(const Value: string);
+    procedure SetBlackoutStartTime(const Value: TDateTime);
+    procedure SetBlackoutEndTime(const Value: TDateTime);
+    function GetEnabled: Boolean;
+    function GetNextSchedule: TDateTime;
+    function GetLastExecution: TDateTime;
+    function GetNumOfExecutionsPerformed: UInt64;
+    function GetEffectiveInvokeMode: TmaxCronInvokeMode;
+    function GetOverlapMode: TmaxCronOverlapMode;
+    function GetDayMatchMode: TmaxCronDayMatchMode;
+    function GetMisfirePolicy: TmaxCronMisfirePolicy;
+    procedure DispatchCallbacks(const aInvokeMode: TmaxCronInvokeMode;
+      const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
+      const aOverlapMode: TmaxCronOverlapMode);
+    procedure FinalizeOverlap(const aInvokeMode: TmaxCronInvokeMode;
+      const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
+      const aOverlapMode: TmaxCronOverlapMode);
+    procedure ExecuteOnce(const aInvokeMode: TmaxCronInvokeMode;
+      const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
+      const aOverlapMode: TmaxCronOverlapMode);
+    function TryReserveExecution: Boolean;
+    function TryAcquireExecution: Boolean;
+    procedure ReleaseExecution;
+    procedure RollbackReservedExecution;
+    procedure HandleQueuedAcquireFailure(const aOverlapMode: TmaxCronOverlapMode);
+    procedure RollbackDispatchStartFailure(const aOverlapMode: TmaxCronOverlapMode);
+    procedure QueueMainThreadCallbacks(const aInvokeMode: TmaxCronInvokeMode;
+      const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
+      const aOverlapMode: TmaxCronOverlapMode);
+    procedure DispatchScheduledCallbacks(const aInvokeMode: TmaxCronInvokeMode;
+      const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
+      const aOverlapMode: TmaxCronOverlapMode);
+    procedure MarkPendingDestroy;
+    function CanFreeNow: Boolean;
+    function IsTimeInBlackout(const aEventLocalDateTime: TDateTime): Boolean;
+    function IsOccurrenceExcluded(const aEventLocalDateTime: TDateTime): Boolean;
+    function FindNextScheduleWithPolicies(const aBaseSystemLocal: TDateTime; out aNextSystemLocal: TDateTime): TFindNextScheduleResult;
+    function SystemLocalToEventLocal(const aSystemLocal: TDateTime): TDateTime;
+    function EventLocalToSystemLocal(const aEventLocal: TDateTime; out aSystemLocal: TDateTime): Boolean;
+    function TryParseTimeZone(const aValue: string; out aKind: TCronTimeZoneKind;
+      out aOffsetMinutes: Integer; out aNormalized: string): Boolean;
+    procedure ParseExcludedDatesCsv(const aValue: string; out aDateSerials: TArray<Integer>);
+
+    function AsEventObject: TmaxCronEvent;
+    procedure checkTimer(const aNow: TDateTime);
+    procedure ResetSchedule;
+  public
+    constructor Create;
+    destructor Destroy; override;
+
+    function Run: IMaxCronEvent;
+    procedure Stop;
+
+    property EventPlan: string read FEventPlan write SetEventPlan;
+    property NextSchedule: TDateTime read GetNextSchedule;
+    property Name: string read FName write SetName;
+    property LastExecution: TDateTime read GetLastExecution;
+    property Tag: Integer read FTag write SetTag;
+    property UserData: Pointer read FUserData write SetUserData;
+    property UserDataInterface: IInterface read FUserDataInterface write SetUserDataInterface;
+    property OnScheduleEvent: TmaxCronNotifyEvent read FOnScheduleEvent write SetOnScheduleEvent;
+    property OnScheduleProc: TmaxCronNotifyProc read FOnScheduleProc write SetOnScheduleProc;
+    property Enabled: Boolean read GetEnabled write SetEnabled;
+    property InvokeMode: TmaxCronInvokeMode read fInvokeMode write SetInvokeMode;
+    property OverlapMode: TmaxCronOverlapMode read GetOverlapMode write SetOverlapMode;
+    property DayMatchMode: TmaxCronDayMatchMode read GetDayMatchMode write SetDayMatchMode;
+    property Dialect: TmaxCronDialect read fDialect write SetDialect;
+    property MisfirePolicy: TmaxCronMisfirePolicy read GetMisfirePolicy write SetMisfirePolicy;
+    property TimeZoneId: string read fTimeZoneId write SetTimeZoneId;
+    property DstSpringPolicy: TmaxCronDstSpringPolicy read fDstSpringPolicy write SetDstSpringPolicy;
+    property DstFallPolicy: TmaxCronDstFallPolicy read fDstFallPolicy write SetDstFallPolicy;
+    property WeekdaysOnly: Boolean read fWeekdaysOnly write SetWeekdaysOnly;
+    property ExcludedDatesCsv: string read fExcludedDatesCsv write SetExcludedDatesCsv;
+    property BlackoutStartTime: TDateTime read fBlackoutStartTime write SetBlackoutStartTime;
+    property BlackoutEndTime: TDateTime read fBlackoutEndTime write SetBlackoutEndTime;
+    property NumOfExecutionsPerformed: UInt64 read GetNumOfExecutionsPerformed;
+    property ValidFrom: TDateTime read FValidFrom write SetValidFrom;
+    property ValidTo: TDateTime read FValidTo write SetValidTo;
+  end;
+
   ICronEventToken = interface
     ['{1AD0B7CE-0C85-4490-9B3E-3E0E1C6115E6}']
     procedure Detach;
@@ -672,6 +767,17 @@ const
 procedure Log(const msg: string);
 begin
   // pawel1.AddToLogFile(msg, 's:\tmp\te.log');
+end;
+
+function TryGetCronEvent(const aEvent: IMaxCronEvent; out aCronEvent: TmaxCronEvent): Boolean;
+var
+  lInternal: ICronEventInternal;
+begin
+  Result := Supports(aEvent, ICronEventInternal, lInternal);
+  if Result then
+    aCronEvent := lInternal.AsEventObject
+  else
+    aCronEvent := nil;
 end;
 
 function CallSimpleAsync(const aProc: TThreadProcedure; const aTaskName: string): IInterface;
@@ -2562,6 +2668,11 @@ begin
   inherited
 end;
 
+function TmaxCronEvent.AsEventObject: TmaxCronEvent;
+begin
+  Result := Self;
+end;
+
 procedure TmaxCronEvent.ResetSchedule;
 var
   lBase: TDateTime;
@@ -2587,7 +2698,7 @@ begin
 
 end;
 
-function TmaxCronEvent.Run: TmaxCronEvent;
+function TmaxCronEvent.Run: IMaxCronEvent;
 begin
   Result := self;
 
@@ -2764,27 +2875,30 @@ end;
 
 { TSchEventList }
 
-function TmaxCron.Add(const aName: string): TmaxCronEvent;
+function TmaxCron.Add(const aName: string): IMaxCronEvent;
 var
-  event: TmaxCronEvent;
+  lEvent: TmaxCronEvent;
 begin
-  event := TmaxCronEvent.Create;
-  event.fCron := Self;
-  event.fCronToken := fQueueToken;
-  event.fScheduler.DayMatchMode := fDefaultDayMatchMode;
-  event.fDialect := fDefaultDialect;
-  event.fScheduler.Dialect := fDefaultDialect;
-  event.Name := aName;
-  Result := event;
+  lEvent := TmaxCronEvent.Create;
+  lEvent.fCron := Self;
+  lEvent.fCronToken := fQueueToken;
+  lEvent.fScheduler.DayMatchMode := fDefaultDayMatchMode;
+  lEvent.fDialect := fDefaultDialect;
+  lEvent.fScheduler.Dialect := fDefaultDialect;
+  lEvent.Name := aName;
+  Result := lEvent;
   fItemsLock.Acquire;
   try
-    fItems.Add(event);
+    fItems.Add(lEvent as IMaxCronEvent);
   finally
     fItemsLock.Release;
   end;
 end;
 
 procedure TmaxCron.Clear;
+var
+  lEvent: TmaxCronEvent;
+  lEventItem: IMaxCronEvent;
 begin
   fItemsLock.Acquire;
   try
@@ -2792,8 +2906,10 @@ begin
     try
       while fItems.Count > 0 do
       begin
-        fItems[0].MarkPendingDestroy;
-        fPendingFree.Add(fItems.Extract(fItems[0]));
+        lEventItem := fItems[0];
+        if TryGetCronEvent(lEventItem, lEvent) then
+          lEvent.MarkPendingDestroy;
+        fPendingFree.Add(fItems.Extract(lEventItem));
       end;
     finally
       Dec(fTickDepth);
@@ -3008,9 +3124,9 @@ constructor TmaxCron.Create(const aTimerBackend: TmaxCronTimerBackend);
 begin
   inherited Create;
 
-  fItems := TObjectList<TmaxCronEvent>.Create;
+  fItems := TList<IMaxCronEvent>.Create;
   fItemsLock := TCriticalSection.Create;
-  fPendingFree := TList<TmaxCronEvent>.Create;
+  fPendingFree := TList<IMaxCronEvent>.Create;
   fTickDepth := 0;
   fDefaultInvokeMode := TmaxCronInvokeMode.imMainThread;
   fDefaultDayMatchMode := TmaxCronDayMatchMode.dmAnd;
@@ -3036,6 +3152,7 @@ end;
 procedure TmaxCron.SetDefaultDayMatchMode(const Value: TmaxCronDayMatchMode);
 var
   x: Integer;
+  lEvent: IMaxCronEvent;
 begin
   if Value = TmaxCronDayMatchMode.dmDefault then
     fDefaultDayMatchMode := TmaxCronDayMatchMode.dmAnd
@@ -3045,17 +3162,11 @@ begin
   fItemsLock.Acquire;
   try
     for x := 0 to fItems.Count - 1 do
-      if fItems[x].fDayMatchMode = TmaxCronDayMatchMode.dmDefault then
-      begin
-        fItems[x].fLock.Acquire;
-        try
-          fItems[x].fScheduler.DayMatchMode := fDefaultDayMatchMode;
-          if fItems[x].FEnabled then
-            fItems[x].ResetSchedule;
-        finally
-          fItems[x].fLock.Release;
-        end;
-      end;
+    begin
+      lEvent := fItems[x];
+      if (lEvent <> nil) and (lEvent.DayMatchMode = TmaxCronDayMatchMode.dmDefault) then
+        lEvent.DayMatchMode := TmaxCronDayMatchMode.dmDefault;
+    end;
   finally
     fItemsLock.Release;
   end;
@@ -3123,17 +3234,17 @@ procedure TmaxCron.FlushPendingFreeLocked;
 var
   i: Integer;
   lEvent: TmaxCronEvent;
+  lEventItem: IMaxCronEvent;
 begin
   if (fTickDepth <> 0) then Exit;
 
   i := fPendingFree.Count - 1;
   while i >= 0 do
   begin
-    lEvent := fPendingFree[i];
-    if (lEvent <> nil) and lEvent.CanFreeNow then
+    lEventItem := fPendingFree[i];
+    if TryGetCronEvent(lEventItem, lEvent) and lEvent.CanFreeNow then
     begin
       fPendingFree.Delete(i);
-      lEvent.Free;
     end;
     Dec(i);
   end;
@@ -3175,6 +3286,7 @@ end;
 function TmaxCron.Delete(index: integer): boolean;
 var
   lEvent: TmaxCronEvent;
+  lEventItem: IMaxCronEvent;
 begin
 
   if (index >= 0) and (index < self.Count) then
@@ -3183,12 +3295,10 @@ begin
     try
       if (index >= 0) and (index < fItems.Count) then
       begin
-        lEvent := fItems.Extract(fItems[index]);
-        if lEvent <> nil then
-        begin
+        lEventItem := fItems.Extract(fItems[index]);
+        if TryGetCronEvent(lEventItem, lEvent) then
           lEvent.MarkPendingDestroy;
-          fPendingFree.Add(lEvent);
-        end;
+        fPendingFree.Add(lEventItem);
         FlushPendingFreeLocked;
         Exit(True);
       end;
@@ -3201,9 +3311,9 @@ begin
     Result := false;
 end;
 
-function TmaxCron.Delete(event: TmaxCronEvent): boolean;
+function TmaxCron.Delete(event: IMaxCronEvent): boolean;
 var
-  i: integer;
+  i: Integer;
 begin
   Result := false;
   i := IndexOf(event);
@@ -3282,21 +3392,29 @@ begin
   end;
 end;
 
-function TmaxCron.GetEvents(index: integer): TmaxCronEvent;
+function TmaxCron.GetEvents(index: integer): IMaxCronEvent;
 begin
   fItemsLock.Acquire;
   try
-    Result := fItems[index]
+    Result := fItems[index];
   finally
     fItemsLock.Release;
   end;
 end;
 
-function TmaxCron.IndexOf(event: TmaxCronEvent): integer;
+function TmaxCron.IndexOf(event: IMaxCronEvent): integer;
+var
+  i: Integer;
 begin
+  if event = nil then
+    Exit(-1);
+
+  Result := -1;
   fItemsLock.Acquire;
   try
-    Result := fItems.IndexOf(event);
+    for i := 0 to fItems.Count - 1 do
+      if fItems[i] = event then
+        Exit(i);
   finally
     fItemsLock.Release;
   end;
@@ -3312,9 +3430,10 @@ end;
 
 procedure TmaxCron.DoTickAt(const aNow: TDateTime);
 var
-  x: integer;
-  lSnapshot: TArray<TmaxCronEvent>;
+  x: Integer;
+  lSnapshot: TArray<IMaxCronEvent>;
   lDepthIncreased: Boolean;
+  lEvent: TmaxCronEvent;
 begin
   lDepthIncreased := False;
   try
@@ -3330,8 +3449,8 @@ begin
     end;
 
     for x := 0 to Length(lSnapshot) - 1 do
-      if (lSnapshot[x] <> nil) then
-        lSnapshot[x].checkTimer(aNow);
+      if TryGetCronEvent(lSnapshot[x], lEvent) then
+        lEvent.checkTimer(aNow);
   finally
     if lDepthIncreased then
     begin
@@ -3438,7 +3557,7 @@ begin
 end;
 
 function TmaxCron.Add(const aName, aEventPlan: string;
-  const aOnScheduleEvent: TmaxCronNotifyEvent): TmaxCronEvent;
+  const aOnScheduleEvent: TmaxCronNotifyEvent): IMaxCronEvent;
 begin
   Result := Add(aName);
   try
@@ -3451,7 +3570,7 @@ begin
 end;
 
 function TmaxCron.Add(const aName, aEventPlan: string;
-  const aOnScheduleEvent: TmaxCronNotifyProc): TmaxCronEvent;
+  const aOnScheduleEvent: TmaxCronNotifyProc): IMaxCronEvent;
 begin
   Result := Add(aName);
   try
@@ -4041,6 +4160,186 @@ begin
   end;
 end;
 
+function TmaxCronEvent.GetEventPlan: string;
+begin
+  fLock.Acquire;
+  try
+    Result := FEventPlan;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetName: string;
+begin
+  fLock.Acquire;
+  try
+    Result := FName;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetTag: Integer;
+begin
+  fLock.Acquire;
+  try
+    Result := FTag;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetUserData: Pointer;
+begin
+  fLock.Acquire;
+  try
+    Result := FUserData;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetUserDataInterface: IInterface;
+begin
+  fLock.Acquire;
+  try
+    Result := FUserDataInterface;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetOnScheduleEvent: TmaxCronNotifyEvent;
+begin
+  fLock.Acquire;
+  try
+    Result := FOnScheduleEvent;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetOnScheduleProc: TmaxCronNotifyProc;
+begin
+  fLock.Acquire;
+  try
+    Result := FOnScheduleProc;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetInvokeMode: TmaxCronInvokeMode;
+begin
+  fLock.Acquire;
+  try
+    Result := fInvokeMode;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetDialect: TmaxCronDialect;
+begin
+  fLock.Acquire;
+  try
+    Result := fDialect;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetTimeZoneId: string;
+begin
+  fLock.Acquire;
+  try
+    Result := fTimeZoneId;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetDstSpringPolicy: TmaxCronDstSpringPolicy;
+begin
+  fLock.Acquire;
+  try
+    Result := fDstSpringPolicy;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetDstFallPolicy: TmaxCronDstFallPolicy;
+begin
+  fLock.Acquire;
+  try
+    Result := fDstFallPolicy;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetWeekdaysOnly: Boolean;
+begin
+  fLock.Acquire;
+  try
+    Result := fWeekdaysOnly;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetExcludedDatesCsv: string;
+begin
+  fLock.Acquire;
+  try
+    Result := fExcludedDatesCsv;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetBlackoutStartTime: TDateTime;
+begin
+  fLock.Acquire;
+  try
+    Result := fBlackoutStartTime;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetBlackoutEndTime: TDateTime;
+begin
+  fLock.Acquire;
+  try
+    Result := fBlackoutEndTime;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetValidFrom: TDateTime;
+begin
+  fLock.Acquire;
+  try
+    Result := FValidFrom;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetValidTo: TDateTime;
+begin
+  fLock.Acquire;
+  try
+    Result := FValidTo;
+  finally
+    fLock.Release;
+  end;
+end;
+
 function TmaxCronEvent.GetNextSchedule: TDateTime;
 begin
   fLock.Acquire;
@@ -4254,6 +4553,9 @@ begin
     fPendingDestroy := True;
     FEnabled := False;
     fPendingRuns := 0;
+    FOnScheduleEvent := nil;
+    FOnScheduleProc := nil;
+    FUserDataInterface := nil;
   finally
     fLock.Release;
   end;

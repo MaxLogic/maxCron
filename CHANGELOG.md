@@ -22,6 +22,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added regressions for Quartz seconds-first hashed DOW ranges (`H(1-7)`) and scheduler `DefaultInvokeMode := imDefault` normalization behavior.
 
 ### Changed
+- Changed the public event handle API from concrete `TmaxCronEvent` class references to `IMaxCronEvent` interfaces, while keeping scheduler-owned registration/removal (`Delete/Clear`) semantics. (T-048)
 - Clarified the README lifecycle usage contract for safe ownership/shutdown: use `Delete/Clear` instead of freeing events directly, avoid freeing scheduler from callbacks, and synchronize external concurrent reads/writes. (T-047)
 - Changed the VCL help dialog to open help in an external browser instead of the legacy embedded control. (T-017)
 - Updated the demo to include dialect/day-match selectors and samples for Quartz modifiers and rollover cases. (T-019)

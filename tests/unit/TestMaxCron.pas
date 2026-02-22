@@ -37,7 +37,7 @@ end;
 procedure TTestMaxCron.Overlap_Serialize_CoalescesToOnePending;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Started: TEvent;
   Gate: TEvent;
   Count: Integer;
@@ -57,7 +57,7 @@ begin
       Evt.InvokeMode := imThread;
       Evt.OverlapMode := omSerializeCoalesce;
       Evt.OnScheduleProc :=
-        procedure(Sender: TmaxCronEvent)
+        procedure(Sender: IMaxCronEvent)
         begin
           TInterlocked.Increment(Count);
           Started.SetEvent;
@@ -93,7 +93,7 @@ end;
 procedure TTestMaxCron.Overlap_Serialize_QueuesAllPending;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Started: TEvent;
   Gate: TEvent;
   Count: Integer;
@@ -112,7 +112,7 @@ begin
       Evt.InvokeMode := imThread;
       Evt.OverlapMode := omSerialize;
       Evt.OnScheduleProc :=
-        procedure(Sender: TmaxCronEvent)
+        procedure(Sender: IMaxCronEvent)
         begin
           TInterlocked.Increment(Count);
           Started.SetEvent;

@@ -38,7 +38,7 @@ implementation
 procedure TTestLifecycle.DeleteEvent_WhileRunning_DoesNotCrash;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Started: TEvent;
   Gate: TEvent;
   Sw: TStopwatch;
@@ -54,7 +54,7 @@ begin
       Evt.InvokeMode := imThread;
       Evt.OverlapMode := omSerialize;
       Evt.OnScheduleProc :=
-        procedure(Sender: TmaxCronEvent)
+        procedure(Sender: IMaxCronEvent)
         begin
           Started.SetEvent;
           Gate.WaitFor(3000);
@@ -86,7 +86,7 @@ end;
 procedure TTestLifecycle.FreeScheduler_WhileRunning_DoesNotCrash;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Started: TEvent;
   Gate: TEvent;
   WaitRes: TWaitResult;
@@ -100,7 +100,7 @@ begin
     Evt.InvokeMode := imThread;
     Evt.OverlapMode := omSerializeCoalesce;
     Evt.OnScheduleProc :=
-      procedure(Sender: TmaxCronEvent)
+      procedure(Sender: IMaxCronEvent)
       begin
         Started.SetEvent;
         Gate.WaitFor(3000);
@@ -127,7 +127,7 @@ end;
 procedure TTestLifecycle.PortableTimer_TicksWithoutMainThreadPump;
 var
   lCron: TmaxCron;
-  lEvt: TmaxCronEvent;
+  lEvt: IMaxCronEvent;
   lHit: TEvent;
   lWaitRes: TWaitResult;
 begin
@@ -138,7 +138,7 @@ begin
     lEvt.EventPlan := '* * * * * * * 1';
     lEvt.InvokeMode := imThread;
     lEvt.OnScheduleProc :=
-      procedure(Sender: TmaxCronEvent)
+      procedure(Sender: IMaxCronEvent)
       begin
         lHit.SetEvent;
       end;
@@ -156,7 +156,7 @@ end;
 procedure TTestLifecycle.UpdateEventPlan_RecalculatesNextSchedule;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Base: TDateTime;
   SearchFrom: TDateTime;
   Expected: TDateTime;
@@ -189,7 +189,7 @@ end;
 procedure TTestLifecycle.LastExecution_UsesScheduledTime;
 var
   lCron: TmaxCron;
-  lEvt: TmaxCronEvent;
+  lEvt: IMaxCronEvent;
   lFirstSchedule: TDateTime;
   lTickTime: TDateTime;
   lEpsilon: Double;
@@ -215,7 +215,7 @@ end;
 procedure TTestLifecycle.UpdateEventPlan_InvalidDoesNotChangePlan;
 var
   lCron: TmaxCron;
-  lEvt: TmaxCronEvent;
+  lEvt: IMaxCronEvent;
   lPrevPlan: string;
   lPrevNext: TDateTime;
 begin
@@ -245,7 +245,7 @@ end;
 procedure TTestLifecycle.SetDialect_ReparsesEventPlan;
 var
   lCron: TmaxCron;
-  lEvt: TmaxCronEvent;
+  lEvt: IMaxCronEvent;
   lPrevNext: TDateTime;
   lPrevDialect: TmaxCronDialect;
 begin

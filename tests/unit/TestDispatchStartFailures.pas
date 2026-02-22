@@ -43,7 +43,7 @@ implementation
 procedure TTestDispatchStartFailures.RunDispatchStartFailureRecovery(const aInvokeMode: TmaxCronInvokeMode);
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lFired: TEvent;
   lRaised: Boolean;
   lTriggered: Integer;
@@ -62,7 +62,7 @@ begin
     lEvent.InvokeMode := aInvokeMode;
     lEvent.OverlapMode := omSkipIfRunning;
     lEvent.OnScheduleProc :=
-      procedure(aSender: TmaxCronEvent)
+      procedure(aSender: IMaxCronEvent)
       begin
         TInterlocked.Increment(lTriggered);
         lFired.SetEvent;
@@ -108,7 +108,7 @@ end;
 procedure TTestDispatchStartFailures.RunDispatchStartFailureExecutionLimitRetry(const aInvokeMode: TmaxCronInvokeMode);
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lFired: TEvent;
   lRaised: Boolean;
   lDispatchCount: Integer;
@@ -126,7 +126,7 @@ begin
     lEvent.InvokeMode := aInvokeMode;
     lEvent.OverlapMode := omSkipIfRunning;
     lEvent.OnScheduleProc :=
-      procedure(aSender: TmaxCronEvent)
+      procedure(aSender: IMaxCronEvent)
       begin
         lFired.SetEvent;
       end;
@@ -175,7 +175,7 @@ procedure TTestDispatchStartFailures.RunQueuedMainThreadAcquireFailureExecutionL
 var
   lCron: TmaxCron;
   lCronToFree: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lFired: TEvent;
   lWorkerDone: TEvent;
   lFreeDone: TEvent;
@@ -204,7 +204,7 @@ begin
     lEvent.InvokeMode := imMainThread;
     lEvent.OverlapMode := omSkipIfRunning;
     lEvent.OnScheduleProc :=
-      procedure(aSender: TmaxCronEvent)
+      procedure(aSender: IMaxCronEvent)
       begin
         TInterlocked.Increment(lDispatchCount);
         lFired.SetEvent;
@@ -213,7 +213,7 @@ begin
     lFirstAt := lEvent.NextSchedule;
 
     SetMaxCronBeforeQueuedAcquireHook(
-      procedure(const aEvent: TmaxCronEvent)
+      procedure(const aEvent: IMaxCronEvent)
       begin
         if (aEvent = lEvent) and (TInterlocked.CompareExchange(lHookInjectCount, 1, 0) = 0) then
           raise Exception.Create('injected queued pre-acquire failure');
@@ -324,7 +324,7 @@ end;
 procedure TTestDispatchStartFailures.RunSerializeChainDispatchStartFailureRetry(const aInvokeMode: TmaxCronInvokeMode);
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lFirstStarted: TEvent;
   lFirstFinished: TEvent;
   lFirstGate: TEvent;
@@ -354,7 +354,7 @@ begin
     lEvent.InvokeMode := aInvokeMode;
     lEvent.OverlapMode := omSerialize;
     lEvent.OnScheduleProc :=
-      procedure(aSender: TmaxCronEvent)
+      procedure(aSender: IMaxCronEvent)
       var
         lRunNo: Integer;
       begin

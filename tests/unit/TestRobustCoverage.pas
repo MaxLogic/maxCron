@@ -12,7 +12,7 @@ type
   TTestRobustCoverage = class
   private
     procedure AssertRaises(const aProc: TProc; const aMessage: string = 'Expected exception');
-    procedure NoopSchedule(aSender: TmaxCronEvent);
+    procedure NoopSchedule(aSender: IMaxCronEvent);
     function BuildOneShotPlan(const aDateTime: TDateTime): string;
     function FindNextForPlan(const aPlan: string; const aBase: TDateTime;
       const aDayMatchMode: TmaxCronDayMatchMode): TDateTime;
@@ -97,7 +97,7 @@ begin
     Assert.Fail(aMessage);
 end;
 
-procedure TTestRobustCoverage.NoopSchedule(aSender: TmaxCronEvent);
+procedure TTestRobustCoverage.NoopSchedule(aSender: IMaxCronEvent);
 begin
 end;
 
@@ -148,9 +148,9 @@ var
   lAmbiguous: TDateTime;
   lCron: TmaxCron;
   lPlan: string;
-  lEventRunOnce: TmaxCronEvent;
-  lEventPreferFirst: TmaxCronEvent;
-  lEventPreferSecond: TmaxCronEvent;
+  lEventRunOnce: IMaxCronEvent;
+  lEventPreferFirst: IMaxCronEvent;
+  lEventPreferSecond: IMaxCronEvent;
 begin
   if not TryFindAmbiguousLocalTime(lAmbiguous) then
     Exit;
@@ -193,7 +193,7 @@ end;
 procedure TTestRobustCoverage.TimeZoneId_ParsingAndNormalization;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
 begin
   lCron := TmaxCron.Create(ctPortable);
   try
@@ -240,7 +240,7 @@ const
     );
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   i: Integer;
   lValue: string;
 begin
@@ -266,7 +266,7 @@ end;
 procedure TTestRobustCoverage.ExcludedDatesCsv_DedupSortAndEmptyTokens;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
 begin
   lCron := TmaxCron.Create(ctPortable);
   try
@@ -285,7 +285,7 @@ end;
 procedure TTestRobustCoverage.ExcludedDatesCsv_InvalidDate_Raise;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
 begin
   lCron := TmaxCron.Create(ctPortable);
   try
@@ -319,7 +319,7 @@ end;
 procedure TTestRobustCoverage.Blackout_OvernightWindow_SkipsNightHours;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
 begin
   lCron := TmaxCron.Create(ctPortable);
   try
@@ -339,7 +339,7 @@ end;
 procedure TTestRobustCoverage.Blackout_EqualEndpoints_DisablesBlackout;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
 begin
   lCron := TmaxCron.Create(ctPortable);
   try
@@ -359,7 +359,7 @@ end;
 procedure TTestRobustCoverage.Blackout_InvalidValues_Raise;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
 begin
   lCron := TmaxCron.Create(ctPortable);
   try
@@ -468,7 +468,7 @@ end;
 procedure TTestRobustCoverage.HashSeed_ChangesAfterNameUpdate;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lFirstSchedule: TDateTime;
   lSecondSchedule: TDateTime;
   lThirdSchedule: TDateTime;
@@ -498,7 +498,7 @@ end;
 procedure TTestRobustCoverage.FinalDispatch_FireOnceNow_WhenEventDisables;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lCount: Integer;
   lFireAt: TDateTime;
   lTickAt: TDateTime;
@@ -514,7 +514,7 @@ begin
     lEvent.MisfirePolicy := TmaxCronMisfirePolicy.mpFireOnceNow;
     lEvent.InvokeMode := imMainThread;
     lEvent.OnScheduleProc :=
-      procedure(aSender: TmaxCronEvent)
+      procedure(aSender: IMaxCronEvent)
       begin
         TInterlocked.Increment(lCount);
       end;
@@ -534,7 +534,7 @@ end;
 procedure TTestRobustCoverage.FinalDispatch_DefaultCatchUp_WhenEventDisables;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lCount: Integer;
   lFireAt: TDateTime;
   lTickAt: TDateTime;
@@ -553,7 +553,7 @@ begin
     lEvent.MisfirePolicy := TmaxCronMisfirePolicy.mpDefault;
     lEvent.InvokeMode := imMainThread;
     lEvent.OnScheduleProc :=
-      procedure(aSender: TmaxCronEvent)
+      procedure(aSender: IMaxCronEvent)
       begin
         TInterlocked.Increment(lCount);
       end;
@@ -573,7 +573,7 @@ end;
 procedure TTestRobustCoverage.DefaultDayMatchMode_PropagatesToDefaultEvents;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lPlan: string;
   lBase: TDateTime;
   lExpectedAnd: TDateTime;
@@ -609,7 +609,7 @@ end;
 procedure TTestRobustCoverage.DayMatchMode_ChangeWhileEnabled_RecalculatesNextSchedule;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lPlan: string;
   lBase: TDateTime;
   lExpectedAnd: TDateTime;
@@ -643,7 +643,7 @@ end;
 procedure TTestRobustCoverage.DefaultDayMatchMode_ChangeWhileEnabled_RecalculatesNextSchedule;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lPlan: string;
   lBase: TDateTime;
   lExpectedAnd: TDateTime;
@@ -679,7 +679,7 @@ end;
 procedure TTestRobustCoverage.DefaultDialect_AppliesToNewEvents;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
 begin
   lCron := TmaxCron.Create(ctPortable);
   try
@@ -704,7 +704,7 @@ end;
 procedure TTestRobustCoverage.DefaultInvokeMode_AppliesToDefaultEvents;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lSignal: TEvent;
   lThreadId: TThreadID;
   lWaitResult: TWaitResult;
@@ -718,7 +718,7 @@ begin
     lEvent := lCron.Add('DefaultInvokeMode');
     lEvent.EventPlan := '* * * * * * * 1';
     lEvent.OnScheduleProc :=
-      procedure(aSender: TmaxCronEvent)
+      procedure(aSender: IMaxCronEvent)
       begin
         lThreadId := TThread.CurrentThread.ThreadID;
         lSignal.SetEvent;
@@ -752,7 +752,7 @@ end;
 procedure TTestRobustCoverage.MisfireCatchUp_MaxAttempts_DoesNotDisableSchedulableEvent;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
 begin
   lCron := TmaxCron.Create(ctPortable);
   try
@@ -784,7 +784,7 @@ begin
       procedure
       begin
         lCron.Add('InvalidPlanProc', '0 0 0 * * *',
-          procedure(aSender: TmaxCronEvent)
+          procedure(aSender: IMaxCronEvent)
           begin
           end);
       end,

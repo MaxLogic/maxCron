@@ -94,7 +94,7 @@ end;
 procedure TTestCalendarTimeZone.Exclusion_WeekdaysOnly_SkipsWeekend;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lSaturday: TDateTime;
 begin
   lCron := TmaxCron.Create(ctPortable);
@@ -115,7 +115,7 @@ end;
 procedure TTestCalendarTimeZone.Exclusion_ExcludedDatesCsv_SkipsListedDays;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
 begin
   lCron := TmaxCron.Create(ctPortable);
   try
@@ -134,7 +134,7 @@ end;
 procedure TTestCalendarTimeZone.Exclusion_BlackoutWindow_SkipsBlockedHours;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
 begin
   lCron := TmaxCron.Create(ctPortable);
   try
@@ -154,7 +154,7 @@ end;
 procedure TTestCalendarTimeZone.TimeZone_Utc_UsesUtcMidnight;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lStartAt: TDateTime;
   lUtcBase: TDateTime;
   lUtcMidnight: TDateTime;
@@ -184,7 +184,7 @@ end;
 procedure TTestCalendarTimeZone.TimeZone_FixedOffset_UsesOffsetMidnight;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lStartAt: TDateTime;
   lUtcBase: TDateTime;
   lOffsetMinutes: Integer;
@@ -220,8 +220,8 @@ var
   lInvalid: TDateTime;
   lPlan: string;
   lCron: TmaxCron;
-  lSkipEvent: TmaxCronEvent;
-  lShiftEvent: TmaxCronEvent;
+  lSkipEvent: IMaxCronEvent;
+  lShiftEvent: IMaxCronEvent;
 begin
   if not TryFindInvalidLocalTime(lInvalid) then
     Exit;
@@ -257,7 +257,7 @@ var
   lAmbiguous: TDateTime;
   lPlan: string;
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lCount: Integer;
   lFirstNext: TDateTime;
   lSecondNext: TDateTime;
@@ -276,7 +276,7 @@ begin
     lEvent.TimeZoneId := 'LOCAL';
     lEvent.DstFallPolicy := TmaxCronDstFallPolicy.dfpRunTwice;
     lEvent.OnScheduleProc :=
-      procedure(Sender: TmaxCronEvent)
+      procedure(Sender: IMaxCronEvent)
       begin
         Inc(lCount);
       end;

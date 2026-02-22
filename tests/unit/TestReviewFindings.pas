@@ -27,7 +27,7 @@ procedure TTestReviewFindings.Free_FromOwnCallback_ShouldNotDeadlock;
 var
   lCron: TmaxCron;
   lCronToFree: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lCallbackEntered: TEvent;
   lCallbackFinished: TEvent;
   lWaitRes: TWaitResult;
@@ -46,7 +46,7 @@ begin
     lEvent.EventPlan := '* * * * * * * 0';
     lEvent.InvokeMode := imThread;
     lEvent.OnScheduleProc :=
-      procedure(aSender: TmaxCronEvent)
+      procedure(aSender: IMaxCronEvent)
       begin
         lCallbackEntered.SetEvent;
         try
@@ -80,7 +80,7 @@ end;
 procedure TTestReviewFindings.Free_FromOtherThreadWhileCallbackRunning_ShouldFailFast;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lCallbackEntered: TEvent;
   lCallbackGate: TEvent;
   lFreeDone: TEvent;
@@ -106,7 +106,7 @@ begin
     lEvent.InvokeMode := imThread;
     lEvent.OverlapMode := omSerialize;
     lEvent.OnScheduleProc :=
-      procedure(aSender: TmaxCronEvent)
+      procedure(aSender: IMaxCronEvent)
       begin
         lCallbackEntered.SetEvent;
         lCallbackGate.WaitFor(3000);
@@ -157,7 +157,7 @@ end;
 procedure TTestReviewFindings.QueuedMainThread_DeleteBeforeAcquire_ShouldNotAccessFreedEvent;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lWorker: TThread;
   lWorkerDone: TEvent;
   lNextAt: TDateTime;
@@ -170,14 +170,14 @@ begin
     lEvent.EventPlan := '* * * * * * * 0';
     lEvent.InvokeMode := imMainThread;
     lEvent.OnScheduleProc :=
-      procedure(aSender: TmaxCronEvent)
+      procedure(aSender: IMaxCronEvent)
       begin
       end;
     lEvent.Run;
     lNextAt := lEvent.NextSchedule;
 
     SetMaxCronBeforeQueuedAcquireHook(
-      procedure(const aEvent: TmaxCronEvent)
+      procedure(const aEvent: IMaxCronEvent)
       begin
         if aEvent = lEvent then
           lCron.Delete(lEvent);

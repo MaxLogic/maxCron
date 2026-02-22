@@ -46,7 +46,7 @@ var
   Started: array [0 .. ThreadCount - 1] of TEvent;
   i: Integer;
   EndStamp: Int64;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
 
   function MakeWorker(const aIdx: Integer): TThread;
   begin
@@ -107,7 +107,7 @@ begin
           Evt.OverlapMode := omAllowOverlap;
 
         Evt.OnScheduleProc :=
-          procedure(Sender: TmaxCronEvent)
+          procedure(Sender: IMaxCronEvent)
           begin
             try
               TInterlocked.Increment(Fires);

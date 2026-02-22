@@ -26,7 +26,7 @@ implementation
 procedure TTestExecutionLimit.ExecutionLimit_StopsAfterN;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Count: Integer;
   Sw: TStopwatch;
 begin
@@ -38,7 +38,7 @@ begin
     Evt.InvokeMode := imThread;
     Evt.OverlapMode := omAllowOverlap;
     Evt.OnScheduleProc :=
-      procedure(Sender: TmaxCronEvent)
+      procedure(Sender: IMaxCronEvent)
       begin
         TInterlocked.Increment(Count);
       end;
@@ -61,7 +61,7 @@ end;
 procedure TTestExecutionLimit.ExecutionCount_SkipIfRunning_OnlyCountsExecutions;
 var
   lCron: TmaxCron;
-  lEvt: TmaxCronEvent;
+  lEvt: IMaxCronEvent;
   lStarted: TEvent;
   lGate: TEvent;
   lWaitRes: TWaitResult;
@@ -76,7 +76,7 @@ begin
       lEvt.InvokeMode := imThread;
       lEvt.OverlapMode := omSkipIfRunning;
       lEvt.OnScheduleProc :=
-        procedure(Sender: TmaxCronEvent)
+        procedure(Sender: IMaxCronEvent)
         begin
           lStarted.SetEvent;
           lGate.WaitFor(3000);
@@ -103,7 +103,7 @@ end;
 procedure TTestExecutionLimit.ExecutionLimit_SkipIfRunning_CountsExecutions;
 var
   lCron: TmaxCron;
-  lEvt: TmaxCronEvent;
+  lEvt: IMaxCronEvent;
   lStarted: TEvent;
   lFinished: TEvent;
   lGate: TEvent;
@@ -124,7 +124,7 @@ begin
       lEvt.InvokeMode := imThread;
       lEvt.OverlapMode := omSkipIfRunning;
       lEvt.OnScheduleProc :=
-        procedure(Sender: TmaxCronEvent)
+        procedure(Sender: IMaxCronEvent)
         begin
           TInterlocked.Increment(lCount);
           lStarted.SetEvent;

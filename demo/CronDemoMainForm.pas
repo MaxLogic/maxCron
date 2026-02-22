@@ -71,9 +71,9 @@ Type
     Procedure cbMisfirePolicyChange(Sender: TObject);
   Private
     ChronScheduler: TmaxCron;
-    FDynamicEvent: TmaxCronEvent;
+    FDynamicEvent: IMaxCronEvent;
     fSamples: TStringList;
-    Procedure OnScheduleTrigger(Sender: TmaxCronEvent);
+    Procedure OnScheduleTrigger(Sender: IMaxCronEvent);
     Procedure log(Const msg: String);
     Function showDate(Const aDateTime: TDateTime): String;
     Procedure prepareSamples;
@@ -106,7 +106,7 @@ Implementation
 
 Procedure TForm2.FormCreate(Sender: TObject);
 Var
-  lNewSchedule: TmaxCronEvent;
+  lNewSchedule: IMaxCronEvent;
   lStartDate, lStopDate: TDateTime;
   lPlan: TPlan;
 Begin
@@ -162,7 +162,7 @@ Begin
   // you can use anonymous methods as well
   lNewSchedule := ChronScheduler.Add('Event2');
   lNewSchedule.EventPlan := '*/2 * * * * *';
-  lNewSchedule.OnScheduleproc := Procedure(aEvent: TmaxCronEvent)
+  lNewSchedule.OnScheduleproc := Procedure(aEvent: IMaxCronEvent)
     Begin
       OnScheduleTrigger(aEvent);
     End;
@@ -171,7 +171,7 @@ Begin
 
   // using a shorter adding syntax
   lNewSchedule := ChronScheduler.Add('Event4', '1 * * * * *',
-    Procedure(aEvent: TmaxCronEvent)
+    Procedure(aEvent: IMaxCronEvent)
     Begin
       OnScheduleTrigger(aEvent);
     End).Run;
@@ -215,7 +215,7 @@ Begin
 
 End;
 
-Procedure TForm2.OnScheduleTrigger(Sender: TmaxCronEvent);
+Procedure TForm2.OnScheduleTrigger(Sender: IMaxCronEvent);
 Begin
   log(Format('Event "%s"  was trigered at : %s, next scheduled date is %s',
     [Sender.name,

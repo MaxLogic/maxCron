@@ -32,7 +32,7 @@ implementation
 procedure TTestMisfirePolicy.Misfire_Skip_SkipsExecution;
 var
   lCron: TmaxCron;
-  lEvt: TmaxCronEvent;
+  lEvt: IMaxCronEvent;
   lCount: Integer;
   lTickTime: TDateTime;
   lSw: TStopwatch;
@@ -46,7 +46,7 @@ begin
     lEvt.EventPlan := '* * * * * * * 0';
     lEvt.InvokeMode := imThread;
     lEvt.OnScheduleProc :=
-      procedure(Sender: TmaxCronEvent)
+      procedure(Sender: IMaxCronEvent)
       begin
         TInterlocked.Increment(lCount);
       end;
@@ -69,7 +69,7 @@ end;
 procedure TTestMisfirePolicy.Misfire_FireOnceNow_OverridesDefault;
 var
   lCron: TmaxCron;
-  lEvt: TmaxCronEvent;
+  lEvt: IMaxCronEvent;
   lCount: Integer;
   lTickTime: TDateTime;
   lHit: TEvent;
@@ -86,7 +86,7 @@ begin
     lEvt.InvokeMode := imThread;
     lEvt.MisfirePolicy := TmaxCronMisfirePolicy.mpFireOnceNow;
     lEvt.OnScheduleProc :=
-      procedure(Sender: TmaxCronEvent)
+      procedure(Sender: IMaxCronEvent)
       begin
         TInterlocked.Increment(lCount);
         lHit.SetEvent;
@@ -109,7 +109,7 @@ end;
 procedure TTestMisfirePolicy.Misfire_CatchUpAll_Bounded;
 var
   lCron: TmaxCron;
-  lEvt: TmaxCronEvent;
+  lEvt: IMaxCronEvent;
   lCount: Integer;
   lTickTime: TDateTime;
   lDone: TEvent;
@@ -126,7 +126,7 @@ begin
     lEvt.EventPlan := '* * * * * * * 0';
     lEvt.InvokeMode := imThread;
     lEvt.OnScheduleProc :=
-      procedure(Sender: TmaxCronEvent)
+      procedure(Sender: IMaxCronEvent)
       begin
         if TInterlocked.Increment(lCount) >= 3 then
           lDone.SetEvent;
@@ -163,7 +163,7 @@ end;
 procedure TTestMisfirePolicy.DefaultMisfirePolicy_ImDefault_UsesConfiguredCatchUpLimit;
 var
   lCron: TmaxCron;
-  lEvt: TmaxCronEvent;
+  lEvt: IMaxCronEvent;
   lCount: Integer;
   lTickTime: TDateTime;
 begin
@@ -177,7 +177,7 @@ begin
     lEvt.EventPlan := '* * * * * * * 0';
     lEvt.InvokeMode := imMainThread;
     lEvt.OnScheduleProc :=
-      procedure(aSender: TmaxCronEvent)
+      procedure(aSender: IMaxCronEvent)
       begin
         Inc(lCount);
       end;

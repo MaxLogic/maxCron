@@ -39,7 +39,7 @@ end;
 procedure TTestVclBackend.VclTimer_Fires_OnMainThread;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Count: Integer;
   BadThread: Integer;
   Sw: TStopwatch;
@@ -56,7 +56,7 @@ begin
     Evt.InvokeMode := imMainThread;
     Evt.OverlapMode := omAllowOverlap;
     Evt.OnScheduleProc :=
-      procedure(Sender: TmaxCronEvent)
+      procedure(Sender: IMaxCronEvent)
       begin
         if TThread.CurrentThread.ThreadID <> MainThreadID then
           TInterlocked.Exchange(BadThread, 1);

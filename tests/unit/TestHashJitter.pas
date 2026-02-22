@@ -86,8 +86,8 @@ end;
 procedure TTestHashJitter.HashToken_DifferentEventNames_ChangeSchedule;
 var
   lCron: TmaxCron;
-  lEventA: TmaxCronEvent;
-  lEventB: TmaxCronEvent;
+  lEventA: IMaxCronEvent;
+  lEventB: IMaxCronEvent;
 begin
   lCron := TmaxCron.Create(ctPortable);
   try

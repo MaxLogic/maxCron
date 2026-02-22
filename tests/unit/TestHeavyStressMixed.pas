@@ -46,7 +46,7 @@ var
   lStarted: array [0 .. cThreadCount - 1] of TEvent;
   lIndex: Integer;
   lEndStamp: Int64;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lTomorrow: TDateTime;
 
   function BuildExcludedCsv: string;
@@ -153,7 +153,7 @@ begin
         end;
 
         lEvent.OnScheduleProc :=
-          procedure(aSender: TmaxCronEvent)
+          procedure(aSender: IMaxCronEvent)
           begin
             try
               TInterlocked.Increment(lFireCount);

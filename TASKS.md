@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-048
+Next task ID: T-049
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 48
+Done tasks: 49
 
 ## In Progress
 
@@ -19,6 +19,11 @@ Done tasks: 48
 
 
 ## Done
+
+### T-048 [API] Expose scheduler events as interfaces
+Outcome: The public event surface is now interface-based (`IMaxCronEvent`) instead of exposing the concrete event class. Scheduler internals were updated to keep robust delete/pending-free behavior with interface reference-counted lifetimes, and callback-cycle teardown now clears callback/user-interface references on pending destroy.
+Proof: `./build-delphi.sh tests/maxCronTests.dproj -config release` succeeds; `./build-and-run-tests.sh` passes (Stress 2/2, Core 115/115, VCL 3/3, no leak reports); `./build-and-run-tests-stress.sh` passes (Stress 2/2, Core 115/115, VCL 3/3, no leak reports).
+Touches: `maxCron.pas`, `tests/unit/*.pas`, `demo/CronDemoMainForm.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
 
 ### T-047 [DOC] Document scheduler/event lifecycle contract for safe usage
 Outcome: README now explicitly documents required lifecycle and ownership rules: event removal must go through `Delete/Clear`, scheduler free must stay outside callback context, and external concurrent reads/writes require caller-side synchronization.

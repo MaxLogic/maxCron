@@ -29,7 +29,7 @@ implementation
 procedure TTestValidRange.ValidFromTo_StopsOutsideWindow;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Count: Integer;
   StartAt: TDateTime;
   StopAt: TDateTime;
@@ -43,7 +43,7 @@ begin
     Evt.InvokeMode := imThread;
     Evt.OverlapMode := omAllowOverlap;
     Evt.OnScheduleProc :=
-      procedure(Sender: TmaxCronEvent)
+      procedure(Sender: IMaxCronEvent)
       begin
         TInterlocked.Increment(Count);
       end;
@@ -94,7 +94,7 @@ end;
 procedure TTestValidRange.ValidFrom_ReschedulesWhenEnabled;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   NewFrom: TDateTime;
   NextDt: TDateTime;
 begin
@@ -116,7 +116,7 @@ end;
 procedure TTestValidRange.ValidTo_DisablesWhenPast;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
 begin
   Cron := TmaxCron.Create(ctPortable);
   try

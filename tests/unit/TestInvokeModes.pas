@@ -35,7 +35,7 @@ implementation
 procedure TTestInvokeModes.Invoke_MainThread_QueuedFromWorker;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Fired: TEvent;
   ThreadId: TThreadID;
   Worker: TThread;
@@ -52,7 +52,7 @@ begin
       Evt.InvokeMode := imMainThread;
       Evt.OverlapMode := omAllowOverlap;
       Evt.OnScheduleProc :=
-        procedure(Sender: TmaxCronEvent)
+        procedure(Sender: IMaxCronEvent)
         begin
           ThreadId := TThread.CurrentThread.ThreadID;
           Fired.SetEvent;
@@ -92,7 +92,7 @@ end;
 procedure TTestInvokeModes.Invoke_TTask_Runs;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Fired: TEvent;
   WaitRes: TWaitResult;
 begin
@@ -104,7 +104,7 @@ begin
       Evt.EventPlan := '* * * * * * * 0';
       Evt.InvokeMode := imTTask;
       Evt.OverlapMode := omAllowOverlap;
-      Evt.OnScheduleProc := procedure(Sender: TmaxCronEvent) begin Fired.SetEvent; end;
+      Evt.OnScheduleProc := procedure(Sender: IMaxCronEvent) begin Fired.SetEvent; end;
       Evt.Run;
 
       Cron.TickAt(Evt.NextSchedule);
@@ -121,7 +121,7 @@ end;
 procedure TTestInvokeModes.Invoke_MaxAsync_Runs;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Fired: TEvent;
   WaitRes: TWaitResult;
 begin
@@ -133,7 +133,7 @@ begin
       Evt.EventPlan := '* * * * * * * 0';
       Evt.InvokeMode := imMaxAsync;
       Evt.OverlapMode := omAllowOverlap;
-      Evt.OnScheduleProc := procedure(Sender: TmaxCronEvent) begin Fired.SetEvent; end;
+      Evt.OnScheduleProc := procedure(Sender: IMaxCronEvent) begin Fired.SetEvent; end;
       Evt.Run;
 
       Cron.TickAt(Evt.NextSchedule);
@@ -153,7 +153,7 @@ end;
 procedure TTestInvokeModes.Invoke_MaxAsync_FallbackOnNil;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Fired: TEvent;
   WaitRes: TWaitResult;
 begin
@@ -171,7 +171,7 @@ begin
         Evt.EventPlan := '* * * * * * * 0';
         Evt.InvokeMode := imMaxAsync;
         Evt.OverlapMode := omAllowOverlap;
-        Evt.OnScheduleProc := procedure(Sender: TmaxCronEvent) begin Fired.SetEvent; end;
+        Evt.OnScheduleProc := procedure(Sender: IMaxCronEvent) begin Fired.SetEvent; end;
         Evt.Run;
 
         Cron.TickAt(Evt.NextSchedule);
@@ -191,7 +191,7 @@ end;
 procedure TTestInvokeModes.Invoke_MaxAsync_FallbackOnException;
 var
   Cron: TmaxCron;
-  Evt: TmaxCronEvent;
+  Evt: IMaxCronEvent;
   Fired: TEvent;
   WaitRes: TWaitResult;
 begin
@@ -209,7 +209,7 @@ begin
         Evt.EventPlan := '* * * * * * * 0';
         Evt.InvokeMode := imMaxAsync;
         Evt.OverlapMode := omAllowOverlap;
-        Evt.OnScheduleProc := procedure(Sender: TmaxCronEvent) begin Fired.SetEvent; end;
+        Evt.OnScheduleProc := procedure(Sender: IMaxCronEvent) begin Fired.SetEvent; end;
         Evt.Run;
 
         Cron.TickAt(Evt.NextSchedule);
@@ -229,7 +229,7 @@ end;
 procedure TTestInvokeModes.DefaultInvokeMode_ImDefault_NormalizesToMainThread;
 var
   lCron: TmaxCron;
-  lEvent: TmaxCronEvent;
+  lEvent: IMaxCronEvent;
   lFired: TEvent;
   lWorkerDone: TEvent;
   lWorker: TThread;
@@ -247,7 +247,7 @@ begin
     lEvent := lCron.Add('DefaultInvokeImDefault');
     lEvent.EventPlan := '* * * * * * * 1';
     lEvent.OnScheduleProc :=
-      procedure(aSender: TmaxCronEvent)
+      procedure(aSender: IMaxCronEvent)
       begin
         lCallbackThreadId := TThread.CurrentThread.ThreadID;
         lFired.SetEvent;
