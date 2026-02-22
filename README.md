@@ -96,6 +96,17 @@ Safety note: we must not call `TmaxCron.Free` from one of its own callbacks.
 That re-entrant shutdown path is now rejected with an exception to prevent deadlocks.
 Free the scheduler from outside callback context.
 
+## Usage contract (required)
+
+For safe production use we should follow these lifecycle rules:
+
+- We must not free `TmaxCronEvent` instances directly. Events are owned by `TmaxCron`; remove them with `CronScheduler.Delete(Event)`, `CronScheduler.Delete(Index)`, or `CronScheduler.Clear`.
+- We should free `TmaxCron` only from outside its callback context.
+- We should treat `Count`/`Events[]` reads as volatile when other threads can mutate the scheduler. If we need stable iteration, we should guard access with our own app-level synchronization.
+- We should avoid long-blocking callbacks during shutdown; if callbacks can block, we should first stop upstream work and let callbacks drain before destroying the scheduler.
+
+If we follow this contract, maxCron stays on the intended ownership and shutdown path.
+
 ## Overlap handling (per-event)
 
 When a schedule fires again while a previous execution is still running:

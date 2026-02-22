@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-047
+Next task ID: T-048
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 47
+Done tasks: 48
 
 ## In Progress
 
@@ -19,6 +19,11 @@ Done tasks: 47
 
 
 ## Done
+
+### T-047 [DOC] Document scheduler/event lifecycle contract for safe usage
+Outcome: README now explicitly documents required lifecycle and ownership rules: event removal must go through `Delete/Clear`, scheduler free must stay outside callback context, and external concurrent reads/writes require caller-side synchronization.
+Proof: `rg -n "Usage contract \\(required\\)|must not free `TmaxCronEvent`|Delete\\(Event\\)|Count/`Events\\[\\]` reads as volatile" README.md` returns the new contract lines; `./build-delphi.sh tests/maxCronTests.dproj -config release` succeeds.
+Touches: `README.md`, `CHANGELOG.md`, `TASKS.md`
 
 ### T-046 [TEST] Stabilize serialized dispatch-start rollback regression retries
 Outcome: The serialized dispatch-start rollback regression now retries across a bounded tick window, and we added a repeated-run regression to prove the path remains stable instead of failing intermittently on tight two-tick timing.
