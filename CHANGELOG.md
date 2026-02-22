@@ -18,6 +18,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added regression tests for invoke-dispatch startup failures to ensure overlap state recovers after launch exceptions.
 - Added regression tests that verify `ExecutionLimit` retries correctly after injected dispatch-start failures (`imThread` and `imTTask`). (T-038)
 - Added a VCL backend test that enforces `ctVcl` creation only on the VCL main thread.
+- Added regressions for Quartz seconds-first hashed DOW ranges (`H(1-7)`) and scheduler `DefaultInvokeMode := imDefault` normalization behavior.
 
 ### Changed
 - Changed the VCL help dialog to open help in an external browser instead of the legacy embedded control. (T-017)
@@ -31,6 +32,8 @@ All notable user-visible changes to this project will be documented in this file
 - Expanded unit and stress robustness coverage for DST fall variants, timezone/exclusion/blackout parser edges, hash token failures, default-policy propagation, final-dispatch regressions, and mixed-feature concurrency. (T-028, T-029, T-030, T-031, T-032, T-033, T-034, T-035, T-036)
 
 ### Fixed
+- Fixed Quartz seconds-first hashed DOW ranges to accept one-based values (`H(1-7)` / `H(1-7)/step`) consistently with Quartz numbering.
+- Fixed scheduler default invoke-mode handling by normalizing `DefaultInvokeMode := imDefault` to `imMainThread`, preventing inline worker-thread dispatch from sentinel mode.
 - Fixed `@weekly` macro expansion in `cdQuartzSecondsFirst` to use Quartz DOW numbering (`1=Sun`) instead of `0`, so macro parsing now works consistently across dialects. (T-039)
 - Fixed overlap-state rollback when invoke dispatch startup fails (thread/task launch exception), preventing `omSkipIfRunning`/serialize lock-up and shutdown hangs.
 - Fixed dispatch-start rollback to restore reserved execution budget so failed launches do not consume `ExecutionLimit`. (T-038)

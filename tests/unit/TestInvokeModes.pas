@@ -25,6 +25,9 @@ type
 
     [Test]
     procedure Invoke_MaxAsync_FallbackOnException;
+
+    [Test]
+    procedure DefaultInvokeMode_ImDefault_NormalizesToMainThread;
   end;
 
 implementation
@@ -220,6 +223,68 @@ begin
     end;
   finally
     SetMaxCronAsyncCallHook(nil);
+  end;
+end;
+
+procedure TTestInvokeModes.DefaultInvokeMode_ImDefault_NormalizesToMainThread;
+var
+  lCron: TmaxCron;
+  lEvent: TmaxCronEvent;
+  lFired: TEvent;
+  lWorkerDone: TEvent;
+  lWorker: TThread;
+  lSw: TStopwatch;
+  lWaitRes: TWaitResult;
+  lCallbackThreadId: TThreadID;
+begin
+  lCallbackThreadId := 0;
+  lCron := TmaxCron.Create(ctPortable);
+  lFired := TEvent.Create(nil, True, False, '');
+  lWorkerDone := TEvent.Create(nil, True, False, '');
+  try
+    lCron.DefaultInvokeMode := imDefault;
+
+    lEvent := lCron.Add('DefaultInvokeImDefault');
+    lEvent.EventPlan := '* * * * * * * 1';
+    lEvent.OnScheduleProc :=
+      procedure(aSender: TmaxCronEvent)
+      begin
+        lCallbackThreadId := TThread.CurrentThread.ThreadID;
+        lFired.SetEvent;
+      end;
+    lEvent.Run;
+
+    lWorker := TThread.CreateAnonymousThread(
+      procedure
+      begin
+        lCron.TickAt(lEvent.NextSchedule);
+        lWorkerDone.SetEvent;
+      end);
+    lWorker.FreeOnTerminate := False;
+    try
+      lWorker.Start;
+      Assert.AreEqual(TWaitResult.wrSignaled, lWorkerDone.WaitFor(2000),
+        'Worker TickAt did not finish');
+      lWorker.WaitFor;
+    finally
+      lWorker.Free;
+    end;
+
+    lSw := TStopwatch.StartNew;
+    repeat
+      lWaitRes := lFired.WaitFor(0);
+      if lWaitRes = wrSignaled then
+        Break;
+      CheckSynchronize(10);
+    until lSw.ElapsedMilliseconds >= 2000;
+
+    Assert.AreEqual(TWaitResult.wrSignaled, lFired.WaitFor(0), 'Callback did not fire');
+    Assert.AreEqual(MainThreadID, lCallbackThreadId,
+      'Default invoke mode should resolve to main-thread dispatch');
+  finally
+    lWorkerDone.Free;
+    lFired.Free;
+    lCron.Free;
   end;
 end;
 

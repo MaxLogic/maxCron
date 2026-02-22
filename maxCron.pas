@@ -123,6 +123,7 @@ Type
     procedure ReleaseAsyncAlive(const aAsync: IInterface);
     procedure FlushPendingFree;
     procedure FlushPendingFreeLocked;
+    procedure SetDefaultInvokeMode(const aValue: TmaxCronInvokeMode);
     procedure SetDefaultDayMatchMode(const Value: TmaxCronDayMatchMode);
     procedure SetDefaultDialect(const Value: TmaxCronDialect);
     procedure SetDefaultMisfireCatchUpLimit(const Value: Cardinal);
@@ -146,7 +147,7 @@ Type
     property Events[index: integer]: TmaxCronEvent read GetEvents;
     property RequestedTimerBackend: TmaxCronTimerBackend read fRequestedTimerBackend;
     property ActiveTimerBackend: TmaxCronTimerBackend read fActiveTimerBackend;
-    property DefaultInvokeMode: TmaxCronInvokeMode read fDefaultInvokeMode write fDefaultInvokeMode;
+    property DefaultInvokeMode: TmaxCronInvokeMode read fDefaultInvokeMode write SetDefaultInvokeMode;
     property DefaultDayMatchMode: TmaxCronDayMatchMode read fDefaultDayMatchMode write SetDefaultDayMatchMode;
     property DefaultDialect: TmaxCronDialect read fDefaultDialect write SetDefaultDialect;
     property DefaultMisfirePolicy: TmaxCronMisfirePolicy read fDefaultMisfirePolicy write fDefaultMisfirePolicy;
@@ -1614,6 +1615,7 @@ var
   lStart: Integer;
   lValue: Integer;
   lSeed: string;
+  lHasExplicitRange: Boolean;
 begin
   Result := False;
   lText := Trim(aValue);
@@ -1625,6 +1627,7 @@ begin
   lRangeFrom := FValidFrom;
   lRangeTo := FValidTo;
   lStep := 0;
+  lHasExplicitRange := False;
 
   lOpenPos := Pos('(', lText);
   lClosePos := Pos(')', lText);
@@ -1638,10 +1641,7 @@ begin
       raise Exception.Create('Invalid cron token');
     lRangeFrom := StrToInt(Copy(lRangeText, 1, lDashPos - 1));
     lRangeTo := StrToInt(Copy(lRangeText, lDashPos + 1, MaxInt));
-    if (lRangeFrom < FValidFrom) or (lRangeFrom > FValidTo) then
-      raise Exception.Create('Cron value out of range');
-    if (lRangeTo < FValidFrom) or (lRangeTo > FValidTo) or (lRangeTo < lRangeFrom) then
-      raise Exception.Create('Cron value out of range');
+    lHasExplicitRange := True;
     Delete(lText, lOpenPos, lClosePos - lOpenPos + 1);
   end;
 
@@ -1656,6 +1656,28 @@ begin
 
   if (lText <> 'H') and (lText <> 'h') then
     raise Exception.Create('Invalid cron token');
+
+  if (fPartKind = ckDayOfTheWeek) and fDowOneBased then
+  begin
+    if not lHasExplicitRange then
+    begin
+      lRangeFrom := 1;
+      lRangeTo := 7;
+    end;
+
+    if (lRangeFrom < 1) or (lRangeFrom > 7) then
+      raise Exception.Create('Cron value out of range');
+    if (lRangeTo < 1) or (lRangeTo > 7) or (lRangeTo < lRangeFrom) then
+      raise Exception.Create('Cron value out of range');
+
+    lRangeFrom := NormalizeDowValue(lRangeFrom);
+    lRangeTo := NormalizeDowValue(lRangeTo);
+  end else begin
+    if (lRangeFrom < FValidFrom) or (lRangeFrom > FValidTo) then
+      raise Exception.Create('Cron value out of range');
+    if (lRangeTo < FValidFrom) or (lRangeTo > FValidTo) or (lRangeTo < lRangeFrom) then
+      raise Exception.Create('Cron value out of range');
+  end;
 
   lSeed := fHashSeed + '|' + IntToStr(Ord(fPartKind)) + '|' + aValue;
   lHashValue := Hash32(lSeed);
@@ -3000,6 +3022,14 @@ begin
   fCallbackDepth := 0;
   fQueueToken := TCronQueueToken.Create(Self);
   CreateTimer(aTimerBackend);
+end;
+
+procedure TmaxCron.SetDefaultInvokeMode(const aValue: TmaxCronInvokeMode);
+begin
+  if aValue = TmaxCronInvokeMode.imDefault then
+    fDefaultInvokeMode := TmaxCronInvokeMode.imMainThread
+  else
+    fDefaultInvokeMode := aValue;
 end;
 
 procedure TmaxCron.SetDefaultDayMatchMode(const Value: TmaxCronDayMatchMode);

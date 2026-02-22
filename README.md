@@ -85,6 +85,8 @@ NewSchedule.InvokeMode := imMaxAsync; // or imTTask / imThread / imMainThread
 NewSchedule.Run;
 ```
 
+If we assign `imDefault` to `CronScheduler.DefaultInvokeMode`, maxCron normalizes it to `imMainThread`.
+
 Note: if we execute off the VCL main thread, we must not touch UI directly.
 
 If async dispatch startup fails (for example, task/thread launch raises), maxCron rolls back overlap state and execution reservations so future ticks continue normally and `ExecutionLimit` is not consumed by failed launches.
@@ -179,6 +181,8 @@ Supported forms:
 - `H/step`
 - `H(min-max)`
 - `H(min-max)/step`
+
+In `cdQuartzSecondsFirst`, Day-of-Week hash ranges use Quartz numbering (`1..7`), so `H(1-7)` is valid.
 
 ## DOM / DOW matching
 

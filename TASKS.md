@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-040
+Next task ID: T-041
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 40
+Done tasks: 41
 
 ## In Progress
 
@@ -19,6 +19,11 @@ Done tasks: 40
 
 
 ## Done
+
+### T-040 [TEST] Normalize scheduler default invoke mode and Quartz hash DOW ranges
+Outcome: `cdQuartzSecondsFirst` accepts one-based hashed DOW ranges (`H(1-7)`), and scheduler-level `DefaultInvokeMode := imDefault` is normalized to `imMainThread`.
+Proof: `./build-delphi.sh tests/maxCronTests.dproj -config release` succeeds; `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronTests.exe -cm:Quiet -r:TestCronParsing.TTestCronParsing.Parse_QuartzSecondsFirst_HashDowRange_OneBased,TestInvokeModes.TTestInvokeModes.DefaultInvokeMode_ImDefault_NormalizesToMainThread"` passes (2/2); `./build-and-run-tests.sh` passes (Stress 2/2, Core 108/108, VCL 3/3); `./build-and-run-tests-stress.sh` passes (Stress 2/2, Core 108/108, VCL 3/3).
+Touches: `maxCron.pas`, `tests/unit/TestCronParsing.pas`, `tests/unit/TestInvokeModes.pas`, `README.md`, `CHANGELOG.md`
 
 ### T-039 [TEST] Fix @weekly macro in Quartz seconds-first dialect
 Summary: Add a fail-first regression for Quartz macro parsing and align @weekly DOW expansion with Quartz numbering.

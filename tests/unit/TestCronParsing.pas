@@ -60,6 +60,9 @@ type
     procedure Parse_Dialect_QuartzSecondsFirst_FieldOrder;
 
     [Test]
+    procedure Parse_QuartzSecondsFirst_HashDowRange_OneBased;
+
+    [Test]
     procedure Describe_BasicPatterns;
 
     [Test]
@@ -283,6 +286,12 @@ begin
   finally
     Plan.Free;
   end;
+end;
+
+procedure TTestCronParsing.Parse_QuartzSecondsFirst_HashDowRange_OneBased;
+begin
+  AssertParsesDialect('0 0 12 ? * H(1-7)', cdQuartzSecondsFirst);
+  AssertParsesDialect('0 0 12 ? * H(1-7)/2', cdQuartzSecondsFirst);
 end;
 
 procedure TTestCronParsing.Describe_BasicPatterns;
