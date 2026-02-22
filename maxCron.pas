@@ -4360,9 +4360,22 @@ begin
   if not aToken.TryGetEvent(lEvent) then Exit;
   {$IFDEF MAXCRON_TESTS}
   if Assigned(gMaxCronBeforeQueuedAcquireHook) then
-    gMaxCronBeforeQueuedAcquireHook(lEvent);
+  begin
+    try
+      gMaxCronBeforeQueuedAcquireHook(lEvent);
+    except
+      if aToken.TryGetEvent(lEvent) and (lEvent <> nil) then
+        lEvent.HandleQueuedAcquireFailure(aOverlapMode);
+      raise;
+    end;
+  end;
   {$ENDIF}
-  if not aToken.TryAcquireEvent(lEvent) then Exit;
+  if not aToken.TryAcquireEvent(lEvent) then
+  begin
+    if aToken.TryGetEvent(lEvent) and (lEvent <> nil) then
+      lEvent.HandleQueuedAcquireFailure(aOverlapMode);
+    Exit;
+  end;
 
   lEvent.ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
 end;

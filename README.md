@@ -89,7 +89,7 @@ If we assign `imDefault` to `CronScheduler.DefaultInvokeMode`, maxCron normalize
 
 Note: if we execute off the VCL main thread, we must not touch UI directly.
 
-If async dispatch startup fails (for example, task/thread launch raises), maxCron rolls back overlap state and execution reservations so future ticks continue normally and `ExecutionLimit` is not consumed by failed launches.
+If dispatch startup fails (for example, task/thread launch raises, or a queued main-thread callback fails before execution acquire), maxCron rolls back overlap state and execution reservations so future ticks continue normally and `ExecutionLimit` is not consumed by failed launches.
 
 Safety note: we must not call `TmaxCron.Free` from one of its own callbacks.
 That re-entrant shutdown path is now rejected with an exception to prevent deadlocks.

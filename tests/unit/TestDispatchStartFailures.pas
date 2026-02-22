@@ -3,7 +3,7 @@ unit TestDispatchStartFailures;
 interface
 
 uses
-  System.DateUtils, System.SyncObjs, System.SysUtils,
+  System.Classes, System.DateUtils, System.SyncObjs, System.SysUtils,
   DUnitX.TestFramework,
   maxCron;
 
@@ -13,6 +13,7 @@ type
   private
     procedure RunDispatchStartFailureRecovery(const aInvokeMode: TmaxCronInvokeMode);
     procedure RunDispatchStartFailureExecutionLimitRetry(const aInvokeMode: TmaxCronInvokeMode);
+    procedure RunQueuedMainThreadAcquireFailureExecutionLimitRetry;
   public
     [Test]
     procedure DispatchStartFailure_TTask_ReleasesOverlapState;
@@ -25,6 +26,9 @@ type
 
     [Test]
     procedure DispatchStartFailure_ExecutionLimitRetry_Thread;
+
+    [Test]
+    procedure QueuedMainThread_PreAcquireFailure_ExecutionLimitRetry;
   end;
 
 implementation
@@ -160,6 +164,131 @@ begin
   end;
 end;
 
+procedure TTestDispatchStartFailures.RunQueuedMainThreadAcquireFailureExecutionLimitRetry;
+var
+  lCron: TmaxCron;
+  lEvent: TmaxCronEvent;
+  lFired: TEvent;
+  lWorkerDone: TEvent;
+  lHookInjectCount: Integer;
+  lDispatchCount: Integer;
+  lFirstAt: TDateTime;
+  lSecondAt: TDateTime;
+  lWaitRes: TWaitResult;
+  lWorker: TThread;
+  lCanFreeCron: Boolean;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  lFired := TEvent.Create(nil, True, False, '');
+  lWorkerDone := TEvent.Create(nil, True, False, '');
+  lHookInjectCount := 0;
+  lDispatchCount := 0;
+  lWorker := nil;
+  lCanFreeCron := False;
+  try
+    lEvent := lCron.Add('QueuedPreAcquireFailure');
+    lEvent.EventPlan := '* * * * * * * 1';
+    lEvent.InvokeMode := imMainThread;
+    lEvent.OverlapMode := omSkipIfRunning;
+    lEvent.OnScheduleProc :=
+      procedure(aSender: TmaxCronEvent)
+      begin
+        TInterlocked.Increment(lDispatchCount);
+        lFired.SetEvent;
+      end;
+    lEvent.Run;
+    lFirstAt := lEvent.NextSchedule;
+
+    SetMaxCronBeforeQueuedAcquireHook(
+      procedure(const aEvent: TmaxCronEvent)
+      begin
+        if (aEvent = lEvent) and (TInterlocked.CompareExchange(lHookInjectCount, 1, 0) = 0) then
+          raise Exception.Create('injected queued pre-acquire failure');
+      end);
+    try
+      lWorkerDone.ResetEvent;
+      lWorker := TThread.CreateAnonymousThread(
+        procedure
+        begin
+          try
+            lCron.TickAt(lFirstAt);
+          finally
+            lWorkerDone.SetEvent;
+          end;
+        end);
+      lWorker.FreeOnTerminate := True;
+      lWorker.Start;
+
+      lWaitRes := lWorkerDone.WaitFor(2000);
+      Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes, 'Worker did not run first tick');
+
+      try
+        CheckSynchronize(500);
+      except
+        on Exception do
+          ;
+      end;
+    finally
+      SetMaxCronBeforeQueuedAcquireHook(nil);
+    end;
+
+    Assert.AreEqual(1, TInterlocked.CompareExchange(lHookInjectCount, 0, 0),
+      'Expected exactly one injected queued pre-acquire failure');
+
+    lSecondAt := IncSecond(lFirstAt, 5);
+    lWorkerDone.ResetEvent;
+    lWorker := TThread.CreateAnonymousThread(
+      procedure
+      begin
+        try
+          lCron.TickAt(lSecondAt);
+        finally
+          lWorkerDone.SetEvent;
+        end;
+      end);
+    lWorker.FreeOnTerminate := True;
+    lWorker.Start;
+
+    lWaitRes := lWorkerDone.WaitFor(2000);
+    Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes, 'Worker did not run second tick');
+
+    CheckSynchronize(500);
+    lWaitRes := lFired.WaitFor(1500);
+    if lWaitRes <> TWaitResult.wrSignaled then
+    begin
+      lWorkerDone.ResetEvent;
+      lWorker := TThread.CreateAnonymousThread(
+        procedure
+        begin
+          try
+            lCron.TickAt(IncSecond(lSecondAt, 5));
+          finally
+            lWorkerDone.SetEvent;
+          end;
+        end);
+      lWorker.FreeOnTerminate := True;
+      lWorker.Start;
+      Assert.AreEqual(TWaitResult.wrSignaled, lWorkerDone.WaitFor(2000), 'Worker did not run retry tick');
+      CheckSynchronize(500);
+      lWaitRes := lFired.WaitFor(1500);
+    end;
+
+    Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes,
+      'ExecutionLimit should not be consumed by queued pre-acquire failure');
+    Assert.AreEqual(UInt64(1), lEvent.NumOfExecutionsPerformed,
+      'Expected one successful callback execution after queued failure retry');
+    Assert.AreEqual(1, TInterlocked.CompareExchange(lDispatchCount, 0, 0),
+      'Expected one successful callback execution after queued failure retry');
+    lCanFreeCron := True;
+  finally
+    SetMaxCronBeforeQueuedAcquireHook(nil);
+    lWorkerDone.Free;
+    lFired.Free;
+    if lCanFreeCron then
+      lCron.Free;
+  end;
+end;
+
 procedure TTestDispatchStartFailures.DispatchStartFailure_TTask_ReleasesOverlapState;
 begin
   RunDispatchStartFailureRecovery(imTTask);
@@ -178,6 +307,11 @@ end;
 procedure TTestDispatchStartFailures.DispatchStartFailure_ExecutionLimitRetry_Thread;
 begin
   RunDispatchStartFailureExecutionLimitRetry(imThread);
+end;
+
+procedure TTestDispatchStartFailures.QueuedMainThread_PreAcquireFailure_ExecutionLimitRetry;
+begin
+  RunQueuedMainThreadAcquireFailureExecutionLimitRetry;
 end;
 
 end.

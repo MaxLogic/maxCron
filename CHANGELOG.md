@@ -37,6 +37,7 @@ All notable user-visible changes to this project will be documented in this file
 - Fixed `@weekly` macro expansion in `cdQuartzSecondsFirst` to use Quartz DOW numbering (`1=Sun`) instead of `0`, so macro parsing now works consistently across dialects. (T-039)
 - Fixed overlap-state rollback when invoke dispatch startup fails (thread/task launch exception), preventing `omSkipIfRunning`/serialize lock-up and shutdown hangs.
 - Fixed dispatch-start rollback to restore reserved execution budget so failed launches do not consume `ExecutionLimit`. (T-038)
+- Fixed queued main-thread pre-acquire failure rollback so failed dispatch attempts no longer consume `ExecutionLimit` or leave overlap state wedged.
 - Fixed `ctVcl` backend creation to fail fast off the VCL main thread instead of creating an unsafe VCL timer instance.
 - Fixed callback shutdown protection to reject `TmaxCron.Free` while callbacks are still executing across threads, preventing cross-thread callback/destructor deadlocks.
 - Fixed `DstFallPolicy=dfpRunOncePreferSecondInstance` to keep the same ambiguous local wall-clock schedule time instead of shifting by DST delta.

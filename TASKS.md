@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-041
+Next task ID: T-042
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 41
+Done tasks: 42
 
 ## In Progress
 
@@ -19,6 +19,11 @@ Done tasks: 41
 
 
 ## Done
+
+### T-041 [TEST] Roll back queued pre-acquire failures without consuming execution budget
+Outcome: Queued main-thread dispatch now rolls back reserved execution/overlap state when pre-acquire startup fails, so retries remain possible and `ExecutionLimit` is not consumed by failed starts.
+Proof: `./build-delphi.sh tests/maxCronTests.dproj -config release` succeeds; `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronTests.exe -cm:Quiet -r:TestDispatchStartFailures.TTestDispatchStartFailures.QueuedMainThread_PreAcquireFailure_ExecutionLimitRetry"` passes (1/1); `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronTests.exe -cm:Quiet -r:TestDispatchStartFailures.TTestDispatchStartFailures"` passes (5/5); `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe -cm:Quiet"` passes (2/2); `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronTests.exe -cm:Quiet"` passes (109/109); `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronVclTests.exe -cm:Quiet"` passes (3/3).
+Touches: `maxCron.pas`, `tests/unit/TestDispatchStartFailures.pas`, `README.md`, `CHANGELOG.md`
 
 ### T-040 [TEST] Normalize scheduler default invoke mode and Quartz hash DOW ranges
 Outcome: `cdQuartzSecondsFirst` accepts one-based hashed DOW ranges (`H(1-7)`), and scheduler-level `DefaultInvokeMode := imDefault` is normalized to `imMainThread`.
