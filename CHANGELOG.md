@@ -5,6 +5,7 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Added repeated serialized dispatch-start rollback regression coverage to keep retry behavior stable under tight tick timing. (T-046)
 - Added Quartz-style DOM/DOW modifiers (`L`, `W`, `LW`, `#`, `?`). (T-005)
 - Added cron macros (`@yearly`, `@monthly`, `@weekly`, `@daily`, `@hourly`, `@reboot`). (T-006)
 - Added support for trailing `#` comments and flexible whitespace in cron strings. (T-010)

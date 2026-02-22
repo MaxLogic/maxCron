@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-046
+Next task ID: T-047
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 46
+Done tasks: 47
 
 ## In Progress
 
@@ -19,6 +19,11 @@ Done tasks: 46
 
 
 ## Done
+
+### T-046 [TEST] Stabilize serialized dispatch-start rollback regression retries
+Outcome: The serialized dispatch-start rollback regression now retries across a bounded tick window, and we added a repeated-run regression to prove the path remains stable instead of failing intermittently on tight two-tick timing.
+Proof: `./build-delphi.sh tests/maxCronTests.dproj -config release` succeeds; pre-fix `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronTests.exe -cm:Quiet -r:TestDispatchStartFailures.TTestDispatchStartFailures.SerializeChain_DispatchStartFailure_RetriesAfterRollback_Repeated"` failed (wrTimeout in serialized rollback retry); post-fix the same command passes (1/1), plus looped verification (`passes=10 fails=0`); `./build-and-run-tests.sh` passes (Stress 2/2, Core 115/115, VCL 3/3); `./build-and-run-tests-stress.sh` passes (Stress 2/2, Core 115/115, VCL 3/3).
+Touches: `tests/unit/TestDispatchStartFailures.pas`, `TASKS.md`
 
 ### T-045 [TEST] Stabilize queued pre-acquire failure regression teardown
 Outcome: The MAXCRON_TESTS queued pre-acquire hook now rolls back and exits the queued path without rethrowing through `CheckSynchronize`, and the queued pre-acquire regression now bounds teardown by asserting `TmaxCron.Free` completes within 3 seconds on a worker thread.

@@ -33,6 +33,9 @@ type
 
     [Test]
     procedure SerializeChain_DispatchStartFailure_RetriesAfterRollback;
+
+    [Test]
+    procedure SerializeChain_DispatchStartFailure_RetriesAfterRollback_Repeated;
   end;
 
 implementation
@@ -331,7 +334,8 @@ var
   lFirstAt: TDateTime;
   lSecondAt: TDateTime;
   lThirdAt: TDateTime;
-  lFourthAt: TDateTime;
+  lRetryAt: TDateTime;
+  lRetryIndex: Integer;
   lWaitRes: TWaitResult;
   lCanFreeCron: Boolean;
   lWaitSw: TStopwatch;
@@ -381,7 +385,6 @@ begin
       lSecondAt := lEvent.NextSchedule;
       lCron.TickAt(lSecondAt);
       lThirdAt := lEvent.NextSchedule;
-      lFourthAt := IncSecond(lThirdAt, 1);
       lFirstGate.SetEvent;
       lWaitRes := lFirstFinished.WaitFor(2000);
       Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes, 'First serialized callback did not finish');
@@ -398,13 +401,15 @@ begin
       lCanFreeCron := True;
     Assert.IsTrue(TInterlocked.CompareExchange(lDispatchAttempts, 0, 0) >= 2,
       'Expected injected dispatch-start failure in serialized finalize chain');
-
-    lCron.TickAt(lThirdAt);
-    lWaitRes := lSecondStarted.WaitFor(2000);
-    if lWaitRes <> TWaitResult.wrSignaled then
+    lWaitRes := TWaitResult.wrTimeout;
+    lRetryAt := lThirdAt;
+    for lRetryIndex := 0 to 5 do
     begin
-      lCron.TickAt(lFourthAt);
-      lWaitRes := lSecondStarted.WaitFor(2000);
+      lCron.TickAt(lRetryAt);
+      lWaitRes := lSecondStarted.WaitFor(500);
+      if lWaitRes = TWaitResult.wrSignaled then
+        Break;
+      lRetryAt := IncSecond(lRetryAt, 1);
     end;
     Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes,
       'Serialized chain should recover after dispatch-start rollback');
@@ -451,6 +456,14 @@ end;
 procedure TTestDispatchStartFailures.SerializeChain_DispatchStartFailure_RetriesAfterRollback;
 begin
   RunSerializeChainDispatchStartFailureRetry(imThread);
+end;
+
+procedure TTestDispatchStartFailures.SerializeChain_DispatchStartFailure_RetriesAfterRollback_Repeated;
+var
+  lIndex: Integer;
+begin
+  for lIndex := 1 to 10 do
+    RunSerializeChainDispatchStartFailureRetry(imThread);
 end;
 
 end.
