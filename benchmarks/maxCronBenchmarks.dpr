@@ -4,8 +4,8 @@ program maxCronBenchmarks;
 {$DEFINE MAXCRON_TESTS}
 
 uses
-  System.Classes, System.DateUtils, System.Diagnostics, System.Generics.Collections, System.IOUtils, System.StrUtils,
-  System.SysUtils,
+  System.Classes, System.DateUtils, System.Diagnostics, System.Generics.Collections, System.IOUtils, System.Math,
+  System.StrUtils, System.SysUtils,
   Winapi.Windows,
   maxCron in '..\maxCron.pas';
 
@@ -48,6 +48,9 @@ type
     Engine: string;
     Iterations: Integer;
     MeanElapsedUs: Double;
+    MedianElapsedUs: Double;
+    P95ElapsedUs: Double;
+    StdDevElapsedUs: Double;
     MinElapsedUs: Int64;
     MaxElapsedUs: Int64;
     MeanVisited: Double;
@@ -70,6 +73,7 @@ type
     OutDir: string;
     CsvPath: string;
     MdPath: string;
+    CompareCsvPath: string;
     Quiet: Boolean;
   end;
 
@@ -142,6 +146,7 @@ begin
   aOptions.OutDir := '';
   aOptions.CsvPath := '';
   aOptions.MdPath := '';
+  aOptions.CompareCsvPath := '';
   aOptions.Quiet := False;
 
   for lIndex := 1 to ParamCount do
@@ -159,9 +164,12 @@ begin
       aOptions.CsvPath := Copy(lArg, Length('--csv=') + 1, MaxInt)
     else if StartsText('--md=', lArg) then
       aOptions.MdPath := Copy(lArg, Length('--md=') + 1, MaxInt)
+    else if StartsText('--compare=', lArg) then
+      aOptions.CompareCsvPath := Copy(lArg, Length('--compare=') + 1, MaxInt)
     else if SameText(lArg, '--help') or SameText(lArg, '-h') or SameText(lArg, '/?') then
       raise Exception.Create(
-        'Usage: maxCronBenchmarks.exe [--iterations=N] [--warmup=N] [--out-dir=PATH] [--csv=FILE] [--md=FILE] [--quiet]')
+        'Usage: maxCronBenchmarks.exe [--iterations=N] [--warmup=N] [--out-dir=PATH] [--csv=FILE] [--md=FILE] ' +
+        '[--compare=FILE] [--quiet]')
     else
       raise Exception.CreateFmt('Unknown option: %s', [lArg]);
   end;
@@ -337,11 +345,69 @@ begin
   end;
 end;
 
+procedure SortInt64Array(var aValues: TArray<Int64>);
+begin
+  TArray.Sort<Int64>(aValues);
+end;
+
+function CalculateMedianFromSorted(const aValues: TArray<Int64>): Double;
+var
+  lCount: Integer;
+  lMiddle: Integer;
+begin
+  lCount := Length(aValues);
+  if lCount = 0 then
+    Exit(0.0);
+
+  lMiddle := lCount div 2;
+  if Odd(lCount) then
+    Exit(aValues[lMiddle]);
+
+  Result := (aValues[lMiddle - 1] + aValues[lMiddle]) / 2.0;
+end;
+
+function CalculateNearestRankPercentile(const aValues: TArray<Int64>; const aPercentile: Double): Double;
+var
+  lRank: Integer;
+begin
+  if Length(aValues) = 0 then
+    Exit(0.0);
+
+  lRank := Ceil((aPercentile / 100.0) * Length(aValues));
+  if lRank < 1 then
+    lRank := 1
+  else if lRank > Length(aValues) then
+    lRank := Length(aValues);
+
+  Result := aValues[lRank - 1];
+end;
+
+function CalculateStdDev(const aValues: TArray<Int64>; const aMean: Double): Double;
+var
+  lIndex: Integer;
+  lDelta: Double;
+  lVarianceTotal: Double;
+begin
+  if Length(aValues) = 0 then
+    Exit(0.0);
+
+  lVarianceTotal := 0.0;
+  for lIndex := 0 to High(aValues) do
+  begin
+    lDelta := aValues[lIndex] - aMean;
+    lVarianceTotal := lVarianceTotal + (lDelta * lDelta);
+  end;
+
+  Result := Sqrt(lVarianceTotal / Length(aValues));
+end;
+
 function SummarizeScenario(const aScenario: TBenchmarkScenario;
   const aSamples: TList<TBenchmarkSample>): TScenarioSummary;
 var
   lIndex: Integer;
   lSample: TBenchmarkSample;
+  lElapsedUsSamples: TArray<Int64>;
+  lElapsedSampleCount: Integer;
   lElapsedUsTotal: Double;
   lVisitedTotal: Double;
   lRebuildTotal: Double;
@@ -360,12 +426,19 @@ begin
   lRebuildTotal := 0;
   lSwitchTotal := 0;
   lBudgetHitsTotal := 0;
+  SetLength(lElapsedUsSamples, 0);
+  lElapsedSampleCount := 0;
 
   for lIndex := 0 to aSamples.Count - 1 do
   begin
     lSample := aSamples[lIndex];
     if not SameText(lSample.ScenarioName, aScenario.ScenarioName) then
       Continue;
+
+    if lElapsedSampleCount >= Length(lElapsedUsSamples) then
+      SetLength(lElapsedUsSamples, lElapsedSampleCount + 16);
+    lElapsedUsSamples[lElapsedSampleCount] := lSample.ElapsedUs;
+    Inc(lElapsedSampleCount);
 
     Inc(Result.Iterations);
     lElapsedUsTotal := lElapsedUsTotal + lSample.ElapsedUs;
@@ -387,7 +460,13 @@ begin
   if Result.Iterations = 0 then
     raise Exception.CreateFmt('No samples found for scenario %s', [aScenario.ScenarioName]);
 
+  SetLength(lElapsedUsSamples, lElapsedSampleCount);
+  SortInt64Array(lElapsedUsSamples);
+
   Result.MeanElapsedUs := lElapsedUsTotal / Result.Iterations;
+  Result.MedianElapsedUs := CalculateMedianFromSorted(lElapsedUsSamples);
+  Result.P95ElapsedUs := CalculateNearestRankPercentile(lElapsedUsSamples, 95.0);
+  Result.StdDevElapsedUs := CalculateStdDev(lElapsedUsSamples, Result.MeanElapsedUs);
   Result.MeanVisited := lVisitedTotal / Result.Iterations;
   Result.MeanRebuilds := lRebuildTotal / Result.Iterations;
   Result.MeanSwitches := lSwitchTotal / Result.Iterations;
@@ -436,6 +515,20 @@ begin
   Result := aBaseline / aCandidate;
 end;
 
+function SafePercentDelta(const aBaseline, aCurrent: Double): Double;
+begin
+  if aBaseline = 0 then
+    Exit(0);
+  Result := ((aCurrent - aBaseline) / aBaseline) * 100.0;
+end;
+
+function ToSignedInvariantFloat(const aValue: Double): string;
+begin
+  Result := ToInvariantFloat(aValue);
+  if aValue > 0 then
+    Result := '+' + Result;
+end;
+
 procedure WriteCsv(const aPath: string; const aRunTimestampUtc, aMachineName: string;
   const aSamples: TList<TBenchmarkSample>);
 var
@@ -479,10 +572,197 @@ begin
   end;
 end;
 
+function NormalizeCsvHeaderName(const aHeaderName: string): string;
+begin
+  Result := Trim(aHeaderName);
+  if (Result <> '') and (Result[1] = #$FEFF) then
+    Delete(Result, 1, 1);
+end;
+
+function SplitCsvLine(const aLine: string): TArray<string>;
+var
+  lValues: TList<string>;
+  lBuilder: TStringBuilder;
+  lChar: Char;
+  lInQuotes: Boolean;
+  lIndex: Integer;
+begin
+  lValues := TList<string>.Create;
+  lBuilder := TStringBuilder.Create;
+  try
+    lInQuotes := False;
+    lIndex := 1;
+    while lIndex <= Length(aLine) do
+    begin
+      lChar := aLine[lIndex];
+      if lChar = '"' then
+      begin
+        if lInQuotes and (lIndex < Length(aLine)) and (aLine[lIndex + 1] = '"') then
+        begin
+          lBuilder.Append('"');
+          Inc(lIndex);
+        end
+        else
+          lInQuotes := not lInQuotes;
+      end else if (lChar = ',') and (not lInQuotes) then
+      begin
+        lValues.Add(lBuilder.ToString);
+        lBuilder.Clear;
+      end
+      else
+        lBuilder.Append(lChar);
+
+      Inc(lIndex);
+    end;
+
+    lValues.Add(lBuilder.ToString);
+    Result := lValues.ToArray;
+  finally
+    lBuilder.Free;
+    lValues.Free;
+  end;
+end;
+
+function FindCsvColumnIndex(const aHeaders: TArray<string>; const aColumnName: string): Integer;
+var
+  lIndex: Integer;
+begin
+  for lIndex := 0 to High(aHeaders) do
+  begin
+    if SameText(NormalizeCsvHeaderName(aHeaders[lIndex]), aColumnName) then
+      Exit(lIndex);
+  end;
+
+  raise Exception.CreateFmt('CSV missing required column: %s', [aColumnName]);
+end;
+
+function ReadCsvField(const aFields: TArray<string>; const aColumnIndex: Integer; const aColumnName: string): string;
+begin
+  if (aColumnIndex < 0) or (aColumnIndex > High(aFields)) then
+    raise Exception.CreateFmt('CSV row missing column "%s" at index %d', [aColumnName, aColumnIndex]);
+  Result := Trim(aFields[aColumnIndex]);
+end;
+
+function ParseCsvInt64Field(const aFieldValue, aFieldName: string): Int64;
+begin
+  if not TryStrToInt64(Trim(aFieldValue), Result) then
+    raise Exception.CreateFmt('Invalid Int64 in column %s: %s', [aFieldName, aFieldValue]);
+end;
+
+function ParseCsvUInt64Field(const aFieldValue, aFieldName: string): UInt64;
+begin
+  if not TryStrToUInt64(Trim(aFieldValue), Result) then
+    raise Exception.CreateFmt('Invalid UInt64 in column %s: %s', [aFieldName, aFieldValue]);
+end;
+
+function ParseCsvIntegerField(const aFieldValue, aFieldName: string): Integer;
+begin
+  if not TryStrToInt(Trim(aFieldValue), Result) then
+    raise Exception.CreateFmt('Invalid Integer in column %s: %s', [aFieldName, aFieldValue]);
+end;
+
+function LoadSamplesFromCsv(const aPath: string): TList<TBenchmarkSample>;
+var
+  lLines: TStringList;
+  lHeader: TArray<string>;
+  lFields: TArray<string>;
+  lLineIndex: Integer;
+  lSample: TBenchmarkSample;
+  lGroupNameIndex: Integer;
+  lScenarioNameIndex: Integer;
+  lEngineIndex: Integer;
+  lIterationIndex: Integer;
+  lEventCountIndex: Integer;
+  lTickCountIndex: Integer;
+  lTickStepSecondsIndex: Integer;
+  lElapsedUsIndex: Integer;
+  lVisitedIndex: Integer;
+  lRebuildsIndex: Integer;
+  lSwitchCountIndex: Integer;
+  lBudgetHitsIndex: Integer;
+begin
+  if not TFile.Exists(aPath) then
+    raise Exception.CreateFmt('Baseline CSV does not exist: %s', [aPath]);
+
+  lLines := TStringList.Create;
+  try
+    lLines.LoadFromFile(aPath, TEncoding.UTF8);
+    if lLines.Count < 2 then
+      raise Exception.CreateFmt('CSV has no data rows: %s', [aPath]);
+
+    lHeader := SplitCsvLine(lLines[0]);
+    lGroupNameIndex := FindCsvColumnIndex(lHeader, 'scenario_group');
+    lScenarioNameIndex := FindCsvColumnIndex(lHeader, 'scenario_name');
+    lEngineIndex := FindCsvColumnIndex(lHeader, 'engine');
+    lIterationIndex := FindCsvColumnIndex(lHeader, 'iteration');
+    lEventCountIndex := FindCsvColumnIndex(lHeader, 'event_count');
+    lTickCountIndex := FindCsvColumnIndex(lHeader, 'tick_count');
+    lTickStepSecondsIndex := FindCsvColumnIndex(lHeader, 'tick_step_seconds');
+    lElapsedUsIndex := FindCsvColumnIndex(lHeader, 'elapsed_us');
+    lVisitedIndex := FindCsvColumnIndex(lHeader, 'events_visited');
+    lRebuildsIndex := FindCsvColumnIndex(lHeader, 'heap_rebuilds');
+    lSwitchCountIndex := FindCsvColumnIndex(lHeader, 'switch_count');
+    lBudgetHitsIndex := FindCsvColumnIndex(lHeader, 'budget_hits');
+
+    Result := TList<TBenchmarkSample>.Create;
+    try
+      for lLineIndex := 1 to lLines.Count - 1 do
+      begin
+        if Trim(lLines[lLineIndex]) = '' then
+          Continue;
+
+        lFields := SplitCsvLine(lLines[lLineIndex]);
+        lSample := Default(TBenchmarkSample);
+        lSample.GroupName := ReadCsvField(lFields, lGroupNameIndex, 'scenario_group');
+        lSample.ScenarioName := ReadCsvField(lFields, lScenarioNameIndex, 'scenario_name');
+        lSample.Engine := ReadCsvField(lFields, lEngineIndex, 'engine');
+        lSample.Iteration := ParseCsvIntegerField(ReadCsvField(lFields, lIterationIndex, 'iteration'), 'iteration');
+        lSample.EventCount := ParseCsvIntegerField(ReadCsvField(lFields, lEventCountIndex, 'event_count'),
+          'event_count');
+        lSample.TickCount := ParseCsvIntegerField(ReadCsvField(lFields, lTickCountIndex, 'tick_count'), 'tick_count');
+        lSample.TickStepSeconds := ParseCsvIntegerField(
+          ReadCsvField(lFields, lTickStepSecondsIndex, 'tick_step_seconds'), 'tick_step_seconds');
+        lSample.ElapsedUs := ParseCsvInt64Field(ReadCsvField(lFields, lElapsedUsIndex, 'elapsed_us'), 'elapsed_us');
+        lSample.EventsVisited := ParseCsvUInt64Field(ReadCsvField(lFields, lVisitedIndex, 'events_visited'),
+          'events_visited');
+        lSample.HeapRebuilds := ParseCsvUInt64Field(ReadCsvField(lFields, lRebuildsIndex, 'heap_rebuilds'),
+          'heap_rebuilds');
+        lSample.SwitchCount := ParseCsvUInt64Field(ReadCsvField(lFields, lSwitchCountIndex, 'switch_count'),
+          'switch_count');
+        lSample.BudgetHits := ParseCsvIntegerField(ReadCsvField(lFields, lBudgetHitsIndex, 'budget_hits'),
+          'budget_hits');
+        Result.Add(lSample);
+      end;
+    except
+      Result.Free;
+      raise;
+    end;
+  finally
+    lLines.Free;
+  end;
+end;
+
+function LoadSummariesFromCsv(const aPath: string): TArray<TScenarioSummary>;
+var
+  lScenarios: TArray<TBenchmarkScenario>;
+  lSamples: TList<TBenchmarkSample>;
+begin
+  lScenarios := BuildScenarios;
+  lSamples := LoadSamplesFromCsv(aPath);
+  try
+    Result := BuildSummaries(lScenarios, lSamples);
+  finally
+    lSamples.Free;
+  end;
+end;
+
 procedure AppendSummaryRow(const aLines: TStringList; const aSummary: TScenarioSummary);
 begin
   aLines.Add('| ' + aSummary.ScenarioName + ' | ' + aSummary.Engine + ' | ' + IntToStr(aSummary.Iterations) +
     ' | ' + ToInvariantFloat(aSummary.MeanElapsedUs / 1000.0) + ' | ' +
+    ToInvariantFloat(aSummary.MedianElapsedUs / 1000.0) + ' | ' +
+    ToInvariantFloat(aSummary.P95ElapsedUs / 1000.0) + ' | ' +
+    ToInvariantFloat(aSummary.StdDevElapsedUs / 1000.0) + ' | ' +
     ToInvariantFloat(ElapsedUsToMs(aSummary.MinElapsedUs)) + ' | ' +
     ToInvariantFloat(ElapsedUsToMs(aSummary.MaxElapsedUs)) + ' | ' + ToInvariantFloat(aSummary.MeanVisited) +
     ' | ' + UIntToStr(aSummary.MinVisited) + ' | ' + UIntToStr(aSummary.MaxVisited) +
@@ -491,7 +771,8 @@ begin
 end;
 
 procedure WriteMarkdown(const aPath: string; const aRunTimestampUtc, aMachineName: string;
-  const aOptions: TBenchmarkOptions; const aSummaries: TArray<TScenarioSummary>);
+  const aOptions: TBenchmarkOptions; const aSummaries, aBaselineSummaries: TArray<TScenarioSummary>;
+  const aBaselineCsvPath: string);
 var
   lLines: TStringList;
   lIndex: Integer;
@@ -500,6 +781,8 @@ var
   lAutoSummary: TScenarioSummary;
   lNoBudgetSummary: TScenarioSummary;
   lBudgetSummary: TScenarioSummary;
+  lBaselineSummary: TScenarioSummary;
+  lCurrentSummary: TScenarioSummary;
   lValue: Double;
 begin
   lLines := TStringList.Create;
@@ -514,9 +797,10 @@ begin
 
     lLines.Add('## Scenario summary (means over measured iterations)');
     lLines.Add('');
-    lLines.Add('| Scenario | Engine | Iterations | Elapsed ms mean | Elapsed ms min | Elapsed ms max | ' +
-      'Visited mean | Visited min | Visited max | Rebuilds mean | Switches mean | Budget hits mean |');
-    lLines.Add('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+    lLines.Add('| Scenario | Engine | Iterations | Elapsed ms mean | Elapsed ms median | Elapsed ms p95 | ' +
+      'Elapsed ms stddev | Elapsed ms min | Elapsed ms max | Visited mean | Visited min | Visited max | ' +
+      'Rebuilds mean | Switches mean | Budget hits mean |');
+    lLines.Add('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
     for lIndex := 0 to High(aSummaries) do
       AppendSummaryRow(lLines, aSummaries[lIndex]);
     lLines.Add('');
@@ -554,6 +838,33 @@ begin
       lLines.Add('');
     end;
 
+    if (aBaselineCsvPath <> '') and (Length(aBaselineSummaries) > 0) then
+    begin
+      lLines.Add('## Baseline comparison (current vs reference)');
+      lLines.Add('');
+      lLines.Add('- Baseline CSV: `' + aBaselineCsvPath + '`');
+      lLines.Add('');
+      lLines.Add('| Scenario | Baseline elapsed ms mean | Current elapsed ms mean | Elapsed delta % | ' +
+        'Visited delta % | Rebuild delta % | Switch delta % |');
+      lLines.Add('| --- | --- | --- | --- | --- | --- | --- |');
+      for lIndex := 0 to High(aSummaries) do
+      begin
+        lCurrentSummary := aSummaries[lIndex];
+        if not FindSummary(aBaselineSummaries, lCurrentSummary.ScenarioName, lBaselineSummary) then
+          Continue;
+
+        lLines.Add('| ' + lCurrentSummary.ScenarioName +
+          ' | ' + ToInvariantFloat(lBaselineSummary.MeanElapsedUs / 1000.0) +
+          ' | ' + ToInvariantFloat(lCurrentSummary.MeanElapsedUs / 1000.0) +
+          ' | ' + ToSignedInvariantFloat(SafePercentDelta(lBaselineSummary.MeanElapsedUs, lCurrentSummary.MeanElapsedUs)) +
+          ' | ' + ToSignedInvariantFloat(SafePercentDelta(lBaselineSummary.MeanVisited, lCurrentSummary.MeanVisited)) +
+          ' | ' + ToSignedInvariantFloat(SafePercentDelta(lBaselineSummary.MeanRebuilds, lCurrentSummary.MeanRebuilds)) +
+          ' | ' + ToSignedInvariantFloat(SafePercentDelta(lBaselineSummary.MeanSwitches, lCurrentSummary.MeanSwitches)) +
+          ' |');
+      end;
+      lLines.Add('');
+    end;
+
     lLines.SaveToFile(aPath, TEncoding.UTF8);
   finally
     lLines.Free;
@@ -582,8 +893,39 @@ begin
   else
     aOptions.MdPath := ExpandFileName(aOptions.MdPath);
 
+  if aOptions.CompareCsvPath <> '' then
+    aOptions.CompareCsvPath := ExpandFileName(aOptions.CompareCsvPath);
+
   ForceDirectories(ExtractFilePath(aOptions.CsvPath));
   ForceDirectories(ExtractFilePath(aOptions.MdPath));
+end;
+
+procedure PrintBaselineComparison(const aCurrentSummaries, aBaselineSummaries: TArray<TScenarioSummary>;
+  const aBaselineCsvPath: string);
+var
+  lIndex: Integer;
+  lCurrentSummary: TScenarioSummary;
+  lBaselineSummary: TScenarioSummary;
+begin
+  Writeln('');
+  Writeln('Baseline deltas (current vs baseline):');
+  Writeln('  baseline=' + aBaselineCsvPath);
+  for lIndex := 0 to High(aCurrentSummaries) do
+  begin
+    lCurrentSummary := aCurrentSummaries[lIndex];
+    if not FindSummary(aBaselineSummaries, lCurrentSummary.ScenarioName, lBaselineSummary) then
+    begin
+      Writeln('  ' + lCurrentSummary.ScenarioName + ': missing from baseline, skipped.');
+      Continue;
+    end;
+
+    Writeln(Format('  %s: elapsedDeltaPct=%s visitedDeltaPct=%s rebuildDeltaPct=%s switchDeltaPct=%s',
+      [lCurrentSummary.ScenarioName,
+       ToSignedInvariantFloat(SafePercentDelta(lBaselineSummary.MeanElapsedUs, lCurrentSummary.MeanElapsedUs)),
+       ToSignedInvariantFloat(SafePercentDelta(lBaselineSummary.MeanVisited, lCurrentSummary.MeanVisited)),
+       ToSignedInvariantFloat(SafePercentDelta(lBaselineSummary.MeanRebuilds, lCurrentSummary.MeanRebuilds)),
+       ToSignedInvariantFloat(SafePercentDelta(lBaselineSummary.MeanSwitches, lCurrentSummary.MeanSwitches))]));
+  end;
 end;
 
 procedure RunBenchmarks(const aOptions: TBenchmarkOptions);
@@ -591,6 +933,7 @@ var
   lScenarios: TArray<TBenchmarkScenario>;
   lSamples: TList<TBenchmarkSample>;
   lSummaries: TArray<TScenarioSummary>;
+  lBaselineSummaries: TArray<TScenarioSummary>;
   lScenarioIndex: Integer;
   lIteration: Integer;
   lSample: TBenchmarkSample;
@@ -605,6 +948,12 @@ begin
   lMachineName := GetEnvironmentVariable('COMPUTERNAME');
   if lMachineName = '' then
     lMachineName := 'unknown-machine';
+
+  SetLength(lBaselineSummaries, 0);
+  if lOptions.CompareCsvPath <> '' then
+  begin
+    lBaselineSummaries := LoadSummariesFromCsv(lOptions.CompareCsvPath);
+  end;
 
   lScenarios := BuildScenarios;
   lSamples := TList<TBenchmarkSample>.Create;
@@ -632,20 +981,28 @@ begin
 
     lSummaries := BuildSummaries(lScenarios, lSamples);
     WriteCsv(lOptions.CsvPath, lRunTimestampUtc, lMachineName, lSamples);
-    WriteMarkdown(lOptions.MdPath, lRunTimestampUtc, lMachineName, lOptions, lSummaries);
+    WriteMarkdown(lOptions.MdPath, lRunTimestampUtc, lMachineName, lOptions, lSummaries, lBaselineSummaries,
+      lOptions.CompareCsvPath);
 
     Writeln('');
     Writeln('Benchmark summaries:');
     for lSummaryIndex := 0 to High(lSummaries) do
     begin
-      Writeln(Format('  %s: elapsedMeanMs=%s visitedMean=%s rebuildMean=%s switchMean=%s budgetHitsMean=%s',
+      Writeln(Format(
+        '  %s: elapsedMeanMs=%s elapsedMedianMs=%s elapsedP95Ms=%s elapsedStdDevMs=%s visitedMean=%s rebuildMean=%s switchMean=%s budgetHitsMean=%s',
         [lSummaries[lSummaryIndex].ScenarioName,
          ToInvariantFloat(lSummaries[lSummaryIndex].MeanElapsedUs / 1000.0),
+         ToInvariantFloat(lSummaries[lSummaryIndex].MedianElapsedUs / 1000.0),
+         ToInvariantFloat(lSummaries[lSummaryIndex].P95ElapsedUs / 1000.0),
+         ToInvariantFloat(lSummaries[lSummaryIndex].StdDevElapsedUs / 1000.0),
          ToInvariantFloat(lSummaries[lSummaryIndex].MeanVisited),
          ToInvariantFloat(lSummaries[lSummaryIndex].MeanRebuilds),
          ToInvariantFloat(lSummaries[lSummaryIndex].MeanSwitches),
          ToInvariantFloat(lSummaries[lSummaryIndex].MeanBudgetHits)]));
     end;
+
+    if Length(lBaselineSummaries) > 0 then
+      PrintBaselineComparison(lSummaries, lBaselineSummaries, lOptions.CompareCsvPath);
 
     Writeln('');
     Writeln('CSV report: ' + lOptions.CsvPath);

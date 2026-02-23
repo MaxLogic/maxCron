@@ -2,36 +2,12 @@
 Next task ID: T-085
 
 ## Summary
-Open tasks: 2 (In Progress: 0, Next Today: 2, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 83
+Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
+Done tasks: 85
 
 ## In Progress
 
 ## Next – Today
-
-### T-083 [OBS] Extend benchmark runner with percentile/dispersion statistics and compare mode
-Outcome: Extend the standalone benchmark runner to include median/p95/stddev summaries and an optional compare mode against a baseline CSV report for run-to-run regression tracking.
-Proof:
-- Command: `./build-delphi.sh benchmarks/maxCronBenchmarks.dproj -config release`
-- Expect: build succeeds.
-- Command: `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && benchmarks\maxCronBenchmarks.exe --iterations=9 --warmup=2 --out-dir=benchmarks\results"`
-- Expect: process exits 0 and summary includes median/p95/stddev metrics.
-- Command: `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && benchmarks\maxCronBenchmarks.exe --iterations=3 --warmup=0 --compare=benchmarks\results\maxcron-benchmarks-20260223-214451.csv --out-dir=benchmarks\results --quiet"`
-- Expect: process exits 0 and compare output includes baseline deltas.
-Touches: `benchmarks/maxCronBenchmarks.dpr`, `README.md`, `CHANGELOG.md`, `TASKS.md`
-Deps: T-082
-
-### T-084 [CI] Add structural performance gate script for benchmark CSV metrics
-Outcome: Add a repeatable gate script that evaluates benchmark CSV structural metrics (`events_visited`, `heap_rebuilds`, `switch_count`) against configurable thresholds, enabling stable perf regression checks independent of wall-clock variance.
-Proof:
-- Command: `./build-delphi.sh benchmarks/maxCronBenchmarks.dproj -config release`
-- Expect: build succeeds.
-- Command: `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && benchmarks\maxCronBenchmarks.exe --iterations=5 --warmup=1 --out-dir=benchmarks\results --quiet"`
-- Expect: benchmark CSV is generated.
-- Command: `./scripts/check-benchmark-metrics.sh benchmarks/results/maxcron-benchmarks-*.csv`
-- Expect: script exits 0 when thresholds are met and exits non-zero when violated.
-Touches: `scripts/check-benchmark-metrics.sh`, `README.md`, `CHANGELOG.md`, `TASKS.md`
-Deps: T-083
 
 ## Next – This Week
 
@@ -43,6 +19,18 @@ Deps: T-083
 
 
 ## Done
+
+### T-084 [CI] Add structural performance gate script for benchmark CSV metrics
+Outcome: Added a repeatable `scripts/check-benchmark-metrics.sh` gate that evaluates benchmark CSV structural ratios (`events_visited`, `heap_rebuilds`, `switch_count`) against configurable thresholds for stable perf-regression checks independent of wall-clock timing.
+Proof: `./build-delphi.sh benchmarks/maxCronBenchmarks.dproj -config release` succeeds; `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && benchmarks\maxCronBenchmarks.exe --iterations=5 --warmup=1 --out-dir=benchmarks\results --quiet"` succeeds and generates `benchmarks/results/maxcron-benchmarks-20260223-232542.csv`; `./scripts/check-benchmark-metrics.sh benchmarks/results/maxcron-benchmarks-*.csv` exits `0`; strict-threshold run `MAXCRON_GATE_SPARSE_HEAP_VISITED_RATIO=0.005 ./scripts/check-benchmark-metrics.sh benchmarks/results/maxcron-benchmarks-20260223-232542.csv` exits non-zero (`EXIT_CODE:1`).
+Touches: `scripts/check-benchmark-metrics.sh`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-083
+
+### T-083 [OBS] Extend benchmark runner with percentile/dispersion statistics and compare mode
+Outcome: Extended benchmark summaries with elapsed median/p95/stddev and added `--compare=<baseline.csv>` mode that loads baseline CSV metrics and prints run-to-run deltas (console + Markdown).
+Proof: `./build-delphi.sh benchmarks/maxCronBenchmarks.dproj -config release` succeeds; `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && benchmarks\maxCronBenchmarks.exe --iterations=9 --warmup=2 --out-dir=benchmarks\results"` succeeds and summary output includes `elapsedMedianMs`, `elapsedP95Ms`, `elapsedStdDevMs` (`maxcron-benchmarks-20260223-232520.*`); `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && benchmarks\maxCronBenchmarks.exe --iterations=3 --warmup=0 --compare=benchmarks\results\maxcron-benchmarks-20260223-214451.csv --out-dir=benchmarks\results --quiet"` succeeds and prints `Baseline deltas` (`maxcron-benchmarks-20260223-232534.*`).
+Touches: `benchmarks/maxCronBenchmarks.dpr`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-082
 
 ### T-082 [PERF] Add guarded fast-promote path for sparse auto workloads
 Outcome: Added a conservative fast-promote branch in auto mode so strongly sparse/high-cardinality low-churn phases can transition directly to heap-stable, while preserving hysteresis, budget guardrails, and churn/perf-based demotion paths.

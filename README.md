@@ -249,6 +249,12 @@ Direct Windows invocation:
 benchmarks\maxCronBenchmarks.exe --iterations=9 --warmup=2 --out-dir=benchmarks\results
 ```
 
+Compare a fresh run against a baseline CSV (run-to-run deltas in console + Markdown):
+
+```cmd
+benchmarks\maxCronBenchmarks.exe --iterations=3 --warmup=0 --compare=benchmarks\results\maxcron-benchmarks-20260223-214451.csv --out-dir=benchmarks\results --quiet
+```
+
 Output files:
 
 - `maxcron-benchmarks-*.csv` (raw per-iteration metrics)
@@ -266,7 +272,30 @@ Interpretation rules:
 
 - Sparse workloads: expect `heap` and `auto` to reduce candidate visits versus `scan`.
 - Adversarial churn: expect `budget` mode to reduce switch/rebuild/visited metrics versus no-budget mode.
+- Timing summaries include mean/median/p95/stddev to expose both central tendency and jitter.
 - Elapsed time is environment-sensitive; use it with the structural work metrics (`visited`, `rebuilds`, `switches`) for robust conclusions.
+
+### Structural perf gate (stable CI signal)
+
+Use structural ratios from benchmark CSVs to gate regressions without relying on wall-clock timing:
+
+```bash
+./scripts/check-benchmark-metrics.sh benchmarks/results/maxcron-benchmarks-*.csv
+```
+
+The script checks:
+
+- sparse high-N `heap/scan` visited ratio
+- sparse high-N `auto/scan` visited ratio
+- adversarial `budget/no-budget` switch/rebuild/visited ratios
+
+Thresholds are configurable by env vars:
+
+- `MAXCRON_GATE_SPARSE_HEAP_VISITED_RATIO` (default `0.25`)
+- `MAXCRON_GATE_SPARSE_AUTO_VISITED_RATIO` (default `0.25`)
+- `MAXCRON_GATE_BUDGET_SWITCH_RATIO` (default `1.05`)
+- `MAXCRON_GATE_BUDGET_REBUILD_RATIO` (default `1.05`)
+- `MAXCRON_GATE_BUDGET_VISITED_RATIO` (default `1.05`)
 
 ### Reference benchmark run (this machine)
 
