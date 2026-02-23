@@ -109,6 +109,7 @@ Engine guidance:
 - Promote to heap-stable only if measured heap tick cost beats scan baseline by margin.
 - Fall back to scan when due density rises, churn rises, event count drops, or heap stops showing benefit.
 - Apply hold counters and cooldown to avoid scan/heap thrashing.
+- Apply trial-failure re-entry backoff so repeated failed heap trials cannot immediately retrigger.
 - Require minimum scan/heap performance samples before ratio-based promote/demote checks.
 - Increase cooldown adaptively when rapid consecutive switches are detected.
 - If explicit `scan`, `heap`, or `shadow` is selected, auto-controller logic is bypassed.
@@ -129,6 +130,7 @@ Engine guidance:
 | `MAXCRON_AUTO_EXIT_HOLD` | `3` | Consecutive exit-candidate ticks required before leaving heap-stable | clamped to `[1..1024]` |
 | `MAXCRON_AUTO_TRIAL_TICKS` | `32` | Heap trial length before promote/fallback decision | clamped to `[1..4096]` |
 | `MAXCRON_AUTO_COOLDOWN` | `128` | Cooldown ticks after each engine switch | clamped to `[0..8192]` |
+| `MAXCRON_AUTO_TRIAL_FAIL_COOLDOWN` | `16` | Base re-entry backoff ticks after failed heap trials (applies exponentially for consecutive failures; `0` disables) | clamped to `[0..8192]` |
 | `MAXCRON_AUTO_PROMOTE_RATIO` | `0.85` | Heap promotion threshold (`heap_us <= scan_us * ratio`) | clamped to `[0.25..4.0]` |
 | `MAXCRON_AUTO_DEMOTE_RATIO` | `1.05` | Heap demotion threshold (`heap_us > scan_us * ratio`) | clamped to `[0.25..4.0]`, then normalized to `> PROMOTE_RATIO` |
 | `MAXCRON_AUTO_DIAG_LOG_INTERVAL` | `0` | Emit periodic auto diagnostics logs every N auto ticks (`0` = disabled) | clamped to `[0..1000000]` |
@@ -145,7 +147,7 @@ Parsing rules:
 - Sparse due, high cardinality, low churn: lower `ENTER_EVENTS` (for example `128-256`), keep `ENTER_DUE_DENSITY` conservative (`0.15-0.30`), and keep `TRIAL_TICKS` moderate (`16-48`) to enter heap sooner.
 - Mixed workload with periodic bursts: keep defaults first, then tune `ENTER_HOLD`/`EXIT_HOLD` upward (`3-6`) if switches are too frequent.
 - Dense-due bursts (many events due each tick): lower `EXIT_DUE_DENSITY` so auto mode leaves heap sooner during burst windows.
-- Churn-heavy (frequent stop/run or plan edits): raise `ENTER_EVENTS`, raise `ENTER_HOLD`, and optionally raise `COOLDOWN` to avoid frequent heap re-entry.
+- Churn-heavy (frequent stop/run or plan edits): raise `ENTER_EVENTS`, raise `ENTER_HOLD`, and tune `TRIAL_FAIL_COOLDOWN` upward if failed heap trials retry too aggressively.
 
 ### Oscillation troubleshooting
 
@@ -154,6 +156,7 @@ If we observe scan/heap oscillation in logs or profiling:
 - Increase hysteresis gap: lower `PROMOTE_RATIO` and/or raise `DEMOTE_RATIO`.
 - Increase hold counters (`ENTER_HOLD`, `EXIT_HOLD`) so one short burst does not trigger flips.
 - Increase `COOLDOWN` so post-switch settling time is longer.
+- Increase `TRIAL_FAIL_COOLDOWN` so repeated failed heap trials re-enter less frequently.
 - If churn remains continuously high, pin to `scan` explicitly (`MAXCRON_ENGINE=scan`) for that deployment.
 
 ### Auto rollout checklist

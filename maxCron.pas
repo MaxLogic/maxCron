@@ -186,6 +186,8 @@ Type
     HeapTickUsEwma: Double;
     ScanBaselineUs: Double;
     CooldownTicks: Integer;
+    TrialFailLevel: Integer;
+    TrialFailCooldownTicks: Integer;
     SwitchBurstLevel: Integer;
     ScanSampleTicks: Integer;
     HeapSampleTicks: Integer;
@@ -211,6 +213,7 @@ Type
         ExitHoldTicks: Integer;
         TrialTicks: Integer;
         CooldownTicks: Integer;
+        TrialFailCooldownBaseTicks: Integer;
         PromoteRatio: Double;
         DemoteRatio: Double;
         DiagLogIntervalTicks: Integer;
@@ -244,6 +247,8 @@ Type
     fAutoExitHold: Integer;
     fAutoTrialTicksRemaining: Integer;
     fAutoCooldownTicks: Integer;
+    fAutoTrialFailLevel: Integer;
+    fAutoTrialFailCooldownTicks: Integer;
     fAutoSwitchCount: UInt64;
     fAutoEventCountEwma: Double;
     fAutoDueDensityEwma: Double;
@@ -286,6 +291,7 @@ Type
     function SchedulerEngineToText(const aEngine: TSchedulerEngine): string;
     function AutoStateToText(const aState: TAutoSchedulerState): string;
     function UpdateEwma(const aCurrent, aSample, aAlpha: Double): Double;
+    procedure ApplyAutoTrialFailureBackoff(const aBaseCooldownTicks: Integer);
     procedure SwitchAutoEffectiveEngine(const aEngine: TSchedulerEngine; const aReason: string);
     procedure EvaluateAutoController(const aEngineUsed: TSchedulerEngine; const aEventCount, aDueCount: Integer;
       const aElapsedMicroseconds: Int64);
@@ -3530,6 +3536,8 @@ begin
   fAutoExitHold := 0;
   fAutoTrialTicksRemaining := 0;
   fAutoCooldownTicks := 0;
+  fAutoTrialFailLevel := 0;
+  fAutoTrialFailCooldownTicks := 0;
   fAutoSwitchCount := 0;
   fAutoEventCountEwma := 0;
   fAutoDueDensityEwma := 0;
@@ -3621,6 +3629,7 @@ const
   cDefaultExitHoldTicks = 3;
   cDefaultTrialTicks = 32;
   cDefaultCooldownTicks = 128;
+  cDefaultTrialFailCooldownBaseTicks = 16;
   cDefaultPromoteRatio = 0.85;
   cDefaultDemoteRatio = 1.05;
   cDefaultDiagLogIntervalTicks = 0;
@@ -3639,6 +3648,8 @@ const
   cMaxTrialTicks = 4096;
   cMinCooldownTicks = 0;
   cMaxCooldownTicks = 8192;
+  cMinTrialFailCooldownBaseTicks = 0;
+  cMaxTrialFailCooldownBaseTicks = 8192;
   cMinRatio = 0.25;
   cMaxRatio = 4.0;
   cMinRatioGap = 0.01;
@@ -3659,6 +3670,7 @@ begin
   fAutoConfig.ExitHoldTicks := cDefaultExitHoldTicks;
   fAutoConfig.TrialTicks := cDefaultTrialTicks;
   fAutoConfig.CooldownTicks := cDefaultCooldownTicks;
+  fAutoConfig.TrialFailCooldownBaseTicks := cDefaultTrialFailCooldownBaseTicks;
   fAutoConfig.PromoteRatio := cDefaultPromoteRatio;
   fAutoConfig.DemoteRatio := cDefaultDemoteRatio;
   fAutoConfig.DiagLogIntervalTicks := cDefaultDiagLogIntervalTicks;
@@ -3683,6 +3695,9 @@ begin
     fAutoConfig.TrialTicks := ClampAutoInt(lIntValue, cMinTrialTicks, cMaxTrialTicks);
   if TryReadAutoIntEnv('MAXCRON_AUTO_COOLDOWN', lIntValue) then
     fAutoConfig.CooldownTicks := ClampAutoInt(lIntValue, cMinCooldownTicks, cMaxCooldownTicks);
+  if TryReadAutoIntEnv('MAXCRON_AUTO_TRIAL_FAIL_COOLDOWN', lIntValue) then
+    fAutoConfig.TrialFailCooldownBaseTicks :=
+      ClampAutoInt(lIntValue, cMinTrialFailCooldownBaseTicks, cMaxTrialFailCooldownBaseTicks);
   if TryReadAutoFloatEnv('MAXCRON_AUTO_PROMOTE_RATIO', lDoubleValue) then
     fAutoConfig.PromoteRatio := ClampAutoFloat(lDoubleValue, cMinRatio, cMaxRatio);
   if TryReadAutoFloatEnv('MAXCRON_AUTO_DEMOTE_RATIO', lDoubleValue) then
@@ -3726,6 +3741,8 @@ begin
     fAutoExitHold := 0;
     fAutoTrialTicksRemaining := 0;
     fAutoCooldownTicks := 0;
+    fAutoTrialFailLevel := 0;
+    fAutoTrialFailCooldownTicks := 0;
     fAutoSwitchCount := 0;
     fAutoEventCountEwma := 0;
     fAutoDueDensityEwma := 0;
@@ -3789,6 +3806,29 @@ begin
   Result := (aCurrent * (1.0 - aAlpha)) + (aSample * aAlpha);
 end;
 
+procedure TmaxCron.ApplyAutoTrialFailureBackoff(const aBaseCooldownTicks: Integer);
+const
+  cAutoMaxTrialFailureLevel = 6;
+  cAutoMaxBackoffCooldown = 8192;
+var
+  lCooldownTicks: Int64;
+begin
+  if aBaseCooldownTicks <= 0 then
+    Exit;
+
+  if fAutoTrialFailLevel < cAutoMaxTrialFailureLevel then
+    Inc(fAutoTrialFailLevel);
+
+  lCooldownTicks := aBaseCooldownTicks;
+  if fAutoTrialFailLevel > 1 then
+    lCooldownTicks := lCooldownTicks shl (fAutoTrialFailLevel - 1);
+  if lCooldownTicks > cAutoMaxBackoffCooldown then
+    lCooldownTicks := cAutoMaxBackoffCooldown;
+
+  if fAutoTrialFailCooldownTicks < lCooldownTicks then
+    fAutoTrialFailCooldownTicks := Integer(lCooldownTicks);
+end;
+
 procedure TmaxCron.SwitchAutoEffectiveEngine(const aEngine: TSchedulerEngine; const aReason: string);
 const
   cAutoMaxSwitchBurstLevel = 4;
@@ -3839,7 +3879,7 @@ const
   cAutoMinPerfSamples = 8;
   cAutoDiagLogFormat =
     'maxCron auto diag engineUsed=%s effective=%s state=%s events=%s due=%s dueEwma=%s dirtyEwma=%s scanUs=%s ' +
-    'heapUs=%s baselineUs=%s switches=%s cooldown=%s burst=%s reason=%s';
+    'heapUs=%s baselineUs=%s switches=%s cooldown=%s trialFailLevel=%s trialFailCooldown=%s burst=%s reason=%s';
 var
   lConfig: TAutoControllerConfig;
   lDueDensitySample: Double;
@@ -3898,6 +3938,8 @@ begin
 
     if fAutoCooldownTicks > 0 then
       Dec(fAutoCooldownTicks);
+    if fAutoTrialFailCooldownTicks > 0 then
+      Dec(fAutoTrialFailCooldownTicks);
 
     if lConfig.DiagLogIntervalTicks > 0 then
     begin
@@ -3921,6 +3963,8 @@ begin
             FloatToStrF(fAutoScanBaselineUs, ffFixed, 18, 2, lFormatSettings),
             IntToStr(Int64(fAutoSwitchCount)),
             IntToStr(fAutoCooldownTicks),
+            IntToStr(fAutoTrialFailLevel),
+            IntToStr(fAutoTrialFailCooldownTicks),
             IntToStr(fAutoSwitchBurstLevel),
             fAutoLastSwitchReason
           ]);
@@ -3937,7 +3981,8 @@ begin
             (fAutoEventCountEwma >= lConfig.EnterMinEvents) and
             (fAutoDueDensityEwma <= lConfig.EnterMaxDueDensity) and
             (fAutoDirtyRateEwma <= lConfig.EnterMaxDirtyRate) and
-            (fAutoCooldownTicks = 0);
+            (fAutoCooldownTicks = 0) and
+            (fAutoTrialFailCooldownTicks = 0);
 
           if lEnterCandidate then
             Inc(fAutoEnterHold)
@@ -3964,6 +4009,7 @@ begin
 
           if lExitCandidate then
           begin
+            ApplyAutoTrialFailureBackoff(lConfig.TrialFailCooldownBaseTicks);
             fAutoEnterHold := 0;
             fAutoExitHold := 0;
             fAutoTrialTicksRemaining := 0;
@@ -3992,7 +4038,10 @@ begin
             begin
               fAutoState := TAutoSchedulerState.asHeapStable;
               fAutoExitHold := 0;
+              fAutoTrialFailLevel := 0;
+              fAutoTrialFailCooldownTicks := 0;
             end else begin
+              ApplyAutoTrialFailureBackoff(lConfig.TrialFailCooldownBaseTicks);
               fAutoState := TAutoSchedulerState.asScanStable;
               SwitchAutoEffectiveEngine(TSchedulerEngine.seScan, 'heap-trial-fallback-perf');
             end;
@@ -4721,6 +4770,8 @@ begin
       aDiagnostics.HeapTickUsEwma := fAutoHeapTickUsEwma;
       aDiagnostics.ScanBaselineUs := fAutoScanBaselineUs;
       aDiagnostics.CooldownTicks := fAutoCooldownTicks;
+      aDiagnostics.TrialFailLevel := fAutoTrialFailLevel;
+      aDiagnostics.TrialFailCooldownTicks := fAutoTrialFailCooldownTicks;
       aDiagnostics.SwitchBurstLevel := fAutoSwitchBurstLevel;
       aDiagnostics.ScanSampleTicks := fAutoScanSampleTicks;
       aDiagnostics.HeapSampleTicks := fAutoHeapSampleTicks;

@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-069
+Next task ID: T-072
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 69
+Done tasks: 72
 
 ## In Progress
 
@@ -19,6 +19,24 @@ Done tasks: 69
 
 
 ## Done
+
+### T-071 [DOC] Publish trial-failure backoff tuning guidance
+Outcome: Documented `MAXCRON_AUTO_TRIAL_FAIL_COOLDOWN` and updated auto-mode tuning/troubleshooting guidance for repeated failed heap trials in mixed burst/churn workloads.
+Proof: `rg -n "MAXCRON_AUTO_TRIAL_FAIL_COOLDOWN|trial-failure|re-entry backoff" README.md` returns the new knob/policy guidance lines; `./build-delphi.sh tests/maxCronStressTests.dproj -config release` succeeds.
+Touches: `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-069
+
+### T-070 [OBS] Expose trial-failure backoff state in auto diagnostics
+Outcome: Extended `TMaxCronAutoDiagnostics` and periodic auto diagnostics log payload with `TrialFailLevel` and `TrialFailCooldownTicks` for runtime visibility of re-entry backoff state.
+Proof: `MAXCRON_ENGINE=auto MAXCRON_AUTO_DIAG_LOG_INTERVAL=10 ./build-and-run-tests.sh -cm:Quiet` passes (Stress 11/11, Core 125/125, VCL 3/3); targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_DiagnosticsSnapshot_ReportsControllerState"` passes (1/1).
+Touches: `maxCron.pas`, `tests/unit/TestHeavyStressMixed.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-069
+
+### T-069 [PERF] Add adaptive trial-failure backoff guard for auto scheduler
+Outcome: Added adaptive trial-failure-specific heap re-entry backoff in auto mode, including bounded exponential cooldown growth across consecutive failed heap trials and reset on successful heap stabilization.
+Proof: `MAXCRON_ENGINE=auto ./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 11/11, Core 125/125, VCL 3/3); targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_TrialFailureBackoff_BoundsRapidRetrials"` passes (1/1).
+Touches: `maxCron.pas`, `tests/unit/TestHeavyStressMixed.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-066, T-067
 
 ### T-068 [OPS] Add opt-in periodic auto-state diagnostics logging
 Outcome: Added optional periodic auto-controller diagnostics logging via `MAXCRON_AUTO_DIAG_LOG_INTERVAL` (default off), with bounded parsing/clamping and low-overhead runtime behavior when disabled.
