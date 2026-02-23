@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-075
+Next task ID: T-077
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 75
+Done tasks: 77
 
 ## In Progress
 
@@ -19,6 +19,18 @@ Done tasks: 75
 
 
 ## Done
+
+### T-076 [DOC] Publish benchmark execution guidance for adaptive scenarios
+Outcome: Expanded README benchmark guidance with runnable commands and expected outcomes covering scan-vs-heap, sparse high-N auto-vs-scan, and adversarial auto budget/no-budget scenarios.
+Proof: `rg -n "EngineBenchmark_(ScanVsHeap_HighN|AutoVsScan_SparseHighN|AutoSwitchBudget_AdversarialChurn)" README.md` returns benchmark guidance/commands; `./build-delphi.sh tests/maxCronStressTests.dproj -config release` succeeds.
+Touches: `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-075
+
+### T-075 [TEST] Add adaptive-mode benchmark scenarios for sparse and adversarial workloads
+Outcome: Added stress benchmark scenarios that prove adaptive scheduling benefits across distinct workload shapes: sparse high-cardinality (`auto` vs `scan`) and adversarial oscillation pressure (switch-budget disabled vs enabled), with assertions on candidate-work/switch/rebuild reduction envelopes.
+Proof: `MAXCRON_ENGINE=auto ./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 14/14, Core 125/125, VCL 3/3); `MAXCRON_ENGINE=auto MAXCRON_AUTO_DIAG_LOG_INTERVAL=10 ./build-and-run-tests.sh -cm:Quiet` passes (Stress 14/14, Core 125/125, VCL 3/3); `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineBenchmark_ScanVsHeap_HighN"` passes (1/1); `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineBenchmark_AutoVsScan_SparseHighN"` passes (1/1); `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineBenchmark_AutoSwitchBudget_AdversarialChurn"` passes (1/1).
+Touches: `tests/unit/TestHeavyStressMixed.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-072, T-073, T-074
 
 ### T-074 [DOC] Publish switch-budget limiter tuning guidance
 Outcome: Documented rolling switch-budget limiter knobs and tuning guidance for adversarial oscillation workloads (`SWITCH_BUDGET_WINDOW`, `SWITCH_BUDGET_MAX`, `SWITCH_BUDGET_COOLDOWN`), including troubleshooting updates.

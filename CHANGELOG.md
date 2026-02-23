@@ -5,6 +5,7 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Added benchmark scenarios for adaptive mode: sparse high-N (`auto` vs `scan`) and adversarial oscillation (`auto` without/with switch-budget limiter) in stress coverage. (T-075)
 - Added rolling switch-budget controls (`MAXCRON_AUTO_SWITCH_BUDGET_WINDOW`, `MAXCRON_AUTO_SWITCH_BUDGET_MAX`, `MAXCRON_AUTO_SWITCH_BUDGET_COOLDOWN`) to hard-bound adaptive scan/heap switch rate under adversarial oscillation workloads. (T-072)
 - Added adversarial-churn stress coverage validating switch-budget engagement and bounded switch counts in auto mode. (T-072)
 - Added adaptive heap-trial failure re-entry backoff (`MAXCRON_AUTO_TRIAL_FAIL_COOLDOWN`) so repeated failed heap trials are damped under low cooldown tuning. (T-069)
@@ -38,6 +39,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added stress/robust tests for heap-mode execution, shadow parity churn coverage, and high-N scan-vs-heap benchmark assertions. (T-058, T-059)
 
 ### Changed
+- Expanded README benchmark guidance with runnable benchmark commands and expected outcomes across sparse and oscillation scenarios. (T-076)
 - Extended auto diagnostics snapshot/log payload with switch-budget counters (`SwitchBudgetHits`, `SwitchBudgetCooldownTicks`, `SwitchBudgetRecentSwitches`) for runtime budget-tuning visibility. (T-073)
 - Extended auto diagnostics snapshot/log payload with trial-failure backoff state (`TrialFailLevel`, `TrialFailCooldownTicks`) for runtime tuning visibility. (T-070)
 - Expanded README with an auto-mode operations/tuning playbook (knob reference, archetype guidance, oscillation troubleshooting, rollout checklist). (T-063)

@@ -208,6 +208,23 @@ High-N benchmark coverage (`TestHeavyStressMixed.EngineBenchmark_ScanVsHeap_High
 
 This benchmark demonstrates the expected behavior: heap mode keeps tick work growth bounded by due events (`k`) instead of total events (`n`) on sparse schedules.
 
+Additional benchmark scenarios (stress runner):
+
+- `TestHeavyStressMixed.EngineBenchmark_AutoVsScan_SparseHighN`
+  - Scenario: sparse high-cardinality workload (`auto` vs `scan`).
+  - Expected: `auto` should reduce candidate work significantly versus `scan` after adaptive promotion.
+- `TestHeavyStressMixed.EngineBenchmark_AutoSwitchBudget_AdversarialChurn`
+  - Scenario: adversarial oscillation pressure (`auto` with budget disabled vs enabled).
+  - Expected: budget-enabled run should show lower switch count, fewer rebuilds, and lower candidate work; elapsed time should improve or remain competitive.
+
+Run benchmark scenarios directly:
+
+```cmd
+tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineBenchmark_ScanVsHeap_HighN
+tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineBenchmark_AutoVsScan_SparseHighN
+tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineBenchmark_AutoSwitchBudget_AdversarialChurn
+```
+
 ## How a job is executed (per-event)
 
 Each event can override how its callback is invoked:
