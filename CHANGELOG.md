@@ -40,6 +40,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added stress/robust tests for heap-mode execution, shadow parity churn coverage, and high-N scan-vs-heap benchmark assertions. (T-058, T-059)
 
 ### Changed
+- Added a documented reference benchmark run (PAWEL3, `2026-02-23`) with concrete sparse/adversarial metrics and conclusions, plus a concise production mode-selection guide for `scan`/`heap`/`auto`/`shadow`. (T-079)
 - Expanded benchmark documentation with standalone runner usage (`build-and-run-benchmarks.*`), output artifact format, and interpretation guidance for sparse high-N and adversarial churn scenarios. (T-078)
 - Expanded README benchmark guidance with runnable benchmark commands and expected outcomes across sparse and oscillation scenarios. (T-076)
 - Extended auto diagnostics snapshot/log payload with switch-budget counters (`SwitchBudgetHits`, `SwitchBudgetCooldownTicks`, `SwitchBudgetRecentSwitches`) for runtime budget-tuning visibility. (T-073)

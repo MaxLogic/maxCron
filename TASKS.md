@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-079
+Next task ID: T-080
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 79
+Done tasks: 80
 
 ## In Progress
 
@@ -19,6 +19,12 @@ Done tasks: 79
 
 
 ## Done
+
+### T-079 [DOC] Publish reference benchmark results and mode-selection guide
+Outcome: Added a concrete standalone benchmark reference run (this machine) with measured sparse/adversarial metrics and conclusions, and added a concise production mode-selection guide for `scan`/`heap`/`auto`/`shadow`.
+Proof: `rg -n "Mode quick guide|Reference benchmark run \\(this machine\\)|maxcron-benchmarks-20260223-214451\\.md|Conclusion from this run" README.md` returns the new sections; `rg -n "reference benchmark run|mode-selection guide" CHANGELOG.md` returns the changelog note.
+Touches: `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-078
 
 ### T-078 [DOC] Document benchmark runner usage and result interpretation
 Outcome: Documented standalone benchmark runner usage, output artifact format (CSV raw + Markdown summary), and interpretation guidance for sparse high-N and adversarial churn scenarios.

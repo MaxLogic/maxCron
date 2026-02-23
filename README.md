@@ -103,6 +103,15 @@ Engine guidance:
 - Use `shadow` only for CI/test verification because it intentionally does extra work each tick.
 - Use `auto` when workload shape is not stable and we want runtime adaptation without hard-coding one engine.
 
+Mode quick guide (production):
+
+| Mode | Best fit | Caveat |
+| --- | --- | --- |
+| `scan` | Small/medium schedules, churn-heavy workloads, simple deterministic baseline | Work scales with total event count (`O(n)` per tick) |
+| `heap` | High-cardinality sparse-due workloads where few events are due each tick | Extra maintenance/rebuild work under frequent mutations |
+| `auto` | Mixed or changing workloads where we want adaptive behavior at runtime | Requires observability/tuning when workload oscillates |
+| `shadow` | CI and correctness validation of scan-vs-heap parity | Intentionally slower; not for normal production runtime |
+
 `auto` mode policy (internal):
 
 - Enter heap trial when event-count EMA is high, due-density EMA stays low, and mutation/dirty EMA stays low.
@@ -257,6 +266,35 @@ Interpretation rules:
 - Sparse workloads: expect `heap` and `auto` to reduce candidate visits versus `scan`.
 - Adversarial churn: expect `budget` mode to reduce switch/rebuild/visited metrics versus no-budget mode.
 - Elapsed time is environment-sensitive; use it with the structural work metrics (`visited`, `rebuilds`, `switches`) for robust conclusions.
+
+### Reference benchmark run (this machine)
+
+Reference command used on `PAWEL3` (`2026-02-23`, `15` iterations, `2` warmup):
+
+```cmd
+benchmarks\maxCronBenchmarks.exe --iterations=15 --warmup=2 --out-dir=benchmarks\results --quiet
+```
+
+Reference report: `benchmarks/results/maxcron-benchmarks-20260223-214451.md`
+
+Key results:
+
+| Comparison | Result |
+| --- | --- |
+| Sparse high-N (`heap` vs `scan`) visited reduction | `98.96%` |
+| Sparse high-N (`heap` vs `scan`) elapsed speedup | `141.69x` |
+| Sparse high-N (`auto` vs `scan`) visited reduction | `97.92%` |
+| Sparse high-N (`auto` vs `scan`) elapsed speedup | `47.10x` |
+| Adversarial churn (`budget` vs `no-budget`) switch reduction | `96.67%` |
+| Adversarial churn (`budget` vs `no-budget`) rebuild reduction | `96.67%` |
+| Adversarial churn (`budget` vs `no-budget`) visited reduction | `32.22%` |
+| Adversarial churn (`budget` vs `no-budget`) elapsed speedup | `1.04x` |
+
+Conclusion from this run:
+
+- `heap` is the strongest choice for sparse high-cardinality workloads.
+- `auto` also delivers strong sparse-workload gains while preserving adaptive behavior.
+- Switch-budget controls materially reduce oscillation overhead under adversarial churn and can improve elapsed time.
 
 ## How a job is executed (per-event)
 
