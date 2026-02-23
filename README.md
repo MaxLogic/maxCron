@@ -109,6 +109,8 @@ Engine guidance:
 - Promote to heap-stable only if measured heap tick cost beats scan baseline by margin.
 - Fall back to scan when churn rises, event count drops, or heap stops showing benefit.
 - Apply hold counters and cooldown to avoid scan/heap thrashing.
+- Require minimum scan/heap performance samples before ratio-based promote/demote checks.
+- Increase cooldown adaptively when rapid consecutive switches are detected.
 - If explicit `scan`, `heap`, or `shadow` is selected, auto-controller logic is bypassed.
 
 ### Auto tuning knobs (`MAXCRON_AUTO_*`)

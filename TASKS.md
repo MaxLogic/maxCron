@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-064
+Next task ID: T-065
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 64
+Done tasks: 65
 
 ## In Progress
 
@@ -19,6 +19,12 @@ Done tasks: 64
 
 
 ## Done
+
+### T-064 [PERF] Add adaptive anti-oscillation backoff for auto scheduler switching
+Outcome: Hardened `MAXCRON_ENGINE=auto` with adaptive switch-cooldown backoff plus minimum performance-sample guards (trial-aware) to reduce scan/heap flip-flop while preserving adaptive transitions under mixed churn.
+Proof: `MAXCRON_ENGINE=auto ./build-and-run-tests.sh -cm:Quiet` passes (Stress 7/7, Core 125/125, VCL 3/3); targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_OscillationBackoff_BoundsSwitchRate"` passes (1/1).
+Touches: `maxCron.pas`, `tests/unit/TestHeavyStressMixed.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-061, T-062
 
 ### T-063 [DOC] Publish auto engine operations and tuning playbook
 Outcome: Expanded README with an adaptive-mode operations playbook covering `MAXCRON_AUTO_*` knobs, workload archetypes, oscillation troubleshooting, and a rollout checklist (scan baseline -> auto canary -> production).

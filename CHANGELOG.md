@@ -5,6 +5,7 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Added adaptive auto-switch backoff and minimum performance-sample guards to reduce scan/heap flip-flop under mixed churn workloads. (T-064)
 - Added validated `MAXCRON_AUTO_*` runtime tuning knobs for adaptive scheduler thresholds (events/churn/hold/trial/cooldown/promote/demote), with strict parsing and safe bounded fallback behavior. (T-061)
 - Added adaptive-mode stress regressions for custom-threshold behavior and concurrent scan/heap switching with due-callback count invariants. (T-061, T-062)
 - Added adaptive scheduler mode (`MAXCRON_ENGINE=auto`) with hysteresis/cooldown switching between scan and heap under mixed workloads. (T-060)

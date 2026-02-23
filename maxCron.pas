@@ -227,6 +227,10 @@ Type
     fAutoScanTickUsEwma: Double;
     fAutoHeapTickUsEwma: Double;
     fAutoScanBaselineUs: Double;
+    fAutoScanSampleTicks: Integer;
+    fAutoHeapSampleTicks: Integer;
+    fAutoTicksSinceSwitch: Integer;
+    fAutoSwitchBurstLevel: Integer;
     fAutoConfig: TAutoControllerConfig;
     fTickEventsVisited: UInt64;
     fHeapRebuildCount: UInt64;
@@ -3505,6 +3509,10 @@ begin
   fAutoScanTickUsEwma := 0;
   fAutoHeapTickUsEwma := 0;
   fAutoScanBaselineUs := 0;
+  fAutoScanSampleTicks := 0;
+  fAutoHeapSampleTicks := 0;
+  fAutoTicksSinceSwitch := 0;
+  fAutoSwitchBurstLevel := 0;
   fTickEventsVisited := 0;
   fHeapRebuildCount := 0;
   ConfigureSchedulerEngine;
@@ -3676,6 +3684,10 @@ begin
     fAutoScanTickUsEwma := 0;
     fAutoHeapTickUsEwma := 0;
     fAutoScanBaselineUs := 0;
+    fAutoScanSampleTicks := 0;
+    fAutoHeapSampleTicks := 0;
+    fAutoTicksSinceSwitch := 0;
+    fAutoSwitchBurstLevel := 0;
     if fSchedulerEngine = TSchedulerEngine.seAuto then
       fAutoState := TAutoSchedulerState.asScanStable;
   finally
@@ -3724,25 +3736,56 @@ begin
 end;
 
 procedure TmaxCron.SwitchAutoEffectiveEngine(const aEngine: TSchedulerEngine);
+const
+  cAutoMaxSwitchBurstLevel = 4;
+  cAutoMaxBackoffCooldown = 8192;
+var
+  lBaseCooldown: Integer;
+  lCooldownTicks: Integer;
+  lFastSwitchThreshold: Integer;
 begin
   if aEngine = TSchedulerEngine.seAuto then
     Exit;
   if fAutoEffectiveEngine = aEngine then
     Exit;
+
+  lBaseCooldown := fAutoConfig.CooldownTicks;
+  if lBaseCooldown < 0 then
+    lBaseCooldown := 0;
+
+  lFastSwitchThreshold := lBaseCooldown;
+  if lFastSwitchThreshold < 8 then
+    lFastSwitchThreshold := 8;
+
+  if fAutoTicksSinceSwitch <= lFastSwitchThreshold then
+    fAutoSwitchBurstLevel := ClampAutoInt(fAutoSwitchBurstLevel + 1, 0, cAutoMaxSwitchBurstLevel)
+  else
+    fAutoSwitchBurstLevel := 0;
+
   fAutoEffectiveEngine := aEngine;
   Inc(fAutoSwitchCount);
-  fAutoCooldownTicks := fAutoConfig.CooldownTicks;
+  lCooldownTicks := lBaseCooldown * (1 + fAutoSwitchBurstLevel);
+  fAutoCooldownTicks := ClampAutoInt(lCooldownTicks, 0, cAutoMaxBackoffCooldown);
+  fAutoTicksSinceSwitch := 0;
+  if aEngine = TSchedulerEngine.seHeap then
+    fAutoHeapSampleTicks := 0
+  else
+    fAutoScanSampleTicks := 0;
   if aEngine = TSchedulerEngine.seHeap then
     TInterlocked.Exchange(fHeapDirty, 1);
 end;
 
 procedure TmaxCron.EvaluateAutoController(const aEngineUsed: TSchedulerEngine; const aEventCount: Integer;
   const aElapsedMicroseconds: Int64);
+const
+  cAutoMinPerfSamples = 8;
 var
   lConfig: TAutoControllerConfig;
   lDirtySample: Double;
   lEnterCandidate: Boolean;
   lExitCandidate: Boolean;
+  lHasPerfSignal: Boolean;
+  lMinPerfSamples: Integer;
   lMutationDelta: Int64;
   lMutationNow: Int64;
   lPromoteHeap: Boolean;
@@ -3753,13 +3796,24 @@ begin
   fAutoLock.Acquire;
   try
     lConfig := fAutoConfig;
+    lMinPerfSamples := cAutoMinPerfSamples;
+    if lConfig.TrialTicks < lMinPerfSamples then
+      lMinPerfSamples := ClampAutoInt(lConfig.TrialTicks, 1, cAutoMinPerfSamples);
+    if fAutoTicksSinceSwitch < High(Integer) then
+      Inc(fAutoTicksSinceSwitch);
 
     if aEngineUsed = TSchedulerEngine.seScan then
     begin
       fAutoScanTickUsEwma := UpdateEwma(fAutoScanTickUsEwma, aElapsedMicroseconds, lConfig.EwmaAlpha);
       fAutoScanBaselineUs := UpdateEwma(fAutoScanBaselineUs, aElapsedMicroseconds, lConfig.EwmaAlpha);
+      if fAutoScanSampleTicks < High(Integer) then
+        Inc(fAutoScanSampleTicks);
     end else if aEngineUsed = TSchedulerEngine.seHeap then
+    begin
       fAutoHeapTickUsEwma := UpdateEwma(fAutoHeapTickUsEwma, aElapsedMicroseconds, lConfig.EwmaAlpha);
+      if fAutoHeapSampleTicks < High(Integer) then
+        Inc(fAutoHeapSampleTicks);
+    end;
 
     lMutationNow := TInterlocked.Read(fAutoMutationCounter);
     lMutationDelta := lMutationNow - fAutoMutationCursor;
@@ -3822,7 +3876,10 @@ begin
 
           if fAutoTrialTicksRemaining = 0 then
           begin
+            lHasPerfSignal := (fAutoScanSampleTicks >= lMinPerfSamples) and
+              (fAutoHeapSampleTicks >= lMinPerfSamples);
             lPromoteHeap :=
+              lHasPerfSignal and
               (fAutoScanBaselineUs > 0) and
               (fAutoHeapTickUsEwma > 0) and
               (fAutoHeapTickUsEwma <= (fAutoScanBaselineUs * lConfig.PromoteRatio));
@@ -3840,10 +3897,13 @@ begin
 
       TAutoSchedulerState.asHeapStable:
         begin
+          lHasPerfSignal := (fAutoScanSampleTicks >= lMinPerfSamples) and
+            (fAutoHeapSampleTicks >= lMinPerfSamples);
           lExitCandidate :=
             (fAutoEventCountEwma <= lConfig.ExitMaxEvents) or
             (fAutoDirtyRateEwma >= lConfig.ExitMinDirtyRate) or
-            ((fAutoScanBaselineUs > 0) and (fAutoHeapTickUsEwma > (fAutoScanBaselineUs * lConfig.DemoteRatio)));
+            (lHasPerfSignal and (fAutoScanBaselineUs > 0) and
+            (fAutoHeapTickUsEwma > (fAutoScanBaselineUs * lConfig.DemoteRatio)));
 
           if lExitCandidate then
             Inc(fAutoExitHold)

@@ -34,6 +34,9 @@ type
     procedure EngineAutoMode_CustomThresholds_AreApplied;
 
     [Test]
+    procedure EngineAutoMode_OscillationBackoff_BoundsSwitchRate;
+
+    [Test]
     procedure EngineAutoMode_ConcurrentSwitching_NoMissedDue;
   end;
 
@@ -486,6 +489,110 @@ begin
     RestoreEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
     RestoreEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
     RestoreEnvVar('MAXCRON_AUTO_TRIAL_TICKS', lPreviousTrialTicksValue, lHadTrialTicksValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_EVENTS', lPreviousExitEventsValue, lHadExitEventsValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_EVENTS', lPreviousEnterEventsValue, lHadEnterEventsValue);
+    RestoreEnvVar('MAXCRON_ENGINE', lPreviousEngineValue, lHadEngineValue);
+  end;
+end;
+
+procedure TTestHeavyStressMixed.EngineAutoMode_OscillationBackoff_BoundsSwitchRate;
+const
+  cEventCount = 420;
+  cWarmupTicks = 24;
+  cOscillationTicks = 96;
+  cFuturePlan = '0 0 1 1 * 2099 0 1';
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lChurnEvent: IMaxCronEvent;
+  lIndex: Integer;
+  lNowDateTime: TDateTime;
+  lConfiguredEngine: string;
+  lEffectiveEngine: string;
+  lAutoState: string;
+  lSwitchCount: UInt64;
+  lPreviousEngineValue: string;
+  lPreviousEnterEventsValue: string;
+  lPreviousExitEventsValue: string;
+  lPreviousEnterDirtyValue: string;
+  lPreviousExitDirtyValue: string;
+  lPreviousEnterHoldValue: string;
+  lPreviousExitHoldValue: string;
+  lPreviousTrialTicksValue: string;
+  lPreviousCooldownValue: string;
+  lPreviousPromoteRatioValue: string;
+  lPreviousDemoteRatioValue: string;
+  lHadEngineValue: Boolean;
+  lHadEnterEventsValue: Boolean;
+  lHadExitEventsValue: Boolean;
+  lHadEnterDirtyValue: Boolean;
+  lHadExitDirtyValue: Boolean;
+  lHadEnterHoldValue: Boolean;
+  lHadExitHoldValue: Boolean;
+  lHadTrialTicksValue: Boolean;
+  lHadCooldownValue: Boolean;
+  lHadPromoteRatioValue: Boolean;
+  lHadDemoteRatioValue: Boolean;
+begin
+  SetEnvVar('MAXCRON_ENGINE', 'auto', lPreviousEngineValue, lHadEngineValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_EVENTS', '128', lPreviousEnterEventsValue, lHadEnterEventsValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_EVENTS', '96', lPreviousExitEventsValue, lHadExitEventsValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_DIRTY', '0.10', lPreviousEnterDirtyValue, lHadEnterDirtyValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_DIRTY', '0.15', lPreviousExitDirtyValue, lHadExitDirtyValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_HOLD', '1', lPreviousEnterHoldValue, lHadEnterHoldValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_HOLD', '1', lPreviousExitHoldValue, lHadExitHoldValue);
+  SetEnvVar('MAXCRON_AUTO_TRIAL_TICKS', '1', lPreviousTrialTicksValue, lHadTrialTicksValue);
+  SetEnvVar('MAXCRON_AUTO_COOLDOWN', '1', lPreviousCooldownValue, lHadCooldownValue);
+  SetEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', '1.40', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
+  SetEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', '1.60', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
+  try
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      for lIndex := 0 to cEventCount - 1 do
+      begin
+        lEvent := lCron.Add('AutoBackoff_' + IntToStr(lIndex));
+        lEvent.EventPlan := cFuturePlan;
+        lEvent.Run;
+      end;
+
+      lChurnEvent := lCron.Add('AutoBackoffChurn');
+      lChurnEvent.EventPlan := cFuturePlan;
+      lChurnEvent.Run;
+
+      lNowDateTime := Now;
+      for lIndex := 0 to cWarmupTicks - 1 do
+        lCron.TickAt(lNowDateTime);
+
+      for lIndex := 0 to cOscillationTicks - 1 do
+      begin
+        if (lIndex and 1) = 1 then
+        begin
+          lChurnEvent.Stop;
+          lChurnEvent.Run;
+        end;
+        lCron.TickAt(lNowDateTime);
+      end;
+
+      lCron.GetEngineStateForTests(lConfiguredEngine, lEffectiveEngine, lAutoState, lSwitchCount);
+      Assert.AreEqual('auto', lConfiguredEngine);
+      Assert.IsTrue((lEffectiveEngine = 'scan') or (lEffectiveEngine = 'heap'),
+        'Auto mode should keep effective engine in scan/heap set');
+      Assert.IsTrue(lAutoState <> 'disabled', 'Auto mode state should stay active');
+      Assert.IsTrue(lSwitchCount > 0, 'Forced churn oscillation should still switch at least once');
+      Assert.IsTrue(lSwitchCount <= 36,
+        Format('Adaptive backoff should cap switch bursts (observed switches=%d)', [Int64(lSwitchCount)]));
+    finally
+      lCron.Free;
+    end;
+  finally
+    RestoreEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
+    RestoreEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
+    RestoreEnvVar('MAXCRON_AUTO_COOLDOWN', lPreviousCooldownValue, lHadCooldownValue);
+    RestoreEnvVar('MAXCRON_AUTO_TRIAL_TICKS', lPreviousTrialTicksValue, lHadTrialTicksValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_HOLD', lPreviousExitHoldValue, lHadExitHoldValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_HOLD', lPreviousEnterHoldValue, lHadEnterHoldValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_DIRTY', lPreviousExitDirtyValue, lHadExitDirtyValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_DIRTY', lPreviousEnterDirtyValue, lHadEnterDirtyValue);
     RestoreEnvVar('MAXCRON_AUTO_EXIT_EVENTS', lPreviousExitEventsValue, lHadExitEventsValue);
     RestoreEnvVar('MAXCRON_AUTO_ENTER_EVENTS', lPreviousEnterEventsValue, lHadEnterEventsValue);
     RestoreEnvVar('MAXCRON_ENGINE', lPreviousEngineValue, lHadEngineValue);
