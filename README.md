@@ -225,6 +225,39 @@ tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.En
 tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineBenchmark_AutoSwitchBudget_AdversarialChurn
 ```
 
+### Standalone benchmark runner (CSV + Markdown)
+
+For machine-to-machine and run-to-run tracking, we can run a standalone non-DUnit benchmark executable:
+
+```bash
+./build-and-run-benchmarks.sh --iterations=9 --warmup=2 --out-dir=benchmarks/results
+```
+
+Direct Windows invocation:
+
+```cmd
+benchmarks\maxCronBenchmarks.exe --iterations=9 --warmup=2 --out-dir=benchmarks\results
+```
+
+Output files:
+
+- `maxcron-benchmarks-*.csv` (raw per-iteration metrics)
+- `maxcron-benchmarks-*.md` (scenario means and comparison deltas)
+
+The runner includes these scenarios:
+
+- `sparse_high_n_scan` (`MAXCRON_ENGINE=scan`)
+- `sparse_high_n_heap` (`MAXCRON_ENGINE=heap`)
+- `sparse_high_n_auto` (`MAXCRON_ENGINE=auto`, sparse-tuned controller)
+- `adversarial_auto_no_budget` (`MAXCRON_ENGINE=auto`, budget disabled)
+- `adversarial_auto_budget` (`MAXCRON_ENGINE=auto`, budget enabled)
+
+Interpretation rules:
+
+- Sparse workloads: expect `heap` and `auto` to reduce candidate visits versus `scan`.
+- Adversarial churn: expect `budget` mode to reduce switch/rebuild/visited metrics versus no-budget mode.
+- Elapsed time is environment-sensitive; use it with the structural work metrics (`visited`, `rebuilds`, `switches`) for robust conclusions.
+
 ## How a job is executed (per-event)
 
 Each event can override how its callback is invoked:

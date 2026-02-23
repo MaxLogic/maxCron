@@ -69,6 +69,9 @@ __recovery/
 modules/
 *.cmds
 *.log
+benchmarks/results/*.csv
+benchmarks/results/*.md
+benchmarks/*.res
 .aider*
 AGENTS.md
 agents.md

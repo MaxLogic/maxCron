@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-077
+Next task ID: T-079
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 77
+Done tasks: 79
 
 ## In Progress
 
@@ -19,6 +19,18 @@ Done tasks: 77
 
 
 ## Done
+
+### T-078 [DOC] Document benchmark runner usage and result interpretation
+Outcome: Documented standalone benchmark runner usage, output artifact format (CSV raw + Markdown summary), and interpretation guidance for sparse high-N and adversarial churn scenarios.
+Proof: `rg -n "Standalone benchmark runner|build-and-run-benchmarks|maxcron-benchmarks-\\*|Interpretation rules|adversarial churn" README.md` returns the new runner + interpretation sections; `./build-delphi.sh benchmarks/maxCronBenchmarks.dproj -config release` succeeds.
+Touches: `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-077
+
+### T-077 [PERF] Add standalone benchmark runner with CSV and Markdown export
+Outcome: Added `benchmarks/maxCronBenchmarks.exe` (non-DUnit) that executes sparse high-N and adversarial auto workloads, captures per-iteration raw metrics (including microsecond timing), and exports machine-stamped CSV + Markdown reports for trend tracking.
+Proof: `./build-delphi.sh benchmarks/maxCronBenchmarks.dproj -config release` succeeds; `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && benchmarks\maxCronBenchmarks.exe --iterations=7 --warmup=1 --out-dir=benchmarks\results"` exits 0 and writes reports (`maxcron-benchmarks-20260223-214305.csv`, `maxcron-benchmarks-20260223-214305.md`); `./build-and-run-benchmarks.sh --iterations=1 --warmup=0 --out-dir=benchmarks/results --quiet` succeeds and writes reports (`maxcron-benchmarks-20260223-214323.csv`, `maxcron-benchmarks-20260223-214323.md`).
+Touches: `benchmarks/maxCronBenchmarks.dpr`, `benchmarks/maxCronBenchmarks.dproj`, `build-and-run-benchmarks.bat`, `build-and-run-benchmarks.sh`, `.gitignore`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-075
 
 ### T-076 [DOC] Publish benchmark execution guidance for adaptive scenarios
 Outcome: Expanded README benchmark guidance with runnable commands and expected outcomes covering scan-vs-heap, sparse high-N auto-vs-scan, and adversarial auto budget/no-budget scenarios.
