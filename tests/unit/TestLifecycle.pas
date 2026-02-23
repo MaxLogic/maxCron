@@ -31,6 +31,18 @@ type
 
     [Test]
     procedure SetDialect_ReparsesEventPlan;
+
+    [Test]
+    procedure Add_DuplicateName_CaseInsensitive_Raises;
+
+    [Test]
+    procedure Add_EmptyName_AllowsMultipleEvents;
+
+    [Test]
+    procedure DeleteByName_CaseInsensitive_DeletesNamedEvent;
+
+    [Test]
+    procedure DeleteByEvent_UnnamedEvent_IsRejected;
   end;
 
 implementation
@@ -268,6 +280,86 @@ begin
 
     Assert.AreEqual(lPrevDialect, lEvt.Dialect);
     Assert.AreEqual(lPrevNext, lEvt.NextSchedule, 0.0);
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestLifecycle.Add_DuplicateName_CaseInsensitive_Raises;
+var
+  lCron: TmaxCron;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lCron.Add('Alpha');
+    try
+      lCron.Add('alpha');
+      Assert.Fail('Expected duplicate-name validation error');
+    except
+      on Exception do
+        ; // expected
+    end;
+
+    Assert.AreEqual(1, lCron.Count);
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestLifecycle.Add_EmptyName_AllowsMultipleEvents;
+var
+  lCron: TmaxCron;
+  lEventA: IMaxCronEvent;
+  lEventB: IMaxCronEvent;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lEventA := lCron.Add('');
+    lEventB := lCron.Add('   ');
+
+    Assert.AreEqual('', lEventA.Name);
+    Assert.AreEqual('', lEventB.Name);
+    Assert.AreEqual(2, lCron.Count);
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestLifecycle.DeleteByName_CaseInsensitive_DeletesNamedEvent;
+var
+  lCron: TmaxCron;
+  lNamed: IMaxCronEvent;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lNamed := lCron.Add('MyEvent');
+    lCron.Add('');
+    Assert.AreEqual(2, lCron.Count);
+
+    Assert.IsTrue(lCron.Delete('myevent'));
+    Assert.AreEqual(1, lCron.Count);
+    Assert.AreEqual('', lCron.Events[0].Name);
+    Assert.IsFalse(lCron.Delete(''));
+    Assert.IsFalse(lCron.Delete('missing'));
+    Assert.AreEqual('MyEvent', lNamed.Name);
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestLifecycle.DeleteByEvent_UnnamedEvent_IsRejected;
+var
+  lCron: TmaxCron;
+  lUnnamed: IMaxCronEvent;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lUnnamed := lCron.Add('');
+    Assert.AreEqual('', lUnnamed.Name);
+
+    Assert.IsFalse(lCron.Delete(lUnnamed));
+    Assert.AreEqual(1, lCron.Count);
+    Assert.IsTrue(lCron.Delete(0));
   finally
     lCron.Free;
   end;

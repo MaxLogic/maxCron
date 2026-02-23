@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-049
+Next task ID: T-050
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 49
+Done tasks: 50
 
 ## In Progress
 
@@ -19,6 +19,11 @@ Done tasks: 49
 
 
 ## Done
+
+### T-049 [API] Add immutable unique event names and delete-by-name
+Outcome: Event names are now read-only and immutable after `Add(...)`; non-empty names are enforced as case-insensitive unique; `Delete(const aName: string)` was added; unnamed events remain supported but can only be removed by `Delete(Index)` or `Clear` (not by `Delete(Event)` / `Delete(Name)`).
+Proof: Pre-fix `./build-delphi.sh tests/maxCronTests.dproj -config release` failed with missing `Delete(string)` overload errors in `TestLifecycle.pas`; post-fix `./build-delphi.sh tests/maxCronTests.dproj -config release` succeeds; targeted `tests\\maxCronTests.exe -cm:Quiet -r:TestLifecycle.TTestLifecycle.Add_DuplicateName_CaseInsensitive_Raises,TestLifecycle.TTestLifecycle.Add_EmptyName_AllowsMultipleEvents,TestLifecycle.TTestLifecycle.DeleteByName_CaseInsensitive_DeletesNamedEvent,TestLifecycle.TTestLifecycle.DeleteByEvent_UnnamedEvent_IsRejected,TestRobustCoverage.TTestRobustCoverage.HashSeed_StableForSameNameAcrossRecreate` passes (5/5); `./build-and-run-tests.sh` passes (Stress 2/2, Core 119/119, VCL 3/3); `./build-and-run-tests-stress.sh` passes (Stress 2/2, Core 119/119, VCL 3/3).
+Touches: `maxCron.pas`, `tests/unit/TestLifecycle.pas`, `tests/unit/TestRobustCoverage.pas`, `demo/CronDemoMainForm.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
 
 ### T-048 [API] Expose scheduler events as interfaces
 Outcome: The public event surface is now interface-based (`IMaxCronEvent`) instead of exposing the concrete event class. Scheduler internals were updated to keep robust delete/pending-free behavior with interface reference-counted lifetimes, and callback-cycle teardown now clears callback/user-interface references on pending destroy.

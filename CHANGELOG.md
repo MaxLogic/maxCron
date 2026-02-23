@@ -22,6 +22,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added regressions for Quartz seconds-first hashed DOW ranges (`H(1-7)`) and scheduler `DefaultInvokeMode := imDefault` normalization behavior.
 
 ### Changed
+- Event names are now immutable after `Add(...)`; non-empty names are case-insensitive unique per scheduler; unnamed events remain supported. (T-049)
 - Changed the public event handle API from concrete `TmaxCronEvent` class references to `IMaxCronEvent` interfaces, while keeping scheduler-owned registration/removal (`Delete/Clear`) semantics. (T-048)
 - Clarified the README lifecycle usage contract for safe ownership/shutdown: use `Delete/Clear` instead of freeing events directly, avoid freeing scheduler from callbacks, and synchronize external concurrent reads/writes. (T-047)
 - Changed the VCL help dialog to open help in an external browser instead of the legacy embedded control. (T-017)
@@ -35,6 +36,7 @@ All notable user-visible changes to this project will be documented in this file
 - Expanded unit and stress robustness coverage for DST fall variants, timezone/exclusion/blackout parser edges, hash token failures, default-policy propagation, final-dispatch regressions, and mixed-feature concurrency. (T-028, T-029, T-030, T-031, T-032, T-033, T-034, T-035, T-036)
 
 ### Fixed
+- Added `Delete(const aName: string)` and enforced named-only semantics for `Delete(Event)`/`Delete(Name)` (unnamed events must use `Delete(Index)` or `Clear`). (T-049)
 - Fixed MAXCRON_TESTS queued pre-acquire hook handling to roll back state and exit the queued path without rethrowing through `CheckSynchronize`, preventing intermittent dispatch-regression hangs. (T-045)
 - Fixed serialized overlap-chain dispatch-start failures to roll back reserved execution/overlap state, so retry ticks can continue instead of wedging after injected launch failures. (T-044)
 - Fixed scheduler `DefaultMisfirePolicy := mpDefault` handling by normalizing to `mpCatchUpAll`, so default-policy events keep honoring configured catch-up limits. (T-043)

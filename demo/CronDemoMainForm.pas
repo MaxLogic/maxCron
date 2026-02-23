@@ -160,7 +160,7 @@ Begin
   log(lNewSchedule.name + ' next scheduled date is ' + showDate(lNewSchedule.NextSchedule));
 
   // you can use anonymous methods as well
-  lNewSchedule := ChronScheduler.Add('Event2');
+  lNewSchedule := ChronScheduler.Add('Event2Worker');
   lNewSchedule.EventPlan := '*/2 * * * * *';
   lNewSchedule.OnScheduleproc := Procedure(aEvent: IMaxCronEvent)
     Begin

@@ -46,7 +46,7 @@ type
     procedure HashToken_InvalidForms_Raise;
 
     [Test]
-    procedure HashSeed_ChangesAfterNameUpdate;
+    procedure HashSeed_StableForSameNameAcrossRecreate;
 
     [Test]
     procedure FinalDispatch_FireOnceNow_WhenEventDisables;
@@ -465,31 +465,32 @@ begin
   end;
 end;
 
-procedure TTestRobustCoverage.HashSeed_ChangesAfterNameUpdate;
+procedure TTestRobustCoverage.HashSeed_StableForSameNameAcrossRecreate;
 var
   lCron: TmaxCron;
-  lEvent: IMaxCronEvent;
+  lEventA: IMaxCronEvent;
+  lEventB: IMaxCronEvent;
   lFirstSchedule: TDateTime;
   lSecondSchedule: TDateTime;
-  lThirdSchedule: TDateTime;
 begin
   lCron := TmaxCron.Create(ctPortable);
   try
-    lEvent := lCron.Add('SeedA');
-    lEvent.EventPlan := 'H H * * * * H 1';
-    lEvent.ValidFrom := EncodeDateTime(2032, 1, 1, 0, 0, 0, 0);
-    lEvent.Run;
+    lEventA := lCron.Add('SeedA');
+    lEventA.EventPlan := 'H H * * * * H 1';
+    lEventA.ValidFrom := EncodeDateTime(2032, 1, 1, 0, 0, 0, 0);
+    lEventA.Run;
 
-    lFirstSchedule := lEvent.NextSchedule;
+    lFirstSchedule := lEventA.NextSchedule;
 
-    lEvent.Name := 'SeedB';
-    lSecondSchedule := lEvent.NextSchedule;
+    Assert.IsTrue(lCron.Delete('seeda'));
 
-    lEvent.Name := 'SeedA';
-    lThirdSchedule := lEvent.NextSchedule;
+    lEventB := lCron.Add('SeedA');
+    lEventB.EventPlan := 'H H * * * * H 1';
+    lEventB.ValidFrom := EncodeDateTime(2032, 1, 1, 0, 0, 0, 0);
+    lEventB.Run;
+    lSecondSchedule := lEventB.NextSchedule;
 
-    Assert.AreNotEqual(lFirstSchedule, lSecondSchedule);
-    Assert.AreEqual(lFirstSchedule, lThirdSchedule, 0.0);
+    Assert.AreEqual(lFirstSchedule, lSecondSchedule, 0.0);
   finally
     lCron.Free;
   end;

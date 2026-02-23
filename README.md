@@ -39,7 +39,7 @@ begin
   NewSchedule := CronScheduler.Add('Event3', '1 * * * * *', OnScheduleEvent3).Run; 
 
   // you can use anonymous methods as well
-  NewSchedule := CronScheduler.Add('Event2');
+  NewSchedule := CronScheduler.Add('Event2Worker');
   NewSchedule.EventPlan := '*/2 * * * * *';
   NewSchedule.OnScheduleproc := procedure(aEvent: IMaxCronEvent)
     begin
@@ -100,7 +100,10 @@ Free the scheduler from outside callback context.
 
 For safe production use we should follow these lifecycle rules:
 
-- `IMaxCronEvent` is an interface handle. Event registration lifetime is managed by `TmaxCron`; remove schedules with `CronScheduler.Delete(Event)`, `CronScheduler.Delete(Index)`, or `CronScheduler.Clear`.
+- `IMaxCronEvent` is an interface handle. Event registration lifetime is managed by `TmaxCron`.
+- Event names are optional. If provided, they are case-insensitive unique and immutable after `Add(...)`.
+- For named events, we can remove schedules with `CronScheduler.Delete(Event)` or `CronScheduler.Delete('EventName')`.
+- Unnamed events cannot be removed by `Delete(Event)` or `Delete('...')`; use `Delete(Index)` or `Clear`.
 - We should free `TmaxCron` only from outside its callback context.
 - We should treat `Count`/`Events[]` reads as volatile when other threads can mutate the scheduler. If we need stable iteration, we should guard access with our own app-level synchronization.
 - We should avoid long-blocking callbacks during shutdown; if callbacks can block, we should first stop upstream work and let callbacks drain before destroying the scheduler.
