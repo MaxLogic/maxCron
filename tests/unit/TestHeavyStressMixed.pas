@@ -34,6 +34,9 @@ type
     procedure EngineAutoMode_CustomThresholds_AreApplied;
 
     [Test]
+    procedure EngineAutoMode_DueDensityInfluencesSwitching;
+
+    [Test]
     procedure EngineAutoMode_DiagnosticsSnapshot_ReportsControllerState;
 
     [Test]
@@ -41,6 +44,9 @@ type
 
     [Test]
     procedure EngineAutoMode_ConcurrentSwitching_NoMissedDue;
+
+    [Test]
+    procedure EngineAutoMode_Soak_SwitchRateAndCorrectnessEnvelope;
   end;
 
 implementation
@@ -498,6 +504,112 @@ begin
   end;
 end;
 
+procedure TTestHeavyStressMixed.EngineAutoMode_DueDensityInfluencesSwitching;
+const
+  cEventCount = 1200;
+  cSparseWarmupTicks = 72;
+  cDenseTicks = 6;
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lIndex: Integer;
+  lTickAt: TDateTime;
+  lSparseDiag: TMaxCronAutoDiagnostics;
+  lDenseDiag: TMaxCronAutoDiagnostics;
+  lPreviousEngineValue: string;
+  lPreviousEnterEventsValue: string;
+  lPreviousExitEventsValue: string;
+  lPreviousEnterDueDensityValue: string;
+  lPreviousExitDueDensityValue: string;
+  lPreviousEnterDirtyValue: string;
+  lPreviousExitDirtyValue: string;
+  lPreviousEnterHoldValue: string;
+  lPreviousExitHoldValue: string;
+  lPreviousTrialTicksValue: string;
+  lPreviousCooldownValue: string;
+  lPreviousPromoteRatioValue: string;
+  lPreviousDemoteRatioValue: string;
+  lHadEngineValue: Boolean;
+  lHadEnterEventsValue: Boolean;
+  lHadExitEventsValue: Boolean;
+  lHadEnterDueDensityValue: Boolean;
+  lHadExitDueDensityValue: Boolean;
+  lHadEnterDirtyValue: Boolean;
+  lHadExitDirtyValue: Boolean;
+  lHadEnterHoldValue: Boolean;
+  lHadExitHoldValue: Boolean;
+  lHadTrialTicksValue: Boolean;
+  lHadCooldownValue: Boolean;
+  lHadPromoteRatioValue: Boolean;
+  lHadDemoteRatioValue: Boolean;
+begin
+  SetEnvVar('MAXCRON_ENGINE', 'auto', lPreviousEngineValue, lHadEngineValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_EVENTS', '128', lPreviousEnterEventsValue, lHadEnterEventsValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_EVENTS', '64', lPreviousExitEventsValue, lHadExitEventsValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_DUE_DENSITY', '0.15', lPreviousEnterDueDensityValue, lHadEnterDueDensityValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_DUE_DENSITY', '0.35', lPreviousExitDueDensityValue, lHadExitDueDensityValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_DIRTY', '1.00', lPreviousEnterDirtyValue, lHadEnterDirtyValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_DIRTY', '1.00', lPreviousExitDirtyValue, lHadExitDirtyValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_HOLD', '2', lPreviousEnterHoldValue, lHadEnterHoldValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_HOLD', '1', lPreviousExitHoldValue, lHadExitHoldValue);
+  SetEnvVar('MAXCRON_AUTO_TRIAL_TICKS', '8', lPreviousTrialTicksValue, lHadTrialTicksValue);
+  SetEnvVar('MAXCRON_AUTO_COOLDOWN', '0', lPreviousCooldownValue, lHadCooldownValue);
+  SetEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', '3.00', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
+  SetEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', '3.50', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
+  try
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      lTickAt := Now;
+      for lIndex := 0 to cEventCount - 1 do
+      begin
+        lEvent := lCron.Add('AutoDueDensity_' + IntToStr(lIndex));
+        lEvent.EventPlan := '* * * * * * * 0';
+        lEvent.ValidFrom := IncSecond(lTickAt, 180);
+        lEvent.Run;
+      end;
+
+      for lIndex := 0 to cSparseWarmupTicks - 1 do
+        lCron.TickAt(IncSecond(lTickAt, lIndex));
+
+      Assert.IsTrue(lCron.TryGetAutoDiagnostics(lSparseDiag), 'Diagnostics should be available in auto mode');
+      Assert.AreEqual('auto', lSparseDiag.ConfiguredEngine);
+      Assert.AreEqual('heap', lSparseDiag.EffectiveEngine,
+        'Sparse due density should promote/keep heap in auto mode');
+      Assert.IsTrue(lSparseDiag.DueDensityEwma <= 0.20,
+        Format('Sparse phase should keep due density low (observed=%.4f)', [lSparseDiag.DueDensityEwma]));
+
+      for lIndex := 0 to cDenseTicks - 1 do
+        lCron.TickAt(IncSecond(lTickAt, 190 + lIndex));
+
+      Assert.IsTrue(lCron.TryGetAutoDiagnostics(lDenseDiag), 'Diagnostics should remain available in auto mode');
+      Assert.AreEqual('auto', lDenseDiag.ConfiguredEngine);
+      Assert.AreEqual('scan', lDenseDiag.EffectiveEngine, 'Dense due phase should demote auto mode to scan');
+      Assert.IsTrue(lDenseDiag.DueDensityEwma >= 0.35,
+        Format('Dense phase should raise due density EWMA (observed=%.4f)', [lDenseDiag.DueDensityEwma]));
+      Assert.IsTrue(
+        (lDenseDiag.LastSwitchReason = 'heap-stable-exit-density') or
+        (lDenseDiag.LastSwitchReason = 'heap-trial-exit-density'),
+        'Density phase should produce a density demotion reason');
+    finally
+      lCron.Free;
+    end;
+  finally
+    RestoreEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
+    RestoreEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
+    RestoreEnvVar('MAXCRON_AUTO_COOLDOWN', lPreviousCooldownValue, lHadCooldownValue);
+    RestoreEnvVar('MAXCRON_AUTO_TRIAL_TICKS', lPreviousTrialTicksValue, lHadTrialTicksValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_HOLD', lPreviousExitHoldValue, lHadExitHoldValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_HOLD', lPreviousEnterHoldValue, lHadEnterHoldValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_DIRTY', lPreviousExitDirtyValue, lHadExitDirtyValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_DIRTY', lPreviousEnterDirtyValue, lHadEnterDirtyValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_DUE_DENSITY', lPreviousExitDueDensityValue, lHadExitDueDensityValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_DUE_DENSITY', lPreviousEnterDueDensityValue, lHadEnterDueDensityValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_EVENTS', lPreviousExitEventsValue, lHadExitEventsValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_EVENTS', lPreviousEnterEventsValue, lHadEnterEventsValue);
+    RestoreEnvVar('MAXCRON_ENGINE', lPreviousEngineValue, lHadEngineValue);
+  end;
+end;
+
 procedure TTestHeavyStressMixed.EngineAutoMode_DiagnosticsSnapshot_ReportsControllerState;
 const
   cEventCount = 500;
@@ -566,6 +678,7 @@ begin
       Assert.AreEqual('heap-stable', lDiagBefore.AutoState);
       Assert.IsTrue(lDiagBefore.SwitchCount > 0);
       Assert.IsTrue(lDiagBefore.EventCountEwma > 0);
+      Assert.IsTrue((lDiagBefore.DueDensityEwma >= 0.0) and (lDiagBefore.DueDensityEwma <= 1.0));
       Assert.IsTrue(lDiagBefore.ScanSampleTicks > 0);
       Assert.IsTrue(lDiagBefore.HeapSampleTicks > 0);
       Assert.IsTrue(lDiagBefore.CooldownTicks >= 0);
@@ -592,8 +705,10 @@ begin
       Assert.IsTrue(lDiagAfter.LastSwitchReason <> '');
       Assert.IsTrue(
         (lDiagAfter.LastSwitchReason = 'heap-stable-exit') or
-        (lDiagAfter.LastSwitchReason = 'heap-trial-exit-churn'),
-        'Diagnostics should report a churn/perf demotion reason');
+        (lDiagAfter.LastSwitchReason = 'heap-trial-exit-churn') or
+        (lDiagAfter.LastSwitchReason = 'heap-stable-exit-density') or
+        (lDiagAfter.LastSwitchReason = 'heap-trial-exit-density'),
+        'Diagnostics should report a churn/perf/density demotion reason');
     finally
       lCron.Free;
     end;
@@ -988,6 +1103,153 @@ begin
     lShutdownDone.Free;
     lAllCallbacksDone.Free;
     lErrorLock.Free;
+  end;
+end;
+
+procedure TTestHeavyStressMixed.EngineAutoMode_Soak_SwitchRateAndCorrectnessEnvelope;
+const
+  cSparseEventCount = 160;
+  cBurstEventCount = 240;
+  cTotalTicks = 480;
+  cBurstStartTick = 80;
+  cBurstEndTick = 210;
+  cChurnStartTick = 240;
+  cChurnEndTick = 380;
+  cFarFuturePlan = '0 0 1 1 * 2099 0 1';
+var
+  lCron: TmaxCron;
+  lHeartbeatEvent: IMaxCronEvent;
+  lChurnEvent: IMaxCronEvent;
+  lEvent: IMaxCronEvent;
+  lIndex: Integer;
+  lTickAt: TDateTime;
+  lWaitStopwatch: TStopwatch;
+  lObservedCount: Integer;
+  lCallbackCount: Integer;
+  lDiag: TMaxCronAutoDiagnostics;
+  lPreviousEngineValue: string;
+  lPreviousEnterEventsValue: string;
+  lPreviousExitEventsValue: string;
+  lPreviousEnterDueDensityValue: string;
+  lPreviousExitDueDensityValue: string;
+  lPreviousEnterDirtyValue: string;
+  lPreviousExitDirtyValue: string;
+  lPreviousEnterHoldValue: string;
+  lPreviousExitHoldValue: string;
+  lPreviousTrialTicksValue: string;
+  lPreviousCooldownValue: string;
+  lPreviousPromoteRatioValue: string;
+  lPreviousDemoteRatioValue: string;
+  lHadEngineValue: Boolean;
+  lHadEnterEventsValue: Boolean;
+  lHadExitEventsValue: Boolean;
+  lHadEnterDueDensityValue: Boolean;
+  lHadExitDueDensityValue: Boolean;
+  lHadEnterDirtyValue: Boolean;
+  lHadExitDirtyValue: Boolean;
+  lHadEnterHoldValue: Boolean;
+  lHadExitHoldValue: Boolean;
+  lHadTrialTicksValue: Boolean;
+  lHadCooldownValue: Boolean;
+  lHadPromoteRatioValue: Boolean;
+  lHadDemoteRatioValue: Boolean;
+begin
+  lCallbackCount := 0;
+  SetEnvVar('MAXCRON_ENGINE', 'auto', lPreviousEngineValue, lHadEngineValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_EVENTS', '128', lPreviousEnterEventsValue, lHadEnterEventsValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_EVENTS', '96', lPreviousExitEventsValue, lHadExitEventsValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_DUE_DENSITY', '0.20', lPreviousEnterDueDensityValue, lHadEnterDueDensityValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_DUE_DENSITY', '0.55', lPreviousExitDueDensityValue, lHadExitDueDensityValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_DIRTY', '0.10', lPreviousEnterDirtyValue, lHadEnterDirtyValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_DIRTY', '0.25', lPreviousExitDirtyValue, lHadExitDirtyValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_HOLD', '2', lPreviousEnterHoldValue, lHadEnterHoldValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_HOLD', '2', lPreviousExitHoldValue, lHadExitHoldValue);
+  SetEnvVar('MAXCRON_AUTO_TRIAL_TICKS', '8', lPreviousTrialTicksValue, lHadTrialTicksValue);
+  SetEnvVar('MAXCRON_AUTO_COOLDOWN', '4', lPreviousCooldownValue, lHadCooldownValue);
+  SetEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', '1.20', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
+  SetEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', '1.45', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
+  try
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      lHeartbeatEvent := lCron.Add('AutoSoakHeartbeat');
+      lHeartbeatEvent.EventPlan := '* * * * * * * 0';
+      lHeartbeatEvent.InvokeMode := imMainThread;
+      lHeartbeatEvent.OnScheduleProc :=
+        procedure(aSender: IMaxCronEvent)
+        begin
+          TInterlocked.Increment(lCallbackCount);
+        end;
+      lHeartbeatEvent.Run;
+      lTickAt := lHeartbeatEvent.NextSchedule;
+
+      lChurnEvent := lCron.Add('AutoSoakChurn');
+      lChurnEvent.EventPlan := cFarFuturePlan;
+      lChurnEvent.Run;
+
+      for lIndex := 0 to cSparseEventCount - 1 do
+      begin
+        lEvent := lCron.Add('AutoSoakSparse_' + IntToStr(lIndex));
+        lEvent.EventPlan := cFarFuturePlan;
+        lEvent.Run;
+      end;
+
+      for lIndex := 0 to cBurstEventCount - 1 do
+      begin
+        lEvent := lCron.Add('AutoSoakBurst_' + IntToStr(lIndex));
+        lEvent.EventPlan := '* * * * * * * 0';
+        lEvent.ValidFrom := IncSecond(lTickAt, cBurstStartTick);
+        lEvent.ValidTo := IncSecond(lTickAt, cBurstEndTick);
+        lEvent.Run;
+      end;
+
+      for lIndex := 0 to cTotalTicks - 1 do
+      begin
+        if (lIndex >= cChurnStartTick) and (lIndex < cChurnEndTick) and ((lIndex and 1) = 0) then
+        begin
+          lChurnEvent.Stop;
+          lChurnEvent.Run;
+        end;
+
+        lCron.TickAt(IncSecond(lTickAt, lIndex));
+        CheckSynchronize(0);
+      end;
+
+      lWaitStopwatch := TStopwatch.StartNew;
+      while (TInterlocked.CompareExchange(lCallbackCount, 0, 0) < cTotalTicks) and
+        (lWaitStopwatch.ElapsedMilliseconds < 4000) do
+        CheckSynchronize(5);
+
+      lObservedCount := TInterlocked.CompareExchange(lCallbackCount, 0, 0);
+      Assert.IsTrue(lObservedCount >= (cTotalTicks - 1),
+        Format('Soak should not lose due callbacks (expected >= %d observed=%d)', [cTotalTicks - 1, lObservedCount]));
+      Assert.IsTrue(lObservedCount <= cTotalTicks,
+        Format('Soak should not duplicate due callbacks (expected <= %d observed=%d)', [cTotalTicks, lObservedCount]));
+
+      Assert.IsTrue(lCron.TryGetAutoDiagnostics(lDiag), 'Diagnostics should be available in auto mode');
+      Assert.AreEqual('auto', lDiag.ConfiguredEngine);
+      Assert.IsTrue((lDiag.EffectiveEngine = 'scan') or (lDiag.EffectiveEngine = 'heap'));
+      Assert.IsTrue(lDiag.AutoState <> 'disabled');
+      Assert.IsTrue(lDiag.SwitchCount >= 2,
+        Format('Soak should produce at least two engine switches (observed=%d)', [Int64(lDiag.SwitchCount)]));
+      Assert.IsTrue(lDiag.SwitchCount <= 64,
+        Format('Soak switch-rate envelope exceeded (observed=%d)', [Int64(lDiag.SwitchCount)]));
+    finally
+      lCron.Free;
+    end;
+  finally
+    RestoreEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
+    RestoreEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
+    RestoreEnvVar('MAXCRON_AUTO_COOLDOWN', lPreviousCooldownValue, lHadCooldownValue);
+    RestoreEnvVar('MAXCRON_AUTO_TRIAL_TICKS', lPreviousTrialTicksValue, lHadTrialTicksValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_HOLD', lPreviousExitHoldValue, lHadExitHoldValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_HOLD', lPreviousEnterHoldValue, lHadEnterHoldValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_DIRTY', lPreviousExitDirtyValue, lHadExitDirtyValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_DIRTY', lPreviousEnterDirtyValue, lHadEnterDirtyValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_DUE_DENSITY', lPreviousExitDueDensityValue, lHadExitDueDensityValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_DUE_DENSITY', lPreviousEnterDueDensityValue, lHadEnterDueDensityValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_EVENTS', lPreviousExitEventsValue, lHadExitEventsValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_EVENTS', lPreviousEnterEventsValue, lHadEnterEventsValue);
+    RestoreEnvVar('MAXCRON_ENGINE', lPreviousEngineValue, lHadEngineValue);
   end;
 end;
 

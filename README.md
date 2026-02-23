@@ -105,9 +105,9 @@ Engine guidance:
 
 `auto` mode policy (internal):
 
-- Enter heap trial when event-count EMA is high and mutation/dirty EMA stays low.
+- Enter heap trial when event-count EMA is high, due-density EMA stays low, and mutation/dirty EMA stays low.
 - Promote to heap-stable only if measured heap tick cost beats scan baseline by margin.
-- Fall back to scan when churn rises, event count drops, or heap stops showing benefit.
+- Fall back to scan when due density rises, churn rises, event count drops, or heap stops showing benefit.
 - Apply hold counters and cooldown to avoid scan/heap thrashing.
 - Require minimum scan/heap performance samples before ratio-based promote/demote checks.
 - Increase cooldown adaptively when rapid consecutive switches are detected.
@@ -121,6 +121,8 @@ Engine guidance:
 | --- | --- | --- | --- |
 | `MAXCRON_AUTO_ENTER_EVENTS` | `256` | Minimum event-count EMA to enter heap trial | clamped to `[1..1000000]` |
 | `MAXCRON_AUTO_EXIT_EVENTS` | `160` | Event-count EMA at or below this exits heap | clamped to `[0..1000000]`, then normalized to `<= ENTER_EVENTS` |
+| `MAXCRON_AUTO_ENTER_DUE_DENSITY` | `0.25` | Maximum due-density EMA (`due/visited`) allowed to enter heap trial | clamped to `[0.0..1.0]` |
+| `MAXCRON_AUTO_EXIT_DUE_DENSITY` | `0.60` | Due-density EMA at or above this exits heap | clamped to `[0.0..1.0]`, then normalized to `>= ENTER_DUE_DENSITY` |
 | `MAXCRON_AUTO_ENTER_DIRTY` | `0.15` | Max dirty/churn EMA allowed to enter heap trial | clamped to `[0.0..1.0]` |
 | `MAXCRON_AUTO_EXIT_DIRTY` | `0.40` | Dirty/churn EMA at or above this exits heap | clamped to `[0.0..1.0]`, then normalized to `>= ENTER_DIRTY` |
 | `MAXCRON_AUTO_ENTER_HOLD` | `3` | Consecutive enter-candidate ticks required before heap trial | clamped to `[1..1024]` |
@@ -129,6 +131,7 @@ Engine guidance:
 | `MAXCRON_AUTO_COOLDOWN` | `128` | Cooldown ticks after each engine switch | clamped to `[0..8192]` |
 | `MAXCRON_AUTO_PROMOTE_RATIO` | `0.85` | Heap promotion threshold (`heap_us <= scan_us * ratio`) | clamped to `[0.25..4.0]` |
 | `MAXCRON_AUTO_DEMOTE_RATIO` | `1.05` | Heap demotion threshold (`heap_us > scan_us * ratio`) | clamped to `[0.25..4.0]`, then normalized to `> PROMOTE_RATIO` |
+| `MAXCRON_AUTO_DIAG_LOG_INTERVAL` | `0` | Emit periodic auto diagnostics logs every N auto ticks (`0` = disabled) | clamped to `[0..1000000]` |
 
 Parsing rules:
 
@@ -139,8 +142,9 @@ Parsing rules:
 
 ### Auto mode tuning by workload archetype
 
-- Sparse due, high cardinality, low churn: lower `ENTER_EVENTS` (for example `128-256`) and keep `TRIAL_TICKS` moderate (`16-48`) to enter heap sooner.
+- Sparse due, high cardinality, low churn: lower `ENTER_EVENTS` (for example `128-256`), keep `ENTER_DUE_DENSITY` conservative (`0.15-0.30`), and keep `TRIAL_TICKS` moderate (`16-48`) to enter heap sooner.
 - Mixed workload with periodic bursts: keep defaults first, then tune `ENTER_HOLD`/`EXIT_HOLD` upward (`3-6`) if switches are too frequent.
+- Dense-due bursts (many events due each tick): lower `EXIT_DUE_DENSITY` so auto mode leaves heap sooner during burst windows.
 - Churn-heavy (frequent stop/run or plan edits): raise `ENTER_EVENTS`, raise `ENTER_HOLD`, and optionally raise `COOLDOWN` to avoid frequent heap re-entry.
 
 ### Oscillation troubleshooting
@@ -176,6 +180,17 @@ end;
 
 `TryGetAutoDiagnostics` returns `True` only when `MAXCRON_ENGINE=auto`; otherwise it returns `False`.
 The snapshot includes EWMAs, sample counters, cooldown/backoff state, and last switch reason for tuning/operations visibility.
+
+### Auto diagnostics periodic logging (opt-in)
+
+For production/canary operations, we can emit periodic diagnostics without code changes:
+
+```bash
+export MAXCRON_ENGINE=auto
+export MAXCRON_AUTO_DIAG_LOG_INTERVAL=10
+```
+
+`MAXCRON_AUTO_DIAG_LOG_INTERVAL` is read during scheduler creation. When it is greater than `0`, maxCron emits a diagnostics line every N auto-controller ticks via `OutputDebugString`. `0` keeps logging disabled.
 
 High-N benchmark coverage (`TestHeavyStressMixed.EngineBenchmark_ScanVsHeap_HighN`) uses 1200 far-future events and 40 ticks:
 

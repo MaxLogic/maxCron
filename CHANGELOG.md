@@ -5,6 +5,9 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Added due-density auto-controller signal and thresholds (`MAXCRON_AUTO_ENTER_DUE_DENSITY`, `MAXCRON_AUTO_EXIT_DUE_DENSITY`) so dense-due phases can demote from heap earlier and sparse-due phases can promote with stronger confidence. (T-066)
+- Added long-run adaptive soak coverage for mixed sparse/burst/churn phases with switch-rate and callback-correctness envelope assertions. (T-067)
+- Added opt-in periodic auto diagnostics logging (`MAXCRON_AUTO_DIAG_LOG_INTERVAL`) that emits runtime controller snapshots through `OutputDebugString` without code changes. (T-068)
 - Added `TryGetAutoDiagnostics` + `TMaxCronAutoDiagnostics` runtime snapshot API for `MAXCRON_ENGINE=auto` (engine/state/switch counters/EWMAs/sample counters/cooldown/backoff/last reason). (T-065)
 - Added adaptive auto-switch backoff and minimum performance-sample guards to reduce scan/heap flip-flop under mixed churn workloads. (T-064)
 - Added validated `MAXCRON_AUTO_*` runtime tuning knobs for adaptive scheduler thresholds (events/churn/hold/trial/cooldown/promote/demote), with strict parsing and safe bounded fallback behavior. (T-061)

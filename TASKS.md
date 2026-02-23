@@ -2,44 +2,14 @@
 Next task ID: T-069
 
 ## Summary
-Open tasks: 3 (In Progress: 0, Next Today: 0, Next This Week: 3, Next Later: 0, Blocked: 0)
-Done tasks: 66
+Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
+Done tasks: 69
 
 ## In Progress
 
 ## Next – Today
 
 ## Next – This Week
-
-### T-066 [PERF] Add due-density signal to auto engine decisions
-Outcome: Extend the auto controller with a due-density signal (`due work / visited work`) so dense-due phases can demote from heap sooner and sparse-due phases can promote with stronger confidence.
-Proof:
-- Command: `MAXCRON_ENGINE=auto ./build-and-run-tests-stress.sh -cm:Quiet`
-- Expect: Stress/Core/VCL suites pass and no divergence/hangs.
-- Command: `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_DueDensityInfluencesSwitching"`
-- Expect: targeted test passes and shows deterministic engine-behavior change under sparse vs dense due patterns.
-Touches: `maxCron.pas`, `tests/unit/TestHeavyStressMixed.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
-Deps: T-065
-
-### T-067 [TEST] Add long-run auto oscillation soak coverage
-Outcome: Add bounded long-run adaptive soak coverage that mixes sparse, bursty, and churn-heavy phases and asserts switch-rate and callback-correctness envelopes.
-Proof:
-- Command: `MAXCRON_ENGINE=auto ./build-and-run-tests-stress.sh -cm:Quiet`
-- Expect: suites pass with soak coverage enabled and no hangs.
-- Command: `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_Soak_SwitchRateAndCorrectnessEnvelope"`
-- Expect: targeted soak test passes and keeps switch-rate within expected envelope.
-Touches: `tests/unit/TestHeavyStressMixed.pas`, `CHANGELOG.md`, `TASKS.md`
-Deps: T-064, T-066
-
-### T-068 [OPS] Add opt-in periodic auto-state diagnostics logging
-Outcome: Add optional periodic diagnostics logging controlled by environment variables so production/canary runs can collect auto-controller state snapshots without code changes.
-Proof:
-- Command: `MAXCRON_ENGINE=auto MAXCRON_AUTO_DIAG_LOG_INTERVAL=10 ./build-and-run-tests.sh -cm:Quiet`
-- Expect: suites pass with diagnostics logging enabled and no behavior regressions.
-- Command: `rg -n "MAXCRON_AUTO_DIAG_LOG|diagnostics snapshot" README.md`
-- Expect: docs include the logging knobs and usage guidance.
-Touches: `maxCron.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
-Deps: T-065
 
 ## Next – Later
 
@@ -49,6 +19,24 @@ Deps: T-065
 
 
 ## Done
+
+### T-068 [OPS] Add opt-in periodic auto-state diagnostics logging
+Outcome: Added optional periodic auto-controller diagnostics logging via `MAXCRON_AUTO_DIAG_LOG_INTERVAL` (default off), with bounded parsing/clamping and low-overhead runtime behavior when disabled.
+Proof: `MAXCRON_ENGINE=auto MAXCRON_AUTO_DIAG_LOG_INTERVAL=10 ./build-and-run-tests.sh -cm:Quiet` passes (Stress 10/10, Core 125/125, VCL 3/3); `rg -n "MAXCRON_AUTO_DIAG_LOG|diagnostics snapshot" README.md` returns the new knob + usage guidance lines.
+Touches: `maxCron.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-065
+
+### T-067 [TEST] Add long-run auto oscillation soak coverage
+Outcome: Added long-run adaptive soak coverage (`EngineAutoMode_Soak_SwitchRateAndCorrectnessEnvelope`) that mixes sparse, burst-dense, and churn-heavy phases, asserting both callback-correctness and bounded switch-rate envelopes.
+Proof: `MAXCRON_ENGINE=auto ./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 10/10, Core 125/125, VCL 3/3); targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_Soak_SwitchRateAndCorrectnessEnvelope"` passes (1/1).
+Touches: `tests/unit/TestHeavyStressMixed.pas`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-064, T-066
+
+### T-066 [PERF] Add due-density signal to auto engine decisions
+Outcome: Extended auto mode with due-density EWMA (`due/visited`) gating and hysteresis (`MAXCRON_AUTO_ENTER_DUE_DENSITY`, `MAXCRON_AUTO_EXIT_DUE_DENSITY`), integrated into switch decisions and diagnostics snapshots.
+Proof: `MAXCRON_ENGINE=auto ./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 10/10, Core 125/125, VCL 3/3); targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_DueDensityInfluencesSwitching"` passes (1/1).
+Touches: `maxCron.pas`, `tests/unit/TestHeavyStressMixed.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-065
 
 ### T-065 [OBS] Add auto-controller diagnostics snapshot API
 Outcome: Added a thread-safe `TryGetAutoDiagnostics(out TMaxCronAutoDiagnostics)` snapshot for `MAXCRON_ENGINE=auto`, exposing effective engine/state, switch counters, EWMAs, sample counters, cooldown/backoff state, and last switch reason for runtime tuning visibility.
