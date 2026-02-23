@@ -179,6 +179,20 @@ Type
 
       TAutoSchedulerState = (asDisabled, asScanStable, asHeapTrial, asHeapStable);
 
+      TAutoControllerConfig = record
+        EwmaAlpha: Double;
+        EnterMinEvents: Integer;
+        ExitMaxEvents: Integer;
+        EnterMaxDirtyRate: Double;
+        ExitMinDirtyRate: Double;
+        EnterHoldTicks: Integer;
+        ExitHoldTicks: Integer;
+        TrialTicks: Integer;
+        CooldownTicks: Integer;
+        PromoteRatio: Double;
+        DemoteRatio: Double;
+      end;
+
       TCronHeapEntry = record
         DueAt: TDateTime;
         EventId: Int64;
@@ -213,6 +227,7 @@ Type
     fAutoScanTickUsEwma: Double;
     fAutoHeapTickUsEwma: Double;
     fAutoScanBaselineUs: Double;
+    fAutoConfig: TAutoControllerConfig;
     fTickEventsVisited: UInt64;
     fHeapRebuildCount: UInt64;
     fItemsLock: TCriticalSection;
@@ -232,6 +247,11 @@ Type
     procedure RemoveEventIndexLocked(const aEventItem: IMaxCronEvent);
     procedure ReindexFromLocked(const aStartIndex: Integer);
     procedure ConfigureSchedulerEngine;
+    procedure ConfigureAutoControllerSettings;
+    function ClampAutoInt(const aValue, aMin, aMax: Integer): Integer;
+    function ClampAutoFloat(const aValue, aMin, aMax: Double): Double;
+    function TryReadAutoIntEnv(const aEnvName: string; out aValue: Integer): Boolean;
+    function TryReadAutoFloatEnv(const aEnvName: string; out aValue: Double): Boolean;
     procedure MarkHeapDirty;
     function SchedulerEngineToText(const aEngine: TSchedulerEngine): string;
     function AutoStateToText(const aState: TAutoSchedulerState): string;
@@ -3492,10 +3512,144 @@ begin
   CreateTimer(aTimerBackend);
 end;
 
+function TmaxCron.ClampAutoInt(const aValue, aMin, aMax: Integer): Integer;
+begin
+  if aValue < aMin then
+    Exit(aMin);
+  if aValue > aMax then
+    Exit(aMax);
+  Result := aValue;
+end;
+
+function TmaxCron.ClampAutoFloat(const aValue, aMin, aMax: Double): Double;
+begin
+  if aValue < aMin then
+    Exit(aMin);
+  if aValue > aMax then
+    Exit(aMax);
+  Result := aValue;
+end;
+
+function TmaxCron.TryReadAutoIntEnv(const aEnvName: string; out aValue: Integer): Boolean;
+var
+  lText: string;
+  lParsed: Int64;
+begin
+  Result := False;
+  lText := Trim(GetEnvironmentVariable(aEnvName));
+  if lText = '' then
+    Exit;
+
+  if not TryStrToInt64(lText, lParsed) then
+    Exit;
+  if (lParsed < Low(Integer)) or (lParsed > High(Integer)) then
+    Exit;
+
+  aValue := Integer(lParsed);
+  Result := True;
+end;
+
+function TmaxCron.TryReadAutoFloatEnv(const aEnvName: string; out aValue: Double): Boolean;
+var
+  lText: string;
+  lParsed: Double;
+  lFormatSettings: TFormatSettings;
+begin
+  Result := False;
+  lText := Trim(GetEnvironmentVariable(aEnvName));
+  if lText = '' then
+    Exit;
+
+  lFormatSettings := TFormatSettings.Invariant;
+  if not TryStrToFloat(lText, lParsed, lFormatSettings) then
+    Exit;
+  if IsNan(lParsed) or IsInfinite(lParsed) then
+    Exit;
+
+  aValue := lParsed;
+  Result := True;
+end;
+
+procedure TmaxCron.ConfigureAutoControllerSettings;
+const
+  cDefaultEwmaAlpha = 0.125;
+  cDefaultEnterMinEvents = 256;
+  cDefaultExitMaxEvents = 160;
+  cDefaultEnterMaxDirtyRate = 0.15;
+  cDefaultExitMinDirtyRate = 0.40;
+  cDefaultEnterHoldTicks = 3;
+  cDefaultExitHoldTicks = 3;
+  cDefaultTrialTicks = 32;
+  cDefaultCooldownTicks = 128;
+  cDefaultPromoteRatio = 0.85;
+  cDefaultDemoteRatio = 1.05;
+
+  cMinEnterEvents = 1;
+  cMaxEnterEvents = 1000000;
+  cMinExitEvents = 0;
+  cMaxExitEvents = 1000000;
+  cMinDirtyRate = 0.0;
+  cMaxDirtyRate = 1.0;
+  cMinHoldTicks = 1;
+  cMaxHoldTicks = 1024;
+  cMinTrialTicks = 1;
+  cMaxTrialTicks = 4096;
+  cMinCooldownTicks = 0;
+  cMaxCooldownTicks = 8192;
+  cMinRatio = 0.25;
+  cMaxRatio = 4.0;
+  cMinRatioGap = 0.01;
+var
+  lIntValue: Integer;
+  lDoubleValue: Double;
+begin
+  fAutoConfig.EwmaAlpha := cDefaultEwmaAlpha;
+  fAutoConfig.EnterMinEvents := cDefaultEnterMinEvents;
+  fAutoConfig.ExitMaxEvents := cDefaultExitMaxEvents;
+  fAutoConfig.EnterMaxDirtyRate := cDefaultEnterMaxDirtyRate;
+  fAutoConfig.ExitMinDirtyRate := cDefaultExitMinDirtyRate;
+  fAutoConfig.EnterHoldTicks := cDefaultEnterHoldTicks;
+  fAutoConfig.ExitHoldTicks := cDefaultExitHoldTicks;
+  fAutoConfig.TrialTicks := cDefaultTrialTicks;
+  fAutoConfig.CooldownTicks := cDefaultCooldownTicks;
+  fAutoConfig.PromoteRatio := cDefaultPromoteRatio;
+  fAutoConfig.DemoteRatio := cDefaultDemoteRatio;
+
+  if TryReadAutoIntEnv('MAXCRON_AUTO_ENTER_EVENTS', lIntValue) then
+    fAutoConfig.EnterMinEvents := ClampAutoInt(lIntValue, cMinEnterEvents, cMaxEnterEvents);
+  if TryReadAutoIntEnv('MAXCRON_AUTO_EXIT_EVENTS', lIntValue) then
+    fAutoConfig.ExitMaxEvents := ClampAutoInt(lIntValue, cMinExitEvents, cMaxExitEvents);
+  if TryReadAutoFloatEnv('MAXCRON_AUTO_ENTER_DIRTY', lDoubleValue) then
+    fAutoConfig.EnterMaxDirtyRate := ClampAutoFloat(lDoubleValue, cMinDirtyRate, cMaxDirtyRate);
+  if TryReadAutoFloatEnv('MAXCRON_AUTO_EXIT_DIRTY', lDoubleValue) then
+    fAutoConfig.ExitMinDirtyRate := ClampAutoFloat(lDoubleValue, cMinDirtyRate, cMaxDirtyRate);
+  if TryReadAutoIntEnv('MAXCRON_AUTO_ENTER_HOLD', lIntValue) then
+    fAutoConfig.EnterHoldTicks := ClampAutoInt(lIntValue, cMinHoldTicks, cMaxHoldTicks);
+  if TryReadAutoIntEnv('MAXCRON_AUTO_EXIT_HOLD', lIntValue) then
+    fAutoConfig.ExitHoldTicks := ClampAutoInt(lIntValue, cMinHoldTicks, cMaxHoldTicks);
+  if TryReadAutoIntEnv('MAXCRON_AUTO_TRIAL_TICKS', lIntValue) then
+    fAutoConfig.TrialTicks := ClampAutoInt(lIntValue, cMinTrialTicks, cMaxTrialTicks);
+  if TryReadAutoIntEnv('MAXCRON_AUTO_COOLDOWN', lIntValue) then
+    fAutoConfig.CooldownTicks := ClampAutoInt(lIntValue, cMinCooldownTicks, cMaxCooldownTicks);
+  if TryReadAutoFloatEnv('MAXCRON_AUTO_PROMOTE_RATIO', lDoubleValue) then
+    fAutoConfig.PromoteRatio := ClampAutoFloat(lDoubleValue, cMinRatio, cMaxRatio);
+  if TryReadAutoFloatEnv('MAXCRON_AUTO_DEMOTE_RATIO', lDoubleValue) then
+    fAutoConfig.DemoteRatio := ClampAutoFloat(lDoubleValue, cMinRatio, cMaxRatio);
+
+  if fAutoConfig.ExitMaxEvents > fAutoConfig.EnterMinEvents then
+    fAutoConfig.ExitMaxEvents := fAutoConfig.EnterMinEvents;
+  if fAutoConfig.ExitMinDirtyRate < fAutoConfig.EnterMaxDirtyRate then
+    fAutoConfig.ExitMinDirtyRate := fAutoConfig.EnterMaxDirtyRate;
+  if fAutoConfig.DemoteRatio <= fAutoConfig.PromoteRatio then
+    fAutoConfig.DemoteRatio := ClampAutoFloat(fAutoConfig.PromoteRatio + cMinRatioGap, cMinRatio, cMaxRatio);
+end;
+
 procedure TmaxCron.ConfigureSchedulerEngine;
 var
   lValue: string;
 begin
+  ConfigureAutoControllerSettings;
+
   lValue := LowerCase(Trim(GetEnvironmentVariable('MAXCRON_ENGINE')));
   if lValue = 'heap' then
     fSchedulerEngine := TSchedulerEngine.seHeap
@@ -3577,25 +3731,15 @@ begin
     Exit;
   fAutoEffectiveEngine := aEngine;
   Inc(fAutoSwitchCount);
-  fAutoCooldownTicks := 128;
+  fAutoCooldownTicks := fAutoConfig.CooldownTicks;
   if aEngine = TSchedulerEngine.seHeap then
     TInterlocked.Exchange(fHeapDirty, 1);
 end;
 
 procedure TmaxCron.EvaluateAutoController(const aEngineUsed: TSchedulerEngine; const aEventCount: Integer;
   const aElapsedMicroseconds: Int64);
-const
-  cAutoEwmaAlpha = 0.125;
-  cAutoEnterMinEvents = 256.0;
-  cAutoExitMaxEvents = 160.0;
-  cAutoEnterMaxDirtyRate = 0.15;
-  cAutoExitMinDirtyRate = 0.40;
-  cAutoEnterHoldTicks = 3;
-  cAutoExitHoldTicks = 3;
-  cAutoTrialTicks = 32;
-  cAutoPromoteRatio = 0.85;
-  cAutoDemoteRatio = 1.05;
 var
+  lConfig: TAutoControllerConfig;
   lDirtySample: Double;
   lEnterCandidate: Boolean;
   lExitCandidate: Boolean;
@@ -3608,12 +3752,14 @@ begin
 
   fAutoLock.Acquire;
   try
+    lConfig := fAutoConfig;
+
     if aEngineUsed = TSchedulerEngine.seScan then
     begin
-      fAutoScanTickUsEwma := UpdateEwma(fAutoScanTickUsEwma, aElapsedMicroseconds, cAutoEwmaAlpha);
-      fAutoScanBaselineUs := UpdateEwma(fAutoScanBaselineUs, aElapsedMicroseconds, cAutoEwmaAlpha);
+      fAutoScanTickUsEwma := UpdateEwma(fAutoScanTickUsEwma, aElapsedMicroseconds, lConfig.EwmaAlpha);
+      fAutoScanBaselineUs := UpdateEwma(fAutoScanBaselineUs, aElapsedMicroseconds, lConfig.EwmaAlpha);
     end else if aEngineUsed = TSchedulerEngine.seHeap then
-      fAutoHeapTickUsEwma := UpdateEwma(fAutoHeapTickUsEwma, aElapsedMicroseconds, cAutoEwmaAlpha);
+      fAutoHeapTickUsEwma := UpdateEwma(fAutoHeapTickUsEwma, aElapsedMicroseconds, lConfig.EwmaAlpha);
 
     lMutationNow := TInterlocked.Read(fAutoMutationCounter);
     lMutationDelta := lMutationNow - fAutoMutationCursor;
@@ -3625,8 +3771,8 @@ begin
     if lMutationDelta > 0 then
       lDirtySample := 1.0;
 
-    fAutoEventCountEwma := UpdateEwma(fAutoEventCountEwma, aEventCount, cAutoEwmaAlpha);
-    fAutoDirtyRateEwma := UpdateEwma(fAutoDirtyRateEwma, lDirtySample, cAutoEwmaAlpha);
+    fAutoEventCountEwma := UpdateEwma(fAutoEventCountEwma, aEventCount, lConfig.EwmaAlpha);
+    fAutoDirtyRateEwma := UpdateEwma(fAutoDirtyRateEwma, lDirtySample, lConfig.EwmaAlpha);
 
     if fAutoCooldownTicks > 0 then
       Dec(fAutoCooldownTicks);
@@ -3635,8 +3781,8 @@ begin
       TAutoSchedulerState.asScanStable:
         begin
           lEnterCandidate :=
-            (fAutoEventCountEwma >= cAutoEnterMinEvents) and
-            (fAutoDirtyRateEwma <= cAutoEnterMaxDirtyRate) and
+            (fAutoEventCountEwma >= lConfig.EnterMinEvents) and
+            (fAutoDirtyRateEwma <= lConfig.EnterMaxDirtyRate) and
             (fAutoCooldownTicks = 0);
 
           if lEnterCandidate then
@@ -3644,11 +3790,11 @@ begin
           else
             fAutoEnterHold := 0;
 
-          if fAutoEnterHold >= cAutoEnterHoldTicks then
+          if fAutoEnterHold >= lConfig.EnterHoldTicks then
           begin
             fAutoEnterHold := 0;
             fAutoExitHold := 0;
-            fAutoTrialTicksRemaining := cAutoTrialTicks;
+            fAutoTrialTicksRemaining := lConfig.TrialTicks;
             fAutoHeapTickUsEwma := 0;
             fAutoState := TAutoSchedulerState.asHeapTrial;
             SwitchAutoEffectiveEngine(TSchedulerEngine.seHeap);
@@ -3658,8 +3804,8 @@ begin
       TAutoSchedulerState.asHeapTrial:
         begin
           lExitCandidate :=
-            (fAutoEventCountEwma <= cAutoExitMaxEvents) or
-            (fAutoDirtyRateEwma >= cAutoExitMinDirtyRate);
+            (fAutoEventCountEwma <= lConfig.ExitMaxEvents) or
+            (fAutoDirtyRateEwma >= lConfig.ExitMinDirtyRate);
 
           if lExitCandidate then
           begin
@@ -3679,7 +3825,7 @@ begin
             lPromoteHeap :=
               (fAutoScanBaselineUs > 0) and
               (fAutoHeapTickUsEwma > 0) and
-              (fAutoHeapTickUsEwma <= (fAutoScanBaselineUs * cAutoPromoteRatio));
+              (fAutoHeapTickUsEwma <= (fAutoScanBaselineUs * lConfig.PromoteRatio));
 
             if lPromoteHeap then
             begin
@@ -3695,16 +3841,16 @@ begin
       TAutoSchedulerState.asHeapStable:
         begin
           lExitCandidate :=
-            (fAutoEventCountEwma <= cAutoExitMaxEvents) or
-            (fAutoDirtyRateEwma >= cAutoExitMinDirtyRate) or
-            ((fAutoScanBaselineUs > 0) and (fAutoHeapTickUsEwma > (fAutoScanBaselineUs * cAutoDemoteRatio)));
+            (fAutoEventCountEwma <= lConfig.ExitMaxEvents) or
+            (fAutoDirtyRateEwma >= lConfig.ExitMinDirtyRate) or
+            ((fAutoScanBaselineUs > 0) and (fAutoHeapTickUsEwma > (fAutoScanBaselineUs * lConfig.DemoteRatio)));
 
           if lExitCandidate then
             Inc(fAutoExitHold)
           else
             fAutoExitHold := 0;
 
-          if fAutoExitHold >= cAutoExitHoldTicks then
+          if fAutoExitHold >= lConfig.ExitHoldTicks then
           begin
             fAutoExitHold := 0;
             fAutoState := TAutoSchedulerState.asScanStable;

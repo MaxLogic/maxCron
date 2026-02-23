@@ -111,6 +111,53 @@ Engine guidance:
 - Apply hold counters and cooldown to avoid scan/heap thrashing.
 - If explicit `scan`, `heap`, or `shadow` is selected, auto-controller logic is bypassed.
 
+### Auto tuning knobs (`MAXCRON_AUTO_*`)
+
+`auto` mode can be tuned per deployment through environment variables (read once during scheduler creation):
+
+| Variable | Default | Meaning | Bounds |
+| --- | --- | --- | --- |
+| `MAXCRON_AUTO_ENTER_EVENTS` | `256` | Minimum event-count EMA to enter heap trial | clamped to `[1..1000000]` |
+| `MAXCRON_AUTO_EXIT_EVENTS` | `160` | Event-count EMA at or below this exits heap | clamped to `[0..1000000]`, then normalized to `<= ENTER_EVENTS` |
+| `MAXCRON_AUTO_ENTER_DIRTY` | `0.15` | Max dirty/churn EMA allowed to enter heap trial | clamped to `[0.0..1.0]` |
+| `MAXCRON_AUTO_EXIT_DIRTY` | `0.40` | Dirty/churn EMA at or above this exits heap | clamped to `[0.0..1.0]`, then normalized to `>= ENTER_DIRTY` |
+| `MAXCRON_AUTO_ENTER_HOLD` | `3` | Consecutive enter-candidate ticks required before heap trial | clamped to `[1..1024]` |
+| `MAXCRON_AUTO_EXIT_HOLD` | `3` | Consecutive exit-candidate ticks required before leaving heap-stable | clamped to `[1..1024]` |
+| `MAXCRON_AUTO_TRIAL_TICKS` | `32` | Heap trial length before promote/fallback decision | clamped to `[1..4096]` |
+| `MAXCRON_AUTO_COOLDOWN` | `128` | Cooldown ticks after each engine switch | clamped to `[0..8192]` |
+| `MAXCRON_AUTO_PROMOTE_RATIO` | `0.85` | Heap promotion threshold (`heap_us <= scan_us * ratio`) | clamped to `[0.25..4.0]` |
+| `MAXCRON_AUTO_DEMOTE_RATIO` | `1.05` | Heap demotion threshold (`heap_us > scan_us * ratio`) | clamped to `[0.25..4.0]`, then normalized to `> PROMOTE_RATIO` |
+
+Parsing rules:
+
+- Missing variables use built-in defaults.
+- Invalid numeric text is ignored for that setting (default remains active).
+- Out-of-range numeric values are clamped to safe bounds.
+- Invalid settings never raise startup exceptions.
+
+### Auto mode tuning by workload archetype
+
+- Sparse due, high cardinality, low churn: lower `ENTER_EVENTS` (for example `128-256`) and keep `TRIAL_TICKS` moderate (`16-48`) to enter heap sooner.
+- Mixed workload with periodic bursts: keep defaults first, then tune `ENTER_HOLD`/`EXIT_HOLD` upward (`3-6`) if switches are too frequent.
+- Churn-heavy (frequent stop/run or plan edits): raise `ENTER_EVENTS`, raise `ENTER_HOLD`, and optionally raise `COOLDOWN` to avoid frequent heap re-entry.
+
+### Oscillation troubleshooting
+
+If we observe scan/heap oscillation in logs or profiling:
+
+- Increase hysteresis gap: lower `PROMOTE_RATIO` and/or raise `DEMOTE_RATIO`.
+- Increase hold counters (`ENTER_HOLD`, `EXIT_HOLD`) so one short burst does not trigger flips.
+- Increase `COOLDOWN` so post-switch settling time is longer.
+- If churn remains continuously high, pin to `scan` explicitly (`MAXCRON_ENGINE=scan`) for that deployment.
+
+### Auto rollout checklist
+
+1. Run baseline in explicit `scan` mode and capture tick latency/cpu.
+2. Canary with `MAXCRON_ENGINE=auto` on a representative subset.
+3. Verify switch behavior and callback correctness under peak + churn phases.
+4. Tune `MAXCRON_AUTO_*` only when measured behavior is unstable or suboptimal.
+5. Roll out broadly with the tuned values and keep `scan` override ready for quick rollback.
+
 High-N benchmark coverage (`TestHeavyStressMixed.EngineBenchmark_ScanVsHeap_HighN`) uses 1200 far-future events and 40 ticks:
 
 - `scan`: 48,000 candidate visits (`1200 * 40`).

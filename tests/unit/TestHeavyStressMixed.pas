@@ -14,6 +14,8 @@ type
   private
     procedure SetError(const aLock: TCriticalSection; var aErrorText: string;
       const aWhere, aText: string);
+    procedure SetEnvVar(const aName, aValue: string; out aPreviousValue: string; out aHadPrevious: Boolean);
+    procedure RestoreEnvVar(const aName, aPreviousValue: string; const aHadPrevious: Boolean);
     procedure SetEngineEnv(const aValue: string; out aPreviousValue: string; out aHadPrevious: Boolean);
     procedure RestoreEngineEnv(const aPreviousValue: string; const aHadPrevious: Boolean);
     procedure RunBenchmarkScenario(const aEngine: string; const aEventCount, aTickCount: Integer;
@@ -27,6 +29,12 @@ type
 
     [Test]
     procedure EngineAutoMode_HysteresisAndOverrideBehavior;
+
+    [Test]
+    procedure EngineAutoMode_CustomThresholds_AreApplied;
+
+    [Test]
+    procedure EngineAutoMode_ConcurrentSwitching_NoMissedDue;
   end;
 
 implementation
@@ -43,20 +51,31 @@ begin
   end;
 end;
 
+procedure TTestHeavyStressMixed.SetEnvVar(const aName, aValue: string; out aPreviousValue: string;
+  out aHadPrevious: Boolean);
+begin
+  aPreviousValue := GetEnvironmentVariable(aName);
+  aHadPrevious := aPreviousValue <> '';
+  Winapi.Windows.SetEnvironmentVariable(PChar(aName), PChar(aValue));
+end;
+
+procedure TTestHeavyStressMixed.RestoreEnvVar(const aName, aPreviousValue: string; const aHadPrevious: Boolean);
+begin
+  if aHadPrevious then
+    Winapi.Windows.SetEnvironmentVariable(PChar(aName), PChar(aPreviousValue))
+  else
+    Winapi.Windows.SetEnvironmentVariable(PChar(aName), nil);
+end;
+
 procedure TTestHeavyStressMixed.SetEngineEnv(const aValue: string; out aPreviousValue: string;
   out aHadPrevious: Boolean);
 begin
-  aPreviousValue := GetEnvironmentVariable('MAXCRON_ENGINE');
-  aHadPrevious := aPreviousValue <> '';
-  Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(aValue));
+  SetEnvVar('MAXCRON_ENGINE', aValue, aPreviousValue, aHadPrevious);
 end;
 
 procedure TTestHeavyStressMixed.RestoreEngineEnv(const aPreviousValue: string; const aHadPrevious: Boolean);
 begin
-  if aHadPrevious then
-    Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(aPreviousValue))
-  else
-    Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', nil);
+  RestoreEnvVar('MAXCRON_ENGINE', aPreviousValue, aHadPrevious);
 end;
 
 procedure TTestHeavyStressMixed.RunBenchmarkScenario(const aEngine: string; const aEventCount, aTickCount: Integer;
@@ -372,6 +391,379 @@ begin
     end;
   finally
     RestoreEngineEnv(lPreviousValue, lHadPrevious);
+  end;
+end;
+
+procedure TTestHeavyStressMixed.EngineAutoMode_CustomThresholds_AreApplied;
+const
+  cEventCount = 500;
+  cTickCount = 64;
+  cFuturePlan = '0 0 1 1 * 2099 0 1';
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lIndex: Integer;
+  lNowDateTime: TDateTime;
+  lConfiguredEngine: string;
+  lEffectiveEngine: string;
+  lAutoState: string;
+  lSwitchCount: UInt64;
+  lPreviousEngineValue: string;
+  lPreviousEnterEventsValue: string;
+  lPreviousExitEventsValue: string;
+  lPreviousTrialTicksValue: string;
+  lPreviousPromoteRatioValue: string;
+  lPreviousDemoteRatioValue: string;
+  lPreviousCooldownValue: string;
+  lHadEngineValue: Boolean;
+  lHadEnterEventsValue: Boolean;
+  lHadExitEventsValue: Boolean;
+  lHadTrialTicksValue: Boolean;
+  lHadPromoteRatioValue: Boolean;
+  lHadDemoteRatioValue: Boolean;
+  lHadCooldownValue: Boolean;
+begin
+  SetEnvVar('MAXCRON_ENGINE', 'auto', lPreviousEngineValue, lHadEngineValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_EVENTS', '900', lPreviousEnterEventsValue, lHadEnterEventsValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_EVENTS', '850', lPreviousExitEventsValue, lHadExitEventsValue);
+  try
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      for lIndex := 0 to cEventCount - 1 do
+      begin
+        lEvent := lCron.Add('AutoCustomHigh_' + IntToStr(lIndex));
+        lEvent.EventPlan := cFuturePlan;
+        lEvent.Run;
+      end;
+
+      lNowDateTime := Now;
+      for lIndex := 0 to cTickCount - 1 do
+        lCron.TickAt(lNowDateTime);
+
+      lCron.GetEngineStateForTests(lConfiguredEngine, lEffectiveEngine, lAutoState, lSwitchCount);
+      Assert.AreEqual('auto', lConfiguredEngine);
+      Assert.AreEqual('scan', lEffectiveEngine, 'Raised enter threshold should keep auto mode on scan');
+      Assert.AreEqual(UInt64(0), lSwitchCount, 'Raised enter threshold should prevent switches');
+    finally
+      lCron.Free;
+    end;
+  finally
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_EVENTS', lPreviousExitEventsValue, lHadExitEventsValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_EVENTS', lPreviousEnterEventsValue, lHadEnterEventsValue);
+    RestoreEnvVar('MAXCRON_ENGINE', lPreviousEngineValue, lHadEngineValue);
+  end;
+
+  SetEnvVar('MAXCRON_ENGINE', 'auto', lPreviousEngineValue, lHadEngineValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_EVENTS', '64', lPreviousEnterEventsValue, lHadEnterEventsValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_EVENTS', '32', lPreviousExitEventsValue, lHadExitEventsValue);
+  SetEnvVar('MAXCRON_AUTO_TRIAL_TICKS', '4', lPreviousTrialTicksValue, lHadTrialTicksValue);
+  SetEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', '1.25', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
+  SetEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', '1.40', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
+  SetEnvVar('MAXCRON_AUTO_COOLDOWN', '2', lPreviousCooldownValue, lHadCooldownValue);
+  try
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      for lIndex := 0 to cEventCount - 1 do
+      begin
+        lEvent := lCron.Add('AutoCustomLow_' + IntToStr(lIndex));
+        lEvent.EventPlan := cFuturePlan;
+        lEvent.Run;
+      end;
+
+      lNowDateTime := Now;
+      for lIndex := 0 to cTickCount - 1 do
+        lCron.TickAt(lNowDateTime);
+
+      lCron.GetEngineStateForTests(lConfiguredEngine, lEffectiveEngine, lAutoState, lSwitchCount);
+      Assert.AreEqual('auto', lConfiguredEngine);
+      Assert.AreEqual('heap', lEffectiveEngine, 'Lower enter threshold should promote to heap');
+      Assert.IsTrue(lSwitchCount > 0, 'Custom thresholds should change switching behavior');
+    finally
+      lCron.Free;
+    end;
+  finally
+    RestoreEnvVar('MAXCRON_AUTO_COOLDOWN', lPreviousCooldownValue, lHadCooldownValue);
+    RestoreEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
+    RestoreEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
+    RestoreEnvVar('MAXCRON_AUTO_TRIAL_TICKS', lPreviousTrialTicksValue, lHadTrialTicksValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_EVENTS', lPreviousExitEventsValue, lHadExitEventsValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_EVENTS', lPreviousEnterEventsValue, lHadEnterEventsValue);
+    RestoreEnvVar('MAXCRON_ENGINE', lPreviousEngineValue, lHadEngineValue);
+  end;
+end;
+
+procedure TTestHeavyStressMixed.EngineAutoMode_ConcurrentSwitching_NoMissedDue;
+const
+  cThreadCount = 4;
+  cEventCount = 450;
+  cTotalTicks = 96;
+  cChurnStartTick = 28;
+  cChurnEndTick = 64;
+  cFuturePlan = '0 0 1 1 * 2099 0 1';
+var
+  lCron: TmaxCron;
+  lDueEvent: IMaxCronEvent;
+  lChurnEvent: IMaxCronEvent;
+  lEvent: IMaxCronEvent;
+  lThreads: array [0 .. cThreadCount - 1] of TThread;
+  lThreadReady: array [0 .. cThreadCount - 1] of TEvent;
+  lAllCallbacksDone: TEvent;
+  lShutdownDone: TEvent;
+  lErrorLock: TCriticalSection;
+  lErrorText: string;
+  lDriverTickIndex: Integer;
+  lStopWorkers: Integer;
+  lCallbackCount: Integer;
+  lObservedCount: Integer;
+  lBaseDueAt: TDateTime;
+  lIndex: Integer;
+  lWaitStopwatch: TStopwatch;
+  lCronForShutdown: TmaxCron;
+  lConfiguredEngine: string;
+  lEffectiveEngine: string;
+  lAutoState: string;
+  lSwitchCount: UInt64;
+  lPreviousEngineValue: string;
+  lPreviousEnterEventsValue: string;
+  lPreviousExitEventsValue: string;
+  lPreviousEnterDirtyValue: string;
+  lPreviousExitDirtyValue: string;
+  lPreviousEnterHoldValue: string;
+  lPreviousExitHoldValue: string;
+  lPreviousTrialTicksValue: string;
+  lPreviousCooldownValue: string;
+  lPreviousPromoteRatioValue: string;
+  lPreviousDemoteRatioValue: string;
+  lHadEngineValue: Boolean;
+  lHadEnterEventsValue: Boolean;
+  lHadExitEventsValue: Boolean;
+  lHadEnterDirtyValue: Boolean;
+  lHadExitDirtyValue: Boolean;
+  lHadEnterHoldValue: Boolean;
+  lHadExitHoldValue: Boolean;
+  lHadTrialTicksValue: Boolean;
+  lHadCooldownValue: Boolean;
+  lHadPromoteRatioValue: Boolean;
+  lHadDemoteRatioValue: Boolean;
+
+  function MakeWorker(const aWorkerIndex: Integer): TThread;
+  begin
+    Result := TThread.CreateAnonymousThread(
+      procedure
+      var
+        lTickIndex: Integer;
+        lTickAt: TDateTime;
+      begin
+        lThreadReady[aWorkerIndex].SetEvent;
+        while True do
+        begin
+          if TInterlocked.CompareExchange(lStopWorkers, 0, 0) <> 0 then
+            Break;
+
+          try
+            lTickIndex := TInterlocked.CompareExchange(lDriverTickIndex, 0, 0);
+            if lTickIndex < 0 then
+            begin
+              TThread.Yield;
+              Continue;
+            end;
+            lTickAt := IncSecond(lBaseDueAt, lTickIndex);
+            lCron.TickAt(lTickAt);
+          except
+            on E: Exception do
+            begin
+              SetError(lErrorLock, lErrorText, 'WorkerTick', E.ClassName + ': ' + E.Message);
+              Exit;
+            end;
+          end;
+
+          if (lTickIndex and $07) = 0 then
+            TThread.Yield;
+          TThread.Sleep(1);
+        end;
+      end
+      );
+    Result.FreeOnTerminate := False;
+  end;
+begin
+  lCron := nil;
+  lCronForShutdown := nil;
+  for lIndex := 0 to cThreadCount - 1 do
+  begin
+    lThreads[lIndex] := nil;
+    lThreadReady[lIndex] := nil;
+  end;
+
+  lDriverTickIndex := -1;
+  lStopWorkers := 0;
+  lCallbackCount := 0;
+  lErrorText := '';
+  lErrorLock := TCriticalSection.Create;
+  lAllCallbacksDone := TEvent.Create(nil, True, False, '');
+  lShutdownDone := TEvent.Create(nil, True, False, '');
+  try
+    SetEnvVar('MAXCRON_ENGINE', 'auto', lPreviousEngineValue, lHadEngineValue);
+    SetEnvVar('MAXCRON_AUTO_ENTER_EVENTS', '200', lPreviousEnterEventsValue, lHadEnterEventsValue);
+    SetEnvVar('MAXCRON_AUTO_EXIT_EVENTS', '120', lPreviousExitEventsValue, lHadExitEventsValue);
+    SetEnvVar('MAXCRON_AUTO_ENTER_DIRTY', '0.10', lPreviousEnterDirtyValue, lHadEnterDirtyValue);
+    SetEnvVar('MAXCRON_AUTO_EXIT_DIRTY', '0.25', lPreviousExitDirtyValue, lHadExitDirtyValue);
+    SetEnvVar('MAXCRON_AUTO_ENTER_HOLD', '2', lPreviousEnterHoldValue, lHadEnterHoldValue);
+    SetEnvVar('MAXCRON_AUTO_EXIT_HOLD', '2', lPreviousExitHoldValue, lHadExitHoldValue);
+    SetEnvVar('MAXCRON_AUTO_TRIAL_TICKS', '4', lPreviousTrialTicksValue, lHadTrialTicksValue);
+    SetEnvVar('MAXCRON_AUTO_COOLDOWN', '2', lPreviousCooldownValue, lHadCooldownValue);
+    SetEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', '1.25', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
+    SetEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', '1.40', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
+    try
+      lCron := TmaxCron.Create(ctPortable);
+      try
+        lDueEvent := lCron.Add('AutoConcurrentDue');
+        lDueEvent.EventPlan := '* * * * * * * 0';
+        lDueEvent.InvokeMode := imMainThread;
+        lDueEvent.OnScheduleProc :=
+          procedure(aSender: IMaxCronEvent)
+          var
+            lCount: Integer;
+          begin
+            lCount := TInterlocked.Increment(lCallbackCount);
+            if lCount >= cTotalTicks then
+              lAllCallbacksDone.SetEvent;
+          end;
+        lDueEvent.Run;
+        lBaseDueAt := lDueEvent.NextSchedule;
+        lCron.TickAt(lBaseDueAt);
+        lWaitStopwatch := TStopwatch.StartNew;
+        while (TInterlocked.CompareExchange(lCallbackCount, 0, 0) < 1) and
+          (lWaitStopwatch.ElapsedMilliseconds < 1000) do
+          CheckSynchronize(5);
+        Assert.AreEqual(1, TInterlocked.CompareExchange(lCallbackCount, 0, 0),
+          'Initial due tick should execute exactly once');
+
+        lChurnEvent := lCron.Add('AutoConcurrentChurn');
+        lChurnEvent.EventPlan := cFuturePlan;
+        lChurnEvent.Run;
+
+        for lIndex := 0 to cEventCount - 1 do
+        begin
+          lEvent := lCron.Add('AutoConcurrentFar_' + IntToStr(lIndex));
+          lEvent.EventPlan := cFuturePlan;
+          lEvent.Run;
+        end;
+
+        for lIndex := 0 to cThreadCount - 1 do
+          lThreadReady[lIndex] := TEvent.Create(nil, True, False, '');
+        try
+          for lIndex := 0 to cThreadCount - 1 do
+          begin
+            lThreads[lIndex] := MakeWorker(lIndex);
+            lThreads[lIndex].Start;
+          end;
+
+          for lIndex := 0 to cThreadCount - 1 do
+            Assert.AreEqual(TWaitResult.wrSignaled, lThreadReady[lIndex].WaitFor(3000), 'Worker did not start');
+
+          for lIndex := 1 to cTotalTicks - 1 do
+          begin
+            TInterlocked.Exchange(lDriverTickIndex, lIndex);
+            if (lIndex >= cChurnStartTick) and (lIndex < cChurnEndTick) then
+            begin
+              lChurnEvent.Stop;
+              lChurnEvent.Run;
+            end;
+            lCron.TickAt(IncSecond(lBaseDueAt, lIndex));
+            CheckSynchronize(0);
+          end;
+          TInterlocked.Exchange(lStopWorkers, 1);
+
+          for lIndex := 0 to cThreadCount - 1 do
+            lThreads[lIndex].WaitFor;
+        finally
+          for lIndex := 0 to cThreadCount - 1 do
+          begin
+            if lThreadReady[lIndex] <> nil then
+              lThreadReady[lIndex].Free;
+            if lThreads[lIndex] <> nil then
+              lThreads[lIndex].Free;
+          end;
+        end;
+
+        lErrorLock.Acquire;
+        try
+          if lErrorText <> '' then
+            Assert.Fail(lErrorText);
+        finally
+          lErrorLock.Release;
+        end;
+
+        lWaitStopwatch := TStopwatch.StartNew;
+        while (TInterlocked.CompareExchange(lCallbackCount, 0, 0) < cTotalTicks) and
+          (lWaitStopwatch.ElapsedMilliseconds < 10000) do
+          CheckSynchronize(5);
+
+        lObservedCount := TInterlocked.CompareExchange(lCallbackCount, 0, 0);
+        Assert.IsTrue(lObservedCount >= (cTotalTicks - 1),
+          Format('Concurrent auto switching should not lose due callbacks (expected >= %d observed=%d)',
+            [cTotalTicks - 1, lObservedCount]));
+        Assert.IsTrue(lObservedCount <= cTotalTicks,
+          Format('Concurrent auto switching should not duplicate due callbacks (expected <= %d observed=%d)',
+            [cTotalTicks, lObservedCount]));
+
+        lCron.GetEngineStateForTests(lConfiguredEngine, lEffectiveEngine, lAutoState, lSwitchCount);
+        Assert.AreEqual('auto', lConfiguredEngine);
+        Assert.IsTrue((lEffectiveEngine = 'scan') or (lEffectiveEngine = 'heap'),
+          'Auto mode should keep effective engine in scan/heap set');
+        Assert.IsTrue(lAutoState <> 'disabled', 'Auto mode state should stay active');
+        Assert.IsTrue(lSwitchCount >= 2, 'Concurrent churn phases should force at least two auto-engine switches');
+
+        lDueEvent := nil;
+        lChurnEvent := nil;
+        lEvent := nil;
+
+        lCronForShutdown := lCron;
+        lCron := nil;
+        TThread.CreateAnonymousThread(
+          procedure
+          begin
+            try
+              lCronForShutdown.Free;
+            except
+              on E: Exception do
+                SetError(lErrorLock, lErrorText, 'Shutdown', E.ClassName + ': ' + E.Message);
+            end;
+            lShutdownDone.SetEvent;
+          end
+          ).Start;
+
+        Assert.AreEqual(TWaitResult.wrSignaled, lShutdownDone.WaitFor(5000),
+          'Scheduler shutdown should remain stable during auto switching');
+
+        lErrorLock.Acquire;
+        try
+          if lErrorText <> '' then
+            Assert.Fail(lErrorText);
+        finally
+          lErrorLock.Release;
+        end;
+      finally
+        if lCron <> nil then
+          lCron.Free;
+      end;
+    finally
+      RestoreEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
+      RestoreEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
+      RestoreEnvVar('MAXCRON_AUTO_COOLDOWN', lPreviousCooldownValue, lHadCooldownValue);
+      RestoreEnvVar('MAXCRON_AUTO_TRIAL_TICKS', lPreviousTrialTicksValue, lHadTrialTicksValue);
+      RestoreEnvVar('MAXCRON_AUTO_EXIT_HOLD', lPreviousExitHoldValue, lHadExitHoldValue);
+      RestoreEnvVar('MAXCRON_AUTO_ENTER_HOLD', lPreviousEnterHoldValue, lHadEnterHoldValue);
+      RestoreEnvVar('MAXCRON_AUTO_EXIT_DIRTY', lPreviousExitDirtyValue, lHadExitDirtyValue);
+      RestoreEnvVar('MAXCRON_AUTO_ENTER_DIRTY', lPreviousEnterDirtyValue, lHadEnterDirtyValue);
+      RestoreEnvVar('MAXCRON_AUTO_EXIT_EVENTS', lPreviousExitEventsValue, lHadExitEventsValue);
+      RestoreEnvVar('MAXCRON_AUTO_ENTER_EVENTS', lPreviousEnterEventsValue, lHadEnterEventsValue);
+      RestoreEnvVar('MAXCRON_ENGINE', lPreviousEngineValue, lHadEngineValue);
+    end;
+  finally
+    lShutdownDone.Free;
+    lAllCallbacksDone.Free;
+    lErrorLock.Free;
   end;
 end;
 

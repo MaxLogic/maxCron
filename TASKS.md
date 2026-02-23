@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-061
+Next task ID: T-064
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 61
+Done tasks: 64
 
 ## In Progress
 
@@ -19,6 +19,24 @@ Done tasks: 61
 
 
 ## Done
+
+### T-063 [DOC] Publish auto engine operations and tuning playbook
+Outcome: Expanded README with an adaptive-mode operations playbook covering `MAXCRON_AUTO_*` knobs, workload archetypes, oscillation troubleshooting, and a rollout checklist (scan baseline -> auto canary -> production).
+Proof: `rg -n "MAXCRON_AUTO_|auto mode policy|rollout checklist|oscillation" README.md` returns the new sections/knobs; `./build-delphi.sh tests/maxCronTests.dproj -config release` succeeds.
+Touches: `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-060
+
+### T-062 [TEST] Add concurrent auto-switch race regressions and no-miss guarantees
+Outcome: Added concurrent adaptive-mode stress regression that runs parallel `TickAt` workers while forcing churn-driven scan/heap transitions, asserting stable shutdown and due-callback invariants across switching phases.
+Proof: `MAXCRON_ENGINE=auto ./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 6/6, Core 125/125, VCL 3/3); targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_ConcurrentSwitching_NoMissedDue"` passes (1/1).
+Touches: `tests/unit/TestHeavyStressMixed.pas`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-060
+
+### T-061 [PERF] Add validated runtime tuning knobs for auto engine thresholds
+Outcome: Added bounded `MAXCRON_AUTO_*` runtime tuning (enter/exit events, churn thresholds, hold/trial/cooldown, promote/demote ratios) with strict parsing and safe fallback behavior; adaptive controller now applies these settings at scheduler creation.
+Proof: `MAXCRON_ENGINE=auto ./build-and-run-tests.sh -cm:Quiet` passes (Stress 6/6, Core 125/125, VCL 3/3); `MAXCRON_ENGINE=auto MAXCRON_AUTO_ENTER_EVENTS=bad MAXCRON_AUTO_COOLDOWN=-5 ./build-and-run-tests.sh -cm:Quiet` passes (Stress 6/6, Core 125/125, VCL 3/3) with non-fatal fallback/clamping; targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_CustomThresholds_AreApplied"` passes (1/1).
+Touches: `maxCron.pas`, `tests/unit/TestHeavyStressMixed.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-060
 
 ### T-060 [PERF] Add adaptive auto scheduler mode with hysteresis
 Outcome: Added adaptive scheduler engine mode (`MAXCRON_ENGINE=auto`) with scan/heap hysteresis, cooldown, and trial promotion/fallback logic, including race-safe effective-engine switching under concurrent ticks and linear-time heap rebuild during reindex.
