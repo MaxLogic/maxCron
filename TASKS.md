@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-055
+Next task ID: T-057
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 55
+Done tasks: 57
 
 ## In Progress
 
@@ -19,6 +19,16 @@ Done tasks: 55
 
 
 ## Done
+
+### T-056 [ROBUST] Replace raw owner dereference paths with shared state + dictionary indexes
+Outcome: Replaced queue-token raw-owner dereference paths with `ICronSharedState` (alive/default snapshots + in-flight/callback depth tracking + async/flush/tick operations), removed direct worker-thread reads of `TmaxCron` internals, added dictionary-backed name/id indexes for faster `Delete(Name)` / `Delete(Id)` lookup paths, and documented `imMainThread` message-pump requirements explicitly in README/code comments.
+Proof: `./build-and-run-tests.sh -cm:Quiet` passes (Stress 2/2, Core 123/123, VCL 3/3); `./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 2/2, Core 123/123, VCL 3/3); compile output confirms demo + all test projects build clean.
+Touches: `maxCron.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+
+### T-055 [DST] Correct ambiguous fall-back second-instance dispatch + queue submit rollback
+Outcome: DST fall-back second-instance handling now preserves instance semantics at runtime: `dfpRunTwice` and `dfpRunOncePreferSecondInstance` no longer dispatch second-instance behavior on the first ambiguous pass; queue submit failures now roll back reserved/queued state for both main-thread event dispatch and queued scheduler ticks.
+Proof: `./build-and-run-tests.sh -cm:Quiet` passes (Stress 2/2, Core 123/123, VCL 3/3); `./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 2/2, Core 123/123, VCL 3/3); targeted DST regression in `tests/unit/TestCalendarTimeZone.pas` validates rollback-gated second-instance firing.
+Touches: `maxCron.pas`, `tests/unit/TestCalendarTimeZone.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
 
 ### T-054 [CI] Build demo project in canonical test scripts
 Outcome: `build-and-run-tests.bat` and `build-and-run-tests-stress.bat` now compile `demo/CronDemo.dproj` before test projects, so CI runs using canonical scripts always validate demo compileability too.

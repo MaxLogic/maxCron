@@ -35,6 +35,9 @@ type
 
     [Test]
     procedure DstFallPolicy_RunTwice_QueuesSecondOccurrence;
+
+    [Test]
+    procedure DstFallPolicy_PreferSecond_WaitsForSecondOccurrence;
   end;
 
 implementation
@@ -286,11 +289,60 @@ begin
     lFirstNext := lEvent.NextSchedule;
     Assert.IsTrue(TTimeZone.Local.IsAmbiguousTime(lFirstNext));
     lCron.TickAt(lFirstNext);
+    Assert.AreEqual(1, lCount, 'First ambiguous instance should execute');
     lSecondNext := lEvent.NextSchedule;
 
+    Assert.AreEqual(lFirstNext, lSecondNext, 0.0);
     Assert.IsTrue(TTimeZone.Local.IsAmbiguousTime(lSecondNext));
     lCron.TickAt(lSecondNext);
+    Assert.AreEqual(1, lCount, 'Second run must wait for the repeated wall-clock instance');
+    lCron.TickAt(IncMinute(lSecondNext, -1)); // simulate fallback rollback (time moved back)
+    lCron.TickAt(lSecondNext);
     Assert.AreEqual(2, lCount);
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestCalendarTimeZone.DstFallPolicy_PreferSecond_WaitsForSecondOccurrence;
+var
+  lAmbiguous: TDateTime;
+  lPlan: string;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lCount: Integer;
+  lNextAt: TDateTime;
+begin
+  if not TryFindAmbiguousLocalTime(lAmbiguous) then
+    Exit;
+
+  lCount := 0;
+  lPlan := Format('%d %d %d %d * %d 0 1',
+    [MinuteOf(lAmbiguous), HourOf(lAmbiguous), DayOf(lAmbiguous), MonthOf(lAmbiguous), YearOf(lAmbiguous)]);
+
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lEvent := lCron.Add('FallPreferSecond');
+    lEvent.EventPlan := lPlan;
+    lEvent.TimeZoneId := 'LOCAL';
+    lEvent.DstFallPolicy := TmaxCronDstFallPolicy.dfpRunOncePreferSecondInstance;
+    lEvent.OnScheduleProc :=
+      procedure(Sender: IMaxCronEvent)
+      begin
+        Inc(lCount);
+      end;
+    lEvent.ValidFrom := IncSecond(lAmbiguous, -1);
+    lEvent.Run;
+
+    lNextAt := lEvent.NextSchedule;
+    Assert.IsTrue(TTimeZone.Local.IsAmbiguousTime(lNextAt));
+
+    lCron.TickAt(lNextAt);
+    Assert.AreEqual(0, lCount, 'Prefer-second must not fire at the first ambiguous instance');
+
+    lCron.TickAt(IncMinute(lNextAt, -1)); // simulate fallback rollback (time moved back)
+    lCron.TickAt(lNextAt);
+    Assert.AreEqual(1, lCount, 'Prefer-second should fire at the repeated ambiguous instance');
   finally
     lCron.Free;
   end;

@@ -89,6 +89,10 @@ If we assign `imDefault` to `CronScheduler.DefaultInvokeMode`, maxCron normalize
 
 Note: if we execute off the VCL main thread, we must not touch UI directly.
 
+Important: `imMainThread` dispatch relies on a live main-thread message pump.
+In service/console/non-VCL hosts (or any host without pumping), queued callbacks may never run.
+For those hosts we should use `imMaxAsync`, `imTTask`, or `imThread`.
+
 If dispatch startup fails (for example, task/thread launch raises, a queued main-thread callback fails before execution acquire, or a serialized-chain continuation launch fails), maxCron rolls back overlap state and execution reservations so future ticks continue normally and `ExecutionLimit` is not consumed by failed launches.
 Our dispatch-start rollback regressions also include repeated serialized retry runs to keep this recovery path stable under tight tick timing.
 
@@ -192,6 +196,8 @@ NewSchedule.DstFallPolicy := dfpRunOncePreferSecondInstance;
 ```
 
 `dfpRunTwice` executes both ambiguous fall-back instances at the same local wall-clock time.
+For `dfpRunTwice` and `dfpRunOncePreferSecondInstance`, maxCron now waits for the repeated wall-clock pass
+after fallback instead of dispatching the second-instance semantics immediately on the first pass.
 
 ## Business calendar exclusions
 

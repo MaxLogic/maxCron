@@ -38,6 +38,7 @@ All notable user-visible changes to this project will be documented in this file
 - Updated the demo UI with invoke/overlap/misfire controls and expanded samples. (T-015)
 - Updated README to reflect misfire policies, macros, and planned features. (T-016)
 - Expanded unit and stress robustness coverage for DST fall variants, timezone/exclusion/blackout parser edges, hash token failures, default-policy propagation, final-dispatch regressions, and mixed-feature concurrency. (T-028, T-029, T-030, T-031, T-032, T-033, T-034, T-035, T-036)
+- Clarified documentation that `imMainThread` dispatch requires an active main-thread message pump (non-UI/service hosts should use async/thread invoke modes).
 
 ### Fixed
 - Fixed unnamed-event deletion ergonomics by allowing `Delete(Event)` and `Delete(Id)` without index-based APIs. (T-050)
@@ -54,6 +55,9 @@ All notable user-visible changes to this project will be documented in this file
 - Fixed queued main-thread pre-acquire failure rollback so failed dispatch attempts no longer consume `ExecutionLimit` or leave overlap state wedged.
 - Fixed `ctVcl` backend creation to fail fast off the VCL main thread instead of creating an unsafe VCL timer instance.
 - Fixed callback shutdown protection to reject `TmaxCron.Free` while callbacks are still executing across threads, preventing cross-thread callback/destructor deadlocks.
+- Fixed DST fall-back second-instance dispatch semantics: `dfpRunTwice` and `dfpRunOncePreferSecondInstance` now wait for the repeated wall-clock pass instead of firing second-instance behavior on the first ambiguous pass.
+- Fixed callback/dispatch lifetime pinning by replacing raw scheduler-owner dereference paths with a shared-state interface used by worker/queued dispatch code.
+- Fixed name/id event index lookups to use dictionary-backed indexes (`Delete(Name)`, `Delete(Id)`, duplicate name checks) instead of linear scans.
 - Fixed `DstFallPolicy=dfpRunOncePreferSecondInstance` to keep the same ambiguous local wall-clock schedule time instead of shifting by DST delta.
 - Fixed timezone offset parsing to reject malformed values like `UTC++2` and `UTC+2:3`; accepted format remains `UTC+/-HH[:MM]`.
 - Fixed `DstFallPolicy=dfpRunTwice` to schedule both ambiguous fall-back instances at the same local wall-clock time.

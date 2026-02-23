@@ -183,18 +183,23 @@ Type
     fDefaultMisfireCatchUpLimit: Cardinal;
     fTimer: ICronTimer;
     fItems: TList<IMaxCronEvent>;
+    fItemsById: TDictionary<Int64, Integer>;
+    fItemsByName: TDictionary<string, Integer>;
     fItemsLock: TCriticalSection;
     fPendingFree: TList<IMaxCronEvent>;
     fNextId: Int64;
     fTickDepth: Integer;
     fTickQueued: Integer;
-    fCallbackDepth: Integer;
-    fQueueToken: IInterface;
+    fSharedState: IInterface;
     fAsyncKeepAlive: TList<IInterface>;
     fAsyncLock: TCriticalSection;
+    function EventNameKey(const aName: string): string;
     function NormalizeEventName(const aName: string): string;
     function FindIndexByNameLocked(const aName: string): Integer;
     function FindIndexByIdLocked(const aId: Int64): Integer;
+    procedure IndexEventLocked(const aEventItem: IMaxCronEvent; const aIndex: Integer);
+    procedure RemoveEventIndexLocked(const aEventItem: IMaxCronEvent);
+    procedure ReindexFromLocked(const aStartIndex: Integer);
     function DeleteLocked(const aIndex: Integer): Boolean;
     procedure TimerTimer(Sender: TObject);
     procedure CreateTimer(const aRequestedBackend: TmaxCronTimerBackend);
@@ -480,21 +485,51 @@ threadvar
   gMaxCronExecutingCron: Pointer;
 
 type
-  ICronQueueToken = interface
-    ['{3F1D42F5-52B2-4B86-9E06-5ED517BD5E46}']
+  ICronSharedState = interface
+    ['{6A7A6429-48F6-4F7A-854A-55C8DFA7FC31}']
     procedure Detach;
-    function TryGetOwner(out aOwner: TmaxCron): Boolean;
+    function IsAlive: Boolean;
+    function TryGetDefaultInvokeMode(out aInvokeMode: TmaxCronInvokeMode): Boolean;
+    function TryGetDefaultDayMatchMode(out aDayMatchMode: TmaxCronDayMatchMode): Boolean;
+    function TryGetMisfireDefaults(out aMisfirePolicy: TmaxCronMisfirePolicy; out aCatchUpLimit: Cardinal): Boolean;
+    function TryGetOwnerPointer(out aOwnerPointer: Pointer): Boolean;
+    function GetInFlightCount: Integer;
+    procedure IncrementCallbackDepth;
+    procedure DecrementCallbackDepth;
+    function GetCallbackDepth: Integer;
+    procedure KeepAsyncAlive(const aAsync: IInterface);
+    procedure ReleaseAsyncAlive(const aAsync: IInterface);
+    procedure FlushPendingFree;
+    procedure ExecuteQueuedTick;
+    procedure ResetTickQueued;
   end;
 
-  TCronQueueToken = class(TInterfacedObject, ICronQueueToken)
+  TCronSharedState = class(TInterfacedObject, ICronSharedState)
   private
     fLock: TCriticalSection;
     fOwner: TmaxCron;
+    fInFlight: Integer;
+    fCallbackDepth: Integer;
+    function TryAcquireOwner(out aOwner: TmaxCron): Boolean;
+    procedure ReleaseOwner;
   public
-    constructor Create(aOwner: TmaxCron);
+    constructor Create(const aOwner: TmaxCron);
     destructor Destroy; override;
     procedure Detach;
-    function TryGetOwner(out aOwner: TmaxCron): Boolean;
+    function IsAlive: Boolean;
+    function TryGetDefaultInvokeMode(out aInvokeMode: TmaxCronInvokeMode): Boolean;
+    function TryGetDefaultDayMatchMode(out aDayMatchMode: TmaxCronDayMatchMode): Boolean;
+    function TryGetMisfireDefaults(out aMisfirePolicy: TmaxCronMisfirePolicy; out aCatchUpLimit: Cardinal): Boolean;
+    function TryGetOwnerPointer(out aOwnerPointer: Pointer): Boolean;
+    function GetInFlightCount: Integer;
+    procedure IncrementCallbackDepth;
+    procedure DecrementCallbackDepth;
+    function GetCallbackDepth: Integer;
+    procedure KeepAsyncAlive(const aAsync: IInterface);
+    procedure ReleaseAsyncAlive(const aAsync: IInterface);
+    procedure FlushPendingFree;
+    procedure ExecuteQueuedTick;
+    procedure ResetTickQueued;
   end;
 
   TVclCronTimer = class(TInterfacedObject, ICronTimer)
@@ -531,8 +566,7 @@ type
     type
       TCronTimeZoneKind = (ctzLocal, ctzUtc, ctzFixedOffset);
   private
-    fCron: TmaxCron;
-    fCronToken: IInterface;
+    fSharedState: ICronSharedState;
     fScheduler: TCronSchedulePlan;
     FEventPlan: string;
     fId: Int64;
@@ -576,6 +610,9 @@ type
     fExecDepth: Integer;
     fAllowDisabledDispatch: Integer;
     fPendingDestroy: Boolean;
+    fAmbiguousSecondGateActive: Boolean;
+    fAmbiguousSecondGatePassedTarget: Boolean;
+    fAmbiguousSecondGateRollbackSeen: Boolean;
 
     function GetEventPlan: string;
     function GetId: Int64;
@@ -659,6 +696,9 @@ type
       out aOffsetMinutes: Integer; out aNormalized: string): Boolean;
     procedure ParseExcludedDatesCsv(const aValue: string; out aDateSerials: TArray<Integer>);
     function GetHashSeed: string;
+    procedure ClearAmbiguousSecondGate;
+    procedure ArmAmbiguousSecondGate(const aSchedule: TDateTime);
+    function ProcessAmbiguousSecondGate(const aNow: TDateTime): Boolean;
 
     function AsEventObject: TmaxCronEvent;
     procedure checkTimer(const aNow: TDateTime);
@@ -726,11 +766,11 @@ type
   TAsyncKeepAliveEntry = class(TInterfacedObject, IAsyncKeepAliveEntry)
   private
     fLock: TCriticalSection;
-    fOwnerToken: ICronQueueToken;
+    fSharedState: ICronSharedState;
     fAsync: IInterface;
     fDone: Boolean;
   public
-    constructor Create(const aOwnerToken: ICronQueueToken);
+    constructor Create(const aSharedState: ICronSharedState);
     destructor Destroy; override;
     procedure AttachAsync(const aAsync: IInterface);
     procedure MarkDone;
@@ -2654,6 +2694,9 @@ begin
   fExecDepth := 0;
   fAllowDisabledDispatch := 0;
   fPendingDestroy := False;
+  fAmbiguousSecondGateActive := False;
+  fAmbiguousSecondGatePassedTarget := False;
+  fAmbiguousSecondGateRollbackSeen := False;
   FValidFrom := 0;
   FValidTo := 0;
   fScheduler := TCronSchedulePlan.Create;
@@ -2685,6 +2728,9 @@ var
   lBase: TDateTime;
   lFindResult: TFindNextScheduleResult;
 begin
+  fPendingDstSecondSchedule := 0;
+  ClearAmbiguousSecondGate;
+
   if fLastExecutionTime = 0 then
     lBase := now
   else
@@ -2867,6 +2913,7 @@ function TmaxCron.Add(const aName: string): IMaxCronEvent;
 var
   lEvent: TmaxCronEvent;
   lEventInterface: IMaxCronEvent;
+  lSharedState: ICronSharedState;
   lNormalizedName: string;
 begin
   lNormalizedName := NormalizeEventName(aName);
@@ -2879,8 +2926,8 @@ begin
 
     lEvent := TmaxCronEvent.Create;
     lEventInterface := lEvent as IMaxCronEvent;
-    lEvent.fCron := Self;
-    lEvent.fCronToken := fQueueToken;
+    if Supports(fSharedState, ICronSharedState, lSharedState) then
+      lEvent.fSharedState := lSharedState;
     lEvent.fScheduler.DayMatchMode := fDefaultDayMatchMode;
     lEvent.fDialect := fDefaultDialect;
     lEvent.fScheduler.Dialect := fDefaultDialect;
@@ -2888,6 +2935,12 @@ begin
     lEvent.FName := lNormalizedName;
     lEvent.fScheduler.HashSeed := lEvent.GetHashSeed;
     fItems.Add(lEventInterface);
+    try
+      IndexEventLocked(lEventInterface, fItems.Count - 1);
+    except
+      fItems.Delete(fItems.Count - 1);
+      raise;
+    end;
     Result := lEventInterface;
   finally
     fItemsLock.Release;
@@ -2908,8 +2961,11 @@ begin
         lEventItem := fItems[0];
         if TryGetCronEvent(lEventItem, lEvent) then
           lEvent.MarkPendingDestroy;
+        RemoveEventIndexLocked(lEventItem);
         fPendingFree.Add(fItems.Extract(lEventItem));
       end;
+      fItemsById.Clear;
+      fItemsByName.Clear;
     finally
       Dec(fTickDepth);
       FlushPendingFreeLocked;
@@ -2924,20 +2980,46 @@ begin
   Create(TmaxCronTimerBackend.ctAuto);
 end;
 
-constructor TCronQueueToken.Create(aOwner: TmaxCron);
+constructor TCronSharedState.Create(const aOwner: TmaxCron);
 begin
   inherited Create;
   fLock := TCriticalSection.Create;
   fOwner := aOwner;
+  fInFlight := 0;
+  fCallbackDepth := 0;
 end;
 
-destructor TCronQueueToken.Destroy;
+destructor TCronSharedState.Destroy;
 begin
   fLock.Free;
   inherited;
 end;
 
-procedure TCronQueueToken.Detach;
+function TCronSharedState.TryAcquireOwner(out aOwner: TmaxCron): Boolean;
+begin
+  fLock.Acquire;
+  try
+    aOwner := fOwner;
+    Result := (aOwner <> nil);
+    if Result then
+      Inc(fInFlight);
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TCronSharedState.ReleaseOwner;
+begin
+  fLock.Acquire;
+  try
+    if fInFlight > 0 then
+      Dec(fInFlight);
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TCronSharedState.Detach;
 begin
   fLock.Acquire;
   try
@@ -2947,14 +3029,178 @@ begin
   end;
 end;
 
-function TCronQueueToken.TryGetOwner(out aOwner: TmaxCron): Boolean;
+function TCronSharedState.IsAlive: Boolean;
 begin
   fLock.Acquire;
   try
-    aOwner := fOwner;
-    Result := (aOwner <> nil);
+    Result := (fOwner <> nil);
   finally
     fLock.Release;
+  end;
+end;
+
+function TCronSharedState.TryGetDefaultInvokeMode(out aInvokeMode: TmaxCronInvokeMode): Boolean;
+var
+  lOwner: TmaxCron;
+begin
+  Result := False;
+  aInvokeMode := TmaxCronInvokeMode.imMainThread;
+  if not TryAcquireOwner(lOwner) then
+    Exit(False);
+  try
+    aInvokeMode := lOwner.fDefaultInvokeMode;
+    Result := True;
+  finally
+    ReleaseOwner;
+  end;
+end;
+
+function TCronSharedState.TryGetDefaultDayMatchMode(out aDayMatchMode: TmaxCronDayMatchMode): Boolean;
+var
+  lOwner: TmaxCron;
+begin
+  Result := False;
+  aDayMatchMode := TmaxCronDayMatchMode.dmAnd;
+  if not TryAcquireOwner(lOwner) then
+    Exit(False);
+  try
+    aDayMatchMode := lOwner.fDefaultDayMatchMode;
+    Result := True;
+  finally
+    ReleaseOwner;
+  end;
+end;
+
+function TCronSharedState.TryGetMisfireDefaults(out aMisfirePolicy: TmaxCronMisfirePolicy;
+  out aCatchUpLimit: Cardinal): Boolean;
+var
+  lOwner: TmaxCron;
+begin
+  Result := False;
+  aMisfirePolicy := TmaxCronMisfirePolicy.mpCatchUpAll;
+  aCatchUpLimit := 1;
+  if not TryAcquireOwner(lOwner) then
+    Exit(False);
+  try
+    aMisfirePolicy := lOwner.fDefaultMisfirePolicy;
+    aCatchUpLimit := lOwner.fDefaultMisfireCatchUpLimit;
+    Result := True;
+  finally
+    ReleaseOwner;
+  end;
+end;
+
+function TCronSharedState.TryGetOwnerPointer(out aOwnerPointer: Pointer): Boolean;
+var
+  lOwner: TmaxCron;
+begin
+  Result := False;
+  aOwnerPointer := nil;
+  if not TryAcquireOwner(lOwner) then
+    Exit(False);
+  try
+    aOwnerPointer := Pointer(lOwner);
+    Result := True;
+  finally
+    ReleaseOwner;
+  end;
+end;
+
+function TCronSharedState.GetInFlightCount: Integer;
+begin
+  fLock.Acquire;
+  try
+    Result := fInFlight;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TCronSharedState.IncrementCallbackDepth;
+begin
+  TInterlocked.Increment(fCallbackDepth);
+end;
+
+procedure TCronSharedState.DecrementCallbackDepth;
+begin
+  TInterlocked.Decrement(fCallbackDepth);
+end;
+
+function TCronSharedState.GetCallbackDepth: Integer;
+begin
+  Result := TInterlocked.CompareExchange(fCallbackDepth, 0, 0);
+end;
+
+procedure TCronSharedState.KeepAsyncAlive(const aAsync: IInterface);
+var
+  lOwner: TmaxCron;
+begin
+  if aAsync = nil then
+    Exit;
+  if not TryAcquireOwner(lOwner) then
+    Exit;
+  try
+    lOwner.KeepAsyncAlive(aAsync);
+  finally
+    ReleaseOwner;
+  end;
+end;
+
+procedure TCronSharedState.ReleaseAsyncAlive(const aAsync: IInterface);
+var
+  lOwner: TmaxCron;
+begin
+  if aAsync = nil then
+    Exit;
+  if not TryAcquireOwner(lOwner) then
+    Exit;
+  try
+    lOwner.ReleaseAsyncAlive(aAsync);
+  finally
+    ReleaseOwner;
+  end;
+end;
+
+procedure TCronSharedState.FlushPendingFree;
+var
+  lOwner: TmaxCron;
+begin
+  if not TryAcquireOwner(lOwner) then
+    Exit;
+  try
+    lOwner.FlushPendingFree;
+  finally
+    ReleaseOwner;
+  end;
+end;
+
+procedure TCronSharedState.ExecuteQueuedTick;
+var
+  lOwner: TmaxCron;
+begin
+  if not TryAcquireOwner(lOwner) then
+    Exit;
+  try
+    try
+      lOwner.DoTick;
+    finally
+      TInterlocked.Exchange(lOwner.fTickQueued, 0);
+    end;
+  finally
+    ReleaseOwner;
+  end;
+end;
+
+procedure TCronSharedState.ResetTickQueued;
+var
+  lOwner: TmaxCron;
+begin
+  if not TryAcquireOwner(lOwner) then
+    Exit;
+  try
+    TInterlocked.Exchange(lOwner.fTickQueued, 0);
+  finally
+    ReleaseOwner;
   end;
 end;
 
@@ -3063,11 +3309,11 @@ begin
   end;
 end;
 
-constructor TAsyncKeepAliveEntry.Create(const aOwnerToken: ICronQueueToken);
+constructor TAsyncKeepAliveEntry.Create(const aSharedState: ICronSharedState);
 begin
   inherited Create;
   fLock := TCriticalSection.Create;
-  fOwnerToken := aOwnerToken;
+  fSharedState := aSharedState;
   fAsync := nil;
   fDone := False;
 end;
@@ -3081,7 +3327,6 @@ end;
 procedure TAsyncKeepAliveEntry.AttachAsync(const aAsync: IInterface);
 var
   lDone: Boolean;
-  lCron: TmaxCron;
 begin
   fLock.Acquire;
   try
@@ -3091,9 +3336,9 @@ begin
     fLock.Release;
   end;
 
-  if lDone and (fOwnerToken <> nil) and fOwnerToken.TryGetOwner(lCron) then
+  if lDone and (fSharedState <> nil) then
   begin
-    lCron.ReleaseAsyncAlive(Self);
+    fSharedState.ReleaseAsyncAlive(Self);
     fLock.Acquire;
     try
       fAsync := nil;
@@ -3104,8 +3349,6 @@ begin
 end;
 
 procedure TAsyncKeepAliveEntry.MarkDone;
-var
-  lCron: TmaxCron;
 begin
   fLock.Acquire;
   try
@@ -3115,8 +3358,8 @@ begin
     fLock.Release;
   end;
 
-  if (fOwnerToken <> nil) and fOwnerToken.TryGetOwner(lCron) then
-    lCron.ReleaseAsyncAlive(Self);
+  if fSharedState <> nil then
+    fSharedState.ReleaseAsyncAlive(Self);
 end;
 
 constructor TmaxCron.Create(const aTimerBackend: TmaxCronTimerBackend);
@@ -3124,6 +3367,8 @@ begin
   inherited Create;
 
   fItems := TList<IMaxCronEvent>.Create;
+  fItemsById := TDictionary<Int64, Integer>.Create;
+  fItemsByName := TDictionary<string, Integer>.Create;
   fItemsLock := TCriticalSection.Create;
   fPendingFree := TList<IMaxCronEvent>.Create;
   fNextId := 0;
@@ -3136,8 +3381,7 @@ begin
   fAsyncLock := TCriticalSection.Create;
   fAsyncKeepAlive := TList<IInterface>.Create;
   fTickQueued := 0;
-  fCallbackDepth := 0;
-  fQueueToken := TCronQueueToken.Create(Self);
+  fSharedState := TCronSharedState.Create(Self);
   CreateTimer(aTimerBackend);
 end;
 
@@ -3198,47 +3442,82 @@ begin
   Result := Trim(aName);
 end;
 
-function TmaxCron.FindIndexByNameLocked(const aName: string): Integer;
+function TmaxCron.EventNameKey(const aName: string): string;
+begin
+  Result := UpperCase(aName);
+end;
+
+procedure TmaxCron.IndexEventLocked(const aEventItem: IMaxCronEvent; const aIndex: Integer);
+var
+  lEvent: TmaxCronEvent;
+begin
+  if (aEventItem = nil) or (aIndex < 0) then
+    Exit;
+
+  if TryGetCronEvent(aEventItem, lEvent) then
+  begin
+    fItemsById.AddOrSetValue(lEvent.fId, aIndex);
+    if lEvent.FName <> '' then
+      fItemsByName.AddOrSetValue(EventNameKey(lEvent.FName), aIndex);
+    Exit;
+  end;
+
+  fItemsById.AddOrSetValue(aEventItem.Id, aIndex);
+  if aEventItem.Name <> '' then
+    fItemsByName.AddOrSetValue(EventNameKey(aEventItem.Name), aIndex);
+end;
+
+procedure TmaxCron.RemoveEventIndexLocked(const aEventItem: IMaxCronEvent);
+var
+  lEvent: TmaxCronEvent;
+begin
+  if aEventItem = nil then
+    Exit;
+
+  if TryGetCronEvent(aEventItem, lEvent) then
+  begin
+    fItemsById.Remove(lEvent.fId);
+    if lEvent.FName <> '' then
+      fItemsByName.Remove(EventNameKey(lEvent.FName));
+    Exit;
+  end;
+
+  fItemsById.Remove(aEventItem.Id);
+  if aEventItem.Name <> '' then
+    fItemsByName.Remove(EventNameKey(aEventItem.Name));
+end;
+
+procedure TmaxCron.ReindexFromLocked(const aStartIndex: Integer);
 var
   i: Integer;
-  lEvent: TmaxCronEvent;
-  lEventItem: IMaxCronEvent;
-  lItemName: string;
+begin
+  if aStartIndex < 0 then
+    Exit;
+
+  for i := aStartIndex to fItems.Count - 1 do
+    IndexEventLocked(fItems[i], i);
+end;
+
+function TmaxCron.FindIndexByNameLocked(const aName: string): Integer;
 begin
   if aName = '' then
     Exit(-1);
 
-  for i := 0 to fItems.Count - 1 do
-  begin
-    lEventItem := fItems[i];
-    if TryGetCronEvent(lEventItem, lEvent) then
-      lItemName := lEvent.FName
-    else
-      lItemName := lEventItem.Name;
-
-    if SameText(lItemName, aName) then
-      Exit(i);
-  end;
-
-  Result := -1;
+  if not fItemsByName.TryGetValue(EventNameKey(aName), Result) then
+    Result := -1
+  else if (Result < 0) or (Result >= fItems.Count) then
+    Result := -1;
 end;
 
 function TmaxCron.FindIndexByIdLocked(const aId: Int64): Integer;
-var
-  i: Integer;
-  lEvent: IMaxCronEvent;
 begin
   if aId <= 0 then
     Exit(-1);
 
-  for i := 0 to fItems.Count - 1 do
-  begin
-    lEvent := fItems[i];
-    if (lEvent <> nil) and (lEvent.Id = aId) then
-      Exit(i);
-  end;
-
-  Result := -1;
+  if not fItemsById.TryGetValue(aId, Result) then
+    Result := -1
+  else if (Result < 0) or (Result >= fItems.Count) then
+    Result := -1;
 end;
 
 function TmaxCron.DeleteLocked(const aIndex: Integer): Boolean;
@@ -3250,7 +3529,9 @@ begin
     Exit(False);
 
   lEventItem := fItems[aIndex];
+  RemoveEventIndexLocked(lEventItem);
   fItems.Delete(aIndex);
+  ReindexFromLocked(aIndex);
   if TryGetCronEvent(lEventItem, lEvent) then
     lEvent.MarkPendingDestroy;
   fPendingFree.Add(lEventItem);
@@ -3351,11 +3632,18 @@ end;
 function TmaxCron.Delete(const aId: Int64): boolean;
 var
   lIndex: Integer;
+  lEvent: IMaxCronEvent;
 begin
   lIndex := -1;
   fItemsLock.Acquire;
   try
     lIndex := FindIndexByIdLocked(aId);
+    if (lIndex >= 0) and (lIndex < fItems.Count) then
+    begin
+      lEvent := fItems[lIndex];
+      if (lEvent = nil) or (lEvent.Id <> aId) then
+        lIndex := -1;
+    end;
     Result := DeleteLocked(lIndex);
   finally
     fItemsLock.Release;
@@ -3366,6 +3654,7 @@ function TmaxCron.Delete(const aName: string): boolean;
 var
   lName: string;
   lIndex: Integer;
+  lEvent: IMaxCronEvent;
 begin
   lName := NormalizeEventName(aName);
   if lName = '' then
@@ -3374,6 +3663,12 @@ begin
   fItemsLock.Acquire;
   try
     lIndex := FindIndexByNameLocked(lName);
+    if (lIndex >= 0) and (lIndex < fItems.Count) then
+    begin
+      lEvent := fItems[lIndex];
+      if (lEvent = nil) or (not SameText(lEvent.Name, lName)) then
+        lIndex := -1;
+    end;
     Result := DeleteLocked(lIndex);
   finally
     fItemsLock.Release;
@@ -3383,6 +3678,7 @@ end;
 function TmaxCron.Delete(event: IMaxCronEvent): boolean;
 var
   lIndex: Integer;
+  lCronEvent: TmaxCronEvent;
 begin
   if event = nil then
     Exit(False);
@@ -3390,6 +3686,16 @@ begin
   lIndex := -1;
   fItemsLock.Acquire;
   try
+    if TryGetCronEvent(event, lCronEvent) then
+    begin
+      lIndex := FindIndexByIdLocked(lCronEvent.fId);
+      if (lIndex >= 0) and (lIndex < fItems.Count) and (fItems[lIndex] = event) then
+      begin
+        Result := DeleteLocked(lIndex);
+        Exit;
+      end;
+    end;
+
     for lIndex := 0 to fItems.Count - 1 do
       if fItems[lIndex] = event then
       begin
@@ -3406,30 +3712,36 @@ destructor TmaxCron.Destroy;
 const
   cCallbackDrainGraceMs = 75;
 var
-  lToken: ICronQueueToken;
+  lSharedState: ICronSharedState;
   lDone: Boolean;
   lWait: TStopwatch;
 begin
+  lSharedState := nil;
+  Supports(fSharedState, ICronSharedState, lSharedState);
+
   if Pointer(Self) = gMaxCronExecutingCron then
     raise Exception.Create('TmaxCron.Free cannot be called from one of its own callbacks');
 
-  if TInterlocked.CompareExchange(fCallbackDepth, 0, 0) > 0 then
+  if lSharedState <> nil then
   begin
-    lWait := TStopwatch.StartNew;
-    while (TInterlocked.CompareExchange(fCallbackDepth, 0, 0) > 0) and (lWait.ElapsedMilliseconds < cCallbackDrainGraceMs) do
+    lSharedState.Detach;
+
+    if (lSharedState.GetInFlightCount > 0) or (lSharedState.GetCallbackDepth > 0) then
     begin
-      if TThread.CurrentThread.ThreadID = MainThreadID then
-        CheckSynchronize(1)
-      else
-        TThread.Sleep(1);
+      lWait := TStopwatch.StartNew;
+      while ((lSharedState.GetInFlightCount > 0) or (lSharedState.GetCallbackDepth > 0)) and
+        (lWait.ElapsedMilliseconds < cCallbackDrainGraceMs) do
+      begin
+        if TThread.CurrentThread.ThreadID = MainThreadID then
+          CheckSynchronize(1)
+        else
+          TThread.Sleep(1);
+      end;
+
+      if (lSharedState.GetInFlightCount > 0) or (lSharedState.GetCallbackDepth > 0) then
+        raise Exception.Create('TmaxCron.Free cannot be called from one of its own callbacks');
     end;
-
-    if TInterlocked.CompareExchange(fCallbackDepth, 0, 0) > 0 then
-      raise Exception.Create('TmaxCron.Free cannot be called from one of its own callbacks');
   end;
-
-  if Supports(fQueueToken, ICronQueueToken, lToken) then
-    lToken.Detach;
 
   if fTimer <> nil then
     fTimer.Stop;
@@ -3456,6 +3768,8 @@ begin
   until lDone;
 
   fItems.Free;
+  fItemsById.Free;
+  fItemsByName.Free;
   fPendingFree.Free;
   fItemsLock.Free;
   fAsyncKeepAlive.Free;
@@ -3537,34 +3851,32 @@ end;
 
 procedure TmaxCron.QueueTick;
 var
-  lToken: ICronQueueToken;
+  lSharedState: ICronSharedState;
 begin
   if TInterlocked.CompareExchange(fTickQueued, 1, 0) <> 0 then
     Exit;
 
-  if not Supports(fQueueToken, ICronQueueToken, lToken) then
+  if not Supports(fSharedState, ICronSharedState, lSharedState) then
   begin
     TInterlocked.Exchange(fTickQueued, 0);
     Exit;
   end;
 
-  {$IFDEF ForceQueueNotAvailable}
-  TThread.Queue(nil,
-  {$ELSE}
-  TThread.ForceQueue(nil,
-  {$ENDIF}
-    procedure
-    var
-      Cron: TmaxCron;
-    begin
-      try
-        if lToken.TryGetOwner(Cron) then
-          Cron.DoTick;
-      finally
-        if lToken.TryGetOwner(Cron) then
-          TInterlocked.Exchange(Cron.fTickQueued, 0);
-      end;
-    end);
+  try
+    // WARNING: queued main-thread dispatch requires an active main-thread message pump.
+    {$IFDEF ForceQueueNotAvailable}
+    TThread.Queue(nil,
+    {$ELSE}
+    TThread.ForceQueue(nil,
+    {$ENDIF}
+      procedure
+      begin
+        lSharedState.ExecuteQueuedTick;
+      end);
+  except
+    lSharedState.ResetTickQueued;
+    raise;
+  end;
 end;
 
 procedure TmaxCron.TimerTimer(Sender: TObject);
@@ -3662,14 +3974,10 @@ end;
 procedure TmaxCronEvent.SetDayMatchMode(const Value: TmaxCronDayMatchMode);
 var
   lMode: TmaxCronDayMatchMode;
-  lToken: ICronQueueToken;
-  lCron: TmaxCron;
 begin
   lMode := Value;
   if lMode = TmaxCronDayMatchMode.dmDefault then
-    if Supports(fCronToken, ICronQueueToken, lToken) and lToken.TryGetOwner(lCron) then
-      lMode := lCron.fDefaultDayMatchMode
-    else
+    if (fSharedState = nil) or (not fSharedState.TryGetDefaultDayMatchMode(lMode)) then
       lMode := TmaxCronDayMatchMode.dmAnd;
 
   fLock.Acquire;
@@ -3739,6 +4047,59 @@ begin
   finally
     lDates.Free;
     lItems.Free;
+  end;
+end;
+
+procedure TmaxCronEvent.ClearAmbiguousSecondGate;
+begin
+  fAmbiguousSecondGateActive := False;
+  fAmbiguousSecondGatePassedTarget := False;
+  fAmbiguousSecondGateRollbackSeen := False;
+end;
+
+procedure TmaxCronEvent.ArmAmbiguousSecondGate(const aSchedule: TDateTime);
+begin
+  if (fTimeZoneKind = TCronTimeZoneKind.ctzLocal) and TTimeZone.Local.IsAmbiguousTime(aSchedule) then
+  begin
+    fAmbiguousSecondGateActive := True;
+    fAmbiguousSecondGatePassedTarget := False;
+    fAmbiguousSecondGateRollbackSeen := False;
+  end else
+    ClearAmbiguousSecondGate;
+end;
+
+function TmaxCronEvent.ProcessAmbiguousSecondGate(const aNow: TDateTime): Boolean;
+begin
+  Result := True;
+  if not fAmbiguousSecondGateActive then
+    Exit;
+
+  if not fAmbiguousSecondGatePassedTarget then
+  begin
+    if aNow < fNextSchedule then
+      Exit(False);
+
+    fAmbiguousSecondGatePassedTarget := True;
+    if (aNow > fNextSchedule) and (not TTimeZone.Local.IsAmbiguousTime(aNow)) then
+      ClearAmbiguousSecondGate
+    else
+      Exit(False);
+  end else if not fAmbiguousSecondGateRollbackSeen then
+  begin
+    if aNow < fNextSchedule then
+    begin
+      fAmbiguousSecondGateRollbackSeen := True;
+      Exit(False);
+    end;
+
+    if (aNow > fNextSchedule) and (not TTimeZone.Local.IsAmbiguousTime(aNow)) then
+      ClearAmbiguousSecondGate
+    else
+      Exit(False);
+  end else begin
+    if aNow < fNextSchedule then
+      Exit(False);
+    ClearAmbiguousSecondGate;
   end;
 end;
 
@@ -3849,6 +4210,7 @@ begin
     fTimeZoneKind := lKind;
     fTimeZoneOffsetMinutes := lOffsetMinutes;
     fPendingDstSecondSchedule := 0;
+    ClearAmbiguousSecondGate;
     if FEnabled then
       ResetSchedule;
   finally
@@ -3874,6 +4236,7 @@ begin
   try
     fDstFallPolicy := Value;
     fPendingDstSecondSchedule := 0;
+    ClearAmbiguousSecondGate;
     if FEnabled then
       ResetSchedule;
   finally
@@ -3980,6 +4343,7 @@ begin
                 // Keep the same wall-clock time and select the standard-time instance.
                 lUtc := TTimeZone.Local.ToUniversalTime(lUseLocal, False);
                 lUseLocal := TTimeZone.Local.ToLocalTime(lUtc);
+                ArmAmbiguousSecondGate(lUseLocal);
               end;
             TmaxCronDstFallPolicy.dfpRunTwice:
               if fPendingDstSecondSchedule = 0 then
@@ -4078,6 +4442,10 @@ begin
   begin
     aNextSystemLocal := fPendingDstSecondSchedule;
     fPendingDstSecondSchedule := 0;
+    if (fTimeZoneKind = TCronTimeZoneKind.ctzLocal) and (fDstFallPolicy = TmaxCronDstFallPolicy.dfpRunTwice) then
+      ArmAmbiguousSecondGate(aNextSystemLocal)
+    else
+      ClearAmbiguousSecondGate;
     Exit(TFindNextScheduleResult.fnsFound);
   end;
 
@@ -4096,6 +4464,10 @@ begin
     begin
       aNextSystemLocal := fPendingDstSecondSchedule;
       fPendingDstSecondSchedule := 0;
+      if (fTimeZoneKind = TCronTimeZoneKind.ctzLocal) and (fDstFallPolicy = TmaxCronDstFallPolicy.dfpRunTwice) then
+        ArmAmbiguousSecondGate(aNextSystemLocal)
+      else
+        ClearAmbiguousSecondGate;
       Exit(TFindNextScheduleResult.fnsFound);
     end;
 
@@ -4445,14 +4817,12 @@ begin
 end;
 
 function TmaxCronEvent.GetEffectiveInvokeMode: TmaxCronInvokeMode;
-var
-  lToken: ICronQueueToken;
-  lCron: TmaxCron;
 begin
   Result := fInvokeMode;
-  if Result <> TmaxCronInvokeMode.imDefault then Exit;
-  if Supports(fCronToken, ICronQueueToken, lToken) and lToken.TryGetOwner(lCron) then
-    Exit(lCron.fDefaultInvokeMode);
+  if Result <> TmaxCronInvokeMode.imDefault then
+    Exit;
+  if (fSharedState <> nil) and fSharedState.TryGetDefaultInvokeMode(Result) then
+    Exit;
   Result := TmaxCronInvokeMode.imMainThread;
 end;
 
@@ -4545,9 +4915,6 @@ begin
 end;
 
 procedure TmaxCronEvent.HandleQueuedAcquireFailure(const aOverlapMode: TmaxCronOverlapMode);
-var
-  lCron: TmaxCron;
-  lOwnerToken: ICronQueueToken;
 begin
   RollbackReservedExecution;
 
@@ -4562,14 +4929,11 @@ begin
       end;
   end;
 
-  if Supports(fCronToken, ICronQueueToken, lOwnerToken) and lOwnerToken.TryGetOwner(lCron) then
-    lCron.FlushPendingFree;
+  if fSharedState <> nil then
+    fSharedState.FlushPendingFree;
 end;
 
 procedure TmaxCronEvent.RollbackDispatchStartFailure(const aOverlapMode: TmaxCronOverlapMode);
-var
-  lCron: TmaxCron;
-  lOwnerToken: ICronQueueToken;
 begin
   RollbackReservedExecution;
 
@@ -4589,8 +4953,8 @@ begin
       end;
   end;
 
-  if Supports(fCronToken, ICronQueueToken, lOwnerToken) and lOwnerToken.TryGetOwner(lCron) then
-    lCron.FlushPendingFree;
+  if fSharedState <> nil then
+    fSharedState.FlushPendingFree;
 end;
 
 procedure TmaxCronEvent.QueueMainThreadCallbacks(const aInvokeMode: TmaxCronInvokeMode;
@@ -4605,19 +4969,24 @@ begin
     Exit;
   end;
 
-  {$IFDEF ForceQueueNotAvailable}
-  TThread.Queue(nil,
-    procedure
-    begin
-      ExecuteQueuedMainThread(lToken, aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
-    end);
-  {$ELSE}
-  TThread.ForceQueue(nil,
-    procedure
-    begin
-      ExecuteQueuedMainThread(lToken, aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
-    end);
-  {$ENDIF}
+  try
+    {$IFDEF ForceQueueNotAvailable}
+    TThread.Queue(nil,
+      procedure
+      begin
+        ExecuteQueuedMainThread(lToken, aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+      end);
+    {$ELSE}
+    TThread.ForceQueue(nil,
+      procedure
+      begin
+        ExecuteQueuedMainThread(lToken, aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+      end);
+    {$ENDIF}
+  except
+    HandleQueuedAcquireFailure(aOverlapMode);
+    raise;
+  end;
 end;
 
 procedure TmaxCronEvent.MarkPendingDestroy;
@@ -4627,6 +4996,8 @@ begin
     fPendingDestroy := True;
     FEnabled := False;
     fPendingRuns := 0;
+    fPendingDstSecondSchedule := 0;
+    ClearAmbiguousSecondGate;
     FOnScheduleEvent := nil;
     FOnScheduleProc := nil;
     FUserDataInterface := nil;
@@ -4649,8 +5020,6 @@ procedure TmaxCronEvent.FinalizeOverlap(const aInvokeMode: TmaxCronInvokeMode;
   const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
   const aOverlapMode: TmaxCronOverlapMode);
 var
-  lCron: TmaxCron;
-  lOwnerToken: ICronQueueToken;
   lPendingDestroy: Boolean;
 begin
   case aOverlapMode of
@@ -4720,8 +5089,8 @@ begin
       end;
   end;
 
-  if Supports(fCronToken, ICronQueueToken, lOwnerToken) and lOwnerToken.TryGetOwner(lCron) then
-    lCron.FlushPendingFree;
+  if fSharedState <> nil then
+    fSharedState.FlushPendingFree;
 end;
 
 procedure TmaxCronEvent.ExecuteOnce(const aInvokeMode: TmaxCronInvokeMode;
@@ -4730,7 +5099,7 @@ procedure TmaxCronEvent.ExecuteOnce(const aInvokeMode: TmaxCronInvokeMode;
 var
   lToken: ICronEventToken;
   lEvent: TmaxCronEvent;
-  lCron: TmaxCron;
+  lOwnerPointer: Pointer;
   lPreviousCron: Pointer;
 begin
   try
@@ -4746,12 +5115,15 @@ begin
       fLock.Release;
     end;
 
-    lCron := fCron;
-    if lCron <> nil then
-      TInterlocked.Increment(lCron.fCallbackDepth);
+    if fSharedState <> nil then
+      fSharedState.IncrementCallbackDepth;
+
+    lOwnerPointer := nil;
+    if fSharedState <> nil then
+      fSharedState.TryGetOwnerPointer(lOwnerPointer);
 
     lPreviousCron := gMaxCronExecutingCron;
-    gMaxCronExecutingCron := Pointer(lCron);
+    gMaxCronExecutingCron := lOwnerPointer;
     try
       if Assigned(aOnEvent) then
         aOnEvent(lEvent);
@@ -4759,8 +5131,8 @@ begin
         aOnProc(lEvent);
     finally
       gMaxCronExecutingCron := lPreviousCron;
-      if lCron <> nil then
-        TInterlocked.Decrement(lCron.fCallbackDepth);
+      if fSharedState <> nil then
+        fSharedState.DecrementCallbackDepth;
     end;
   finally
     if (aOverlapMode = TmaxCronOverlapMode.omAllowOverlap) or (aOverlapMode = TmaxCronOverlapMode.omSkipIfRunning) then
@@ -4803,11 +5175,9 @@ procedure TmaxCronEvent.DispatchCallbacks(const aInvokeMode: TmaxCronInvokeMode;
   const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
   const aOverlapMode: TmaxCronOverlapMode);
 var
-  lOwnerToken: ICronQueueToken;
   lThread: TThread;
   lKeepAlive: IInterface;
   lKeepAliveEntry: IAsyncKeepAliveEntry;
-  lCron: TmaxCron;
   lAsync: IInterface;
 begin
   if (not Assigned(aOnEvent)) and (not Assigned(aOnProc)) then Exit;
@@ -4819,6 +5189,8 @@ begin
   case aInvokeMode of
     TmaxCronInvokeMode.imMainThread:
       begin
+        // WARNING: imMainThread requires a running main-thread message pump (VCL context).
+        // In non-UI/service hosts this queue path may never execute.
         if TThread.CurrentThread.ThreadID = MainThreadID then
           ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode)
         else
@@ -4853,15 +5225,15 @@ begin
 
     TmaxCronInvokeMode.imMaxAsync:
       begin
-        if (not Supports(fCronToken, ICronQueueToken, lOwnerToken)) or (not lOwnerToken.TryGetOwner(lCron)) then
+        if (fSharedState = nil) or (not fSharedState.IsAlive) then
         begin
           DispatchCallbacks(TmaxCronInvokeMode.imTTask, aOnEvent, aOnProc, aOverlapMode);
           Exit;
         end;
 
-        lKeepAliveEntry := TAsyncKeepAliveEntry.Create(lOwnerToken);
+        lKeepAliveEntry := TAsyncKeepAliveEntry.Create(fSharedState);
         lKeepAlive := lKeepAliveEntry as IInterface;
-        lCron.KeepAsyncAlive(lKeepAlive);
+        fSharedState.KeepAsyncAlive(lKeepAlive);
 
         try
           lAsync := CallSimpleAsync(
@@ -5028,8 +5400,6 @@ var
   lInvokeMode: TmaxCronInvokeMode;
   lOverlap: TmaxCronOverlapMode;
   lMisfire: TmaxCronMisfirePolicy;
-  lOwnerToken: ICronQueueToken;
-  lCron: TmaxCron;
   lFireAt: TDateTime;
   lHasCallbacks: Boolean;
   lCatchUpLimit: Cardinal;
@@ -5065,6 +5435,7 @@ begin
       end;
       Exit;
     end;
+    if not ProcessAmbiguousSecondGate(aNow) then Exit;
     if aNow < fNextSchedule then Exit;
 
     if fScheduler.ExecutionLimit <> 0 then
@@ -5087,22 +5458,17 @@ begin
 
   if lInvokeMode = TmaxCronInvokeMode.imDefault then
   begin
-    if Supports(fCronToken, ICronQueueToken, lOwnerToken) and lOwnerToken.TryGetOwner(lCron) then
-      lInvokeMode := lCron.fDefaultInvokeMode
-    else
+    if (fSharedState = nil) or (not fSharedState.TryGetDefaultInvokeMode(lInvokeMode)) then
       lInvokeMode := TmaxCronInvokeMode.imMainThread;
   end;
 
   if lMisfire = TmaxCronMisfirePolicy.mpDefault then
   begin
-    if Supports(fCronToken, ICronQueueToken, lOwnerToken) and lOwnerToken.TryGetOwner(lCron) then
+    if (fSharedState = nil) or (not fSharedState.TryGetMisfireDefaults(lMisfire, lCatchUpLimit)) then
     begin
-      lMisfire := lCron.fDefaultMisfirePolicy;
-      lCatchUpLimit := lCron.fDefaultMisfireCatchUpLimit;
-    end else begin
       lMisfire := TmaxCronMisfirePolicy.mpCatchUpAll;
       lCatchUpLimit := 1;
-    end;
+    end
   end;
 
   if lMisfire <> TmaxCronMisfirePolicy.mpCatchUpAll then
@@ -5134,6 +5500,7 @@ begin
         end;
         Exit;
       end;
+      if not ProcessAmbiguousSecondGate(aNow) then Exit;
       if aNow < fNextSchedule then Exit;
 
       if fScheduler.ExecutionLimit <> 0 then
