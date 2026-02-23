@@ -87,6 +87,7 @@ Type
     function GetEventPlan: string;
     procedure SetEventPlan(const aValue: string);
     function GetNextSchedule: TDateTime;
+    function GetId: Int64;
     function GetName: string;
     function GetLastExecution: TDateTime;
     function GetTag: Integer;
@@ -132,6 +133,7 @@ Type
     procedure SetValidTo(const aValue: TDateTime);
     property EventPlan: string read GetEventPlan write SetEventPlan;
     property NextSchedule: TDateTime read GetNextSchedule;
+    property Id: Int64 read GetId;
     property Name: string read GetName;
     property LastExecution: TDateTime read GetLastExecution;
     property Tag: Integer read GetTag write SetTag;
@@ -183,16 +185,16 @@ Type
     fItems: TList<IMaxCronEvent>;
     fItemsLock: TCriticalSection;
     fPendingFree: TList<IMaxCronEvent>;
+    fNextId: Int64;
     fTickDepth: Integer;
     fTickQueued: Integer;
     fCallbackDepth: Integer;
     fQueueToken: IInterface;
     fAsyncKeepAlive: TList<IInterface>;
     fAsyncLock: TCriticalSection;
-    function GetCount: integer;
-    function GetEvents(index: integer): IMaxCronEvent;
     function NormalizeEventName(const aName: string): string;
     function FindIndexByNameLocked(const aName: string): Integer;
+    function FindIndexByIdLocked(const aId: Int64): Integer;
     function DeleteLocked(const aIndex: Integer): Boolean;
     procedure TimerTimer(Sender: TObject);
     procedure CreateTimer(const aRequestedBackend: TmaxCronTimerBackend);
@@ -220,13 +222,11 @@ Type
     Function Add(const aName, aEventPlan: string; const aOnScheduleEvent: TmaxCronNotifyEvent): IMaxCronEvent; overload;
     Function Add(const aName, aEventPlan: string; const aOnScheduleEvent: TmaxCronNotifyProc): IMaxCronEvent; overload;
 
-    function Delete(index: integer): boolean; overload;
+    function Delete(const aId: Int64): boolean; overload;
     function Delete(const aName: string): boolean; overload;
     function Delete(event: IMaxCronEvent): boolean; overload;
-    function IndexOf(event: IMaxCronEvent): integer;
+    function Snapshot: TArray<IMaxCronEvent>;
 
-    property Count: integer read GetCount;
-    property Events[index: integer]: IMaxCronEvent read GetEvents;
     property RequestedTimerBackend: TmaxCronTimerBackend read fRequestedTimerBackend;
     property ActiveTimerBackend: TmaxCronTimerBackend read fActiveTimerBackend;
     property DefaultInvokeMode: TmaxCronInvokeMode read fDefaultInvokeMode write SetDefaultInvokeMode;
@@ -535,6 +535,7 @@ type
     fCronToken: IInterface;
     fScheduler: TCronSchedulePlan;
     FEventPlan: string;
+    fId: Int64;
 
     FName: string;
     FOnScheduleEvent: TmaxCronNotifyEvent;
@@ -577,6 +578,7 @@ type
     fPendingDestroy: Boolean;
 
     function GetEventPlan: string;
+    function GetId: Int64;
     function GetName: string;
     function GetTag: Integer;
     function GetUserData: Pointer;
@@ -656,6 +658,7 @@ type
     function TryParseTimeZone(const aValue: string; out aKind: TCronTimeZoneKind;
       out aOffsetMinutes: Integer; out aNormalized: string): Boolean;
     procedure ParseExcludedDatesCsv(const aValue: string; out aDateSerials: TArray<Integer>);
+    function GetHashSeed: string;
 
     function AsEventObject: TmaxCronEvent;
     procedure checkTimer(const aNow: TDateTime);
@@ -669,6 +672,7 @@ type
 
     property EventPlan: string read FEventPlan write SetEventPlan;
     property NextSchedule: TDateTime read GetNextSchedule;
+    property Id: Int64 read GetId;
     property Name: string read GetName;
     property LastExecution: TDateTime read GetLastExecution;
     property Tag: Integer read FTag write SetTag;
@@ -2627,6 +2631,7 @@ begin
   inherited;
   fLock := TCriticalSection.Create;
   fEventToken := TCronEventToken.Create(Self);
+  fId := 0;
   fInvokeMode := TmaxCronInvokeMode.imDefault;
   fOverlapMode := TmaxCronOverlapMode.omAllowOverlap;
   fDayMatchMode := TmaxCronDayMatchMode.dmDefault;
@@ -2747,7 +2752,7 @@ begin
       lValidator := TCronSchedulePlan.Create;
       try
         lValidator.Dialect := fDialect;
-        lValidator.HashSeed := FName;
+        lValidator.HashSeed := GetHashSeed;
         lValidator.Parse(Value);
       finally
         lValidator.Free;
@@ -2755,7 +2760,7 @@ begin
 
       if fScheduler.Dialect <> fDialect then
         fScheduler.Dialect := fDialect;
-      fScheduler.HashSeed := FName;
+      fScheduler.HashSeed := GetHashSeed;
       fScheduler.Parse(Value);
       FEventPlan := Value;
       ResetSchedule;
@@ -2879,8 +2884,9 @@ begin
     lEvent.fScheduler.DayMatchMode := fDefaultDayMatchMode;
     lEvent.fDialect := fDefaultDialect;
     lEvent.fScheduler.Dialect := fDefaultDialect;
+    lEvent.fId := TInterlocked.Increment(fNextId);
     lEvent.FName := lNormalizedName;
-    lEvent.fScheduler.HashSeed := lNormalizedName;
+    lEvent.fScheduler.HashSeed := lEvent.GetHashSeed;
     fItems.Add(lEventInterface);
     Result := lEventInterface;
   finally
@@ -3120,6 +3126,7 @@ begin
   fItems := TList<IMaxCronEvent>.Create;
   fItemsLock := TCriticalSection.Create;
   fPendingFree := TList<IMaxCronEvent>.Create;
+  fNextId := 0;
   fTickDepth := 0;
   fDefaultInvokeMode := TmaxCronInvokeMode.imMainThread;
   fDefaultDayMatchMode := TmaxCronDayMatchMode.dmAnd;
@@ -3210,6 +3217,24 @@ begin
       lItemName := lEventItem.Name;
 
     if SameText(lItemName, aName) then
+      Exit(i);
+  end;
+
+  Result := -1;
+end;
+
+function TmaxCron.FindIndexByIdLocked(const aId: Int64): Integer;
+var
+  i: Integer;
+  lEvent: IMaxCronEvent;
+begin
+  if aId <= 0 then
+    Exit(-1);
+
+  for i := 0 to fItems.Count - 1 do
+  begin
+    lEvent := fItems[i];
+    if (lEvent <> nil) and (lEvent.Id = aId) then
       Exit(i);
   end;
 
@@ -3323,14 +3348,14 @@ begin
   {$ENDIF}
 end;
 
-function TmaxCron.Delete(index: integer): boolean;
+function TmaxCron.Delete(const aId: Int64): boolean;
 var
   lIndex: Integer;
 begin
-
-  lIndex := index;
+  lIndex := -1;
   fItemsLock.Acquire;
   try
+    lIndex := FindIndexByIdLocked(aId);
     Result := DeleteLocked(lIndex);
   finally
     fItemsLock.Release;
@@ -3357,25 +3382,24 @@ end;
 
 function TmaxCron.Delete(event: IMaxCronEvent): boolean;
 var
-  lName: string;
   lIndex: Integer;
-  lEvent: TmaxCronEvent;
 begin
   if event = nil then
     Exit(False);
 
-  if TryGetCronEvent(event, lEvent) then
-    lName := NormalizeEventName(lEvent.FName)
-  else
-    lName := NormalizeEventName(event.Name);
-  if lName = '' then
-    Exit(False);
-
-  lIndex := IndexOf(event);
-  if lIndex <> -1 then
-    Result := Delete(lIndex)
-  else
+  lIndex := -1;
+  fItemsLock.Acquire;
+  try
+    for lIndex := 0 to fItems.Count - 1 do
+      if fItems[lIndex] = event then
+      begin
+        Result := DeleteLocked(lIndex);
+        Exit;
+      end;
     Result := False;
+  finally
+    fItemsLock.Release;
+  end;
 end;
 
 destructor TmaxCron.Destroy;
@@ -3439,39 +3463,15 @@ begin
   inherited;
 end;
 
-function TmaxCron.GetCount: integer;
-begin
-  fItemsLock.Acquire;
-  try
-    Result := fItems.Count
-  finally
-    fItemsLock.Release;
-  end;
-end;
-
-function TmaxCron.GetEvents(index: integer): IMaxCronEvent;
-begin
-  fItemsLock.Acquire;
-  try
-    Result := fItems[index];
-  finally
-    fItemsLock.Release;
-  end;
-end;
-
-function TmaxCron.IndexOf(event: IMaxCronEvent): integer;
+function TmaxCron.Snapshot: TArray<IMaxCronEvent>;
 var
   i: Integer;
 begin
-  if event = nil then
-    Exit(-1);
-
-  Result := -1;
   fItemsLock.Acquire;
   try
+    SetLength(Result, fItems.Count);
     for i := 0 to fItems.Count - 1 do
-      if fItems[i] = event then
-        Exit(i);
+      Result[i] := fItems[i];
   finally
     fItemsLock.Release;
   end;
@@ -4187,7 +4187,7 @@ begin
       lValidator := TCronSchedulePlan.Create;
       try
         lValidator.Dialect := Value;
-        lValidator.HashSeed := FName;
+        lValidator.HashSeed := GetHashSeed;
         lValidator.Parse(FEventPlan);
       finally
         lValidator.Free;
@@ -4196,7 +4196,7 @@ begin
 
     fDialect := Value;
     fScheduler.Dialect := Value;
-    fScheduler.HashSeed := FName;
+    fScheduler.HashSeed := GetHashSeed;
     if FEventPlan <> '' then
     begin
       fScheduler.Parse(FEventPlan);
@@ -4225,6 +4225,23 @@ begin
   finally
     fLock.Release;
   end;
+end;
+
+function TmaxCronEvent.GetId: Int64;
+begin
+  fLock.Acquire;
+  try
+    Result := fId;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetHashSeed: string;
+begin
+  if FName <> '' then
+    Exit(FName);
+  Result := '#' + IntToStr(fId);
 end;
 
 function TmaxCronEvent.GetName: string;

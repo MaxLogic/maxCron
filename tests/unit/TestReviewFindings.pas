@@ -195,7 +195,7 @@ begin
     lWaitRes := lWorkerDone.WaitFor(2000);
     Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes, 'Worker did not queue callback');
     CheckSynchronize(500);
-    Assert.AreEqual(0, lCron.Count);
+    Assert.AreEqual(0, Length(lCron.Snapshot));
   finally
     SetMaxCronBeforeQueuedAcquireHook(nil);
     lCron.Free;

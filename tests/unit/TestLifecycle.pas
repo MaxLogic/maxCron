@@ -42,7 +42,16 @@ type
     procedure DeleteByName_CaseInsensitive_DeletesNamedEvent;
 
     [Test]
-    procedure DeleteByEvent_UnnamedEvent_IsRejected;
+    procedure DeleteByEvent_UnnamedEvent_IsAllowed;
+
+    [Test]
+    procedure EventId_IsAssignedAndMonotonic;
+
+    [Test]
+    procedure DeleteById_RemovesUnnamedEvent;
+
+    [Test]
+    procedure Snapshot_ReturnsStableCollection;
   end;
 
 implementation
@@ -300,7 +309,7 @@ begin
         ; // expected
     end;
 
-    Assert.AreEqual(1, lCron.Count);
+    Assert.AreEqual(1, Length(lCron.Snapshot));
   finally
     lCron.Free;
   end;
@@ -319,7 +328,7 @@ begin
 
     Assert.AreEqual('', lEventA.Name);
     Assert.AreEqual('', lEventB.Name);
-    Assert.AreEqual(2, lCron.Count);
+    Assert.AreEqual(2, Length(lCron.Snapshot));
   finally
     lCron.Free;
   end;
@@ -329,16 +338,19 @@ procedure TTestLifecycle.DeleteByName_CaseInsensitive_DeletesNamedEvent;
 var
   lCron: TmaxCron;
   lNamed: IMaxCronEvent;
+  lSnapshot: TArray<IMaxCronEvent>;
 begin
   lCron := TmaxCron.Create(ctPortable);
   try
     lNamed := lCron.Add('MyEvent');
     lCron.Add('');
-    Assert.AreEqual(2, lCron.Count);
+    lSnapshot := lCron.Snapshot;
+    Assert.AreEqual(2, Length(lSnapshot));
 
     Assert.IsTrue(lCron.Delete('myevent'));
-    Assert.AreEqual(1, lCron.Count);
-    Assert.AreEqual('', lCron.Events[0].Name);
+    lSnapshot := lCron.Snapshot;
+    Assert.AreEqual(1, Length(lSnapshot));
+    Assert.AreEqual('', lSnapshot[0].Name);
     Assert.IsFalse(lCron.Delete(''));
     Assert.IsFalse(lCron.Delete('missing'));
     Assert.AreEqual('MyEvent', lNamed.Name);
@@ -347,7 +359,7 @@ begin
   end;
 end;
 
-procedure TTestLifecycle.DeleteByEvent_UnnamedEvent_IsRejected;
+procedure TTestLifecycle.DeleteByEvent_UnnamedEvent_IsAllowed;
 var
   lCron: TmaxCron;
   lUnnamed: IMaxCronEvent;
@@ -357,9 +369,83 @@ begin
     lUnnamed := lCron.Add('');
     Assert.AreEqual('', lUnnamed.Name);
 
+    Assert.IsTrue(lCron.Delete(lUnnamed));
+    Assert.AreEqual(0, Length(lCron.Snapshot));
     Assert.IsFalse(lCron.Delete(lUnnamed));
-    Assert.AreEqual(1, lCron.Count);
-    Assert.IsTrue(lCron.Delete(0));
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestLifecycle.EventId_IsAssignedAndMonotonic;
+var
+  lCron: TmaxCron;
+  lEventA: IMaxCronEvent;
+  lEventB: IMaxCronEvent;
+  lEventC: IMaxCronEvent;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lEventA := lCron.Add('IdA');
+    lEventB := lCron.Add('');
+    lEventC := lCron.Add('IdC');
+
+    Assert.IsTrue(lEventA.Id > 0, 'Event Id must be assigned');
+    Assert.IsTrue(lEventB.Id > lEventA.Id, 'Ids must increase in add order');
+    Assert.IsTrue(lEventC.Id > lEventB.Id, 'Ids must increase in add order');
+
+    Assert.IsTrue(lCron.Delete(lEventB.Id));
+    lEventB := lCron.Add('');
+    Assert.IsTrue(lEventB.Id > lEventC.Id, 'Ids must not be reused');
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestLifecycle.DeleteById_RemovesUnnamedEvent;
+var
+  lCron: TmaxCron;
+  lUnnamedA: IMaxCronEvent;
+  lUnnamedB: IMaxCronEvent;
+  lSnapshot: TArray<IMaxCronEvent>;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lUnnamedA := lCron.Add('');
+    lUnnamedB := lCron.Add('');
+    Assert.AreNotEqual(lUnnamedA.Id, lUnnamedB.Id);
+
+    Assert.IsTrue(lCron.Delete(lUnnamedA.Id));
+    Assert.IsFalse(lCron.Delete(lUnnamedA.Id));
+
+    lSnapshot := lCron.Snapshot;
+    Assert.AreEqual(1, Length(lSnapshot));
+    Assert.AreEqual(lUnnamedB.Id, lSnapshot[0].Id);
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestLifecycle.Snapshot_ReturnsStableCollection;
+var
+  lCron: TmaxCron;
+  lEventA: IMaxCronEvent;
+  lEventB: IMaxCronEvent;
+  lSnapshot: TArray<IMaxCronEvent>;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lEventA := lCron.Add('SnapA');
+    lEventB := lCron.Add('SnapB');
+
+    lSnapshot := lCron.Snapshot;
+    Assert.AreEqual(2, Length(lSnapshot));
+    Assert.AreEqual(lEventA.Id, lSnapshot[0].Id);
+    Assert.AreEqual(lEventB.Id, lSnapshot[1].Id);
+
+    Assert.IsTrue(lCron.Delete('SnapA'));
+    Assert.AreEqual(2, Length(lSnapshot), 'Existing snapshot must stay stable');
+    Assert.AreEqual(1, Length(lCron.Snapshot));
   finally
     lCron.Free;
   end;

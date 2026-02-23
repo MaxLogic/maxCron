@@ -101,14 +101,28 @@ Free the scheduler from outside callback context.
 For safe production use we should follow these lifecycle rules:
 
 - `IMaxCronEvent` is an interface handle. Event registration lifetime is managed by `TmaxCron`.
+- Every event has an immutable `Id` assigned by `TmaxCron` when we call `Add(...)`.
 - Event names are optional. If provided, they are case-insensitive unique and immutable after `Add(...)`.
-- For named events, we can remove schedules with `CronScheduler.Delete(Event)` or `CronScheduler.Delete('EventName')`.
-- Unnamed events cannot be removed by `Delete(Event)` or `Delete('...')`; use `Delete(Index)` or `Clear`.
+- We can remove schedules by handle (`Delete(Event)`), by id (`Delete(Event.Id)`), or by name (`Delete('EventName')`).
+- `Delete('EventName')` applies to named events only. Unnamed events should be removed by handle or id (or `Clear`).
+- `Count`, `Events[]`, `Delete(Index)`, and `IndexOf` are no longer part of the public API.
+- For stable inspection, use `Snapshot` to get an array copy of registered events.
 - We should free `TmaxCron` only from outside its callback context.
-- We should treat `Count`/`Events[]` reads as volatile when other threads can mutate the scheduler. If we need stable iteration, we should guard access with our own app-level synchronization.
 - We should avoid long-blocking callbacks during shutdown; if callbacks can block, we should first stop upstream work and let callbacks drain before destroying the scheduler.
 
 If we follow this contract, maxCron stays on the intended ownership and shutdown path.
+
+Snapshot/list example:
+
+```delphi
+var
+  Events: TArray<IMaxCronEvent>;
+begin
+  Events := CronScheduler.Snapshot;
+  if Length(Events) > 0 then
+    CronScheduler.Delete(Events[0].Id);
+end;
+```
 
 ## Overlap handling (per-event)
 
@@ -198,6 +212,8 @@ Supported forms:
 - `H/step`
 - `H(min-max)`
 - `H(min-max)/step`
+
+For unnamed events, maxCron uses the immutable event `Id` as the hash seed fallback.
 
 In `cdQuartzSecondsFirst`, Day-of-Week hash ranges use Quartz numbering (`1..7`), so `H(1-7)` is valid.
 

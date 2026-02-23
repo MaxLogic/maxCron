@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-050
+Next task ID: T-053
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 50
+Done tasks: 53
 
 ## In Progress
 
@@ -19,6 +19,21 @@ Done tasks: 50
 
 
 ## Done
+
+### T-052 [DOC] Document Id/Snapshot event lifecycle contract
+Outcome: Updated README and changelog to document immutable event Id ownership, Snapshot-based inspection, delete-by-id support, and removal of index-based public APIs.
+Proof: `rg -n "Id|Snapshot|Delete\\(Event\\)|Delete\\(Index\\)|Count|Events\\[\\]" README.md CHANGELOG.md` shows the new contract and changelog entries; `./build-and-run-tests.sh` passes (Stress 2/2, Core 122/122, VCL 3/3); `./build-and-run-tests-stress.sh` passes (Stress 2/2, Core 122/122, VCL 3/3).
+Touches: `README.md`, `CHANGELOG.md`, `TASKS.md`
+
+### T-051 [TEST] Add fail-first regressions for Id/Snapshot ownership paths
+Outcome: Added fail-first regressions for immutable event IDs, delete-by-id, and stable Snapshot semantics; replaced scheduler `Count`/`Events[]` assertions with Snapshot-based checks in lifecycle/robust/review tests.
+Proof: Pre-fix `./build-delphi.sh tests/maxCronTests.dproj -config release` failed with missing `Snapshot`/`Id` identifiers in `TestLifecycle.pas`; post-fix targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronTests.exe -cm:Quiet -r:TestLifecycle.TTestLifecycle.EventId_IsAssignedAndMonotonic,TestLifecycle.TTestLifecycle.DeleteById_RemovesUnnamedEvent,TestLifecycle.TTestLifecycle.Snapshot_ReturnsStableCollection,TestLifecycle.TTestLifecycle.DeleteByEvent_UnnamedEvent_IsAllowed,TestReviewFindings.TTestReviewFindings.QueuedMainThread_DeleteBeforeAcquire_ShouldNotAccessFreedEvent,TestRobustCoverage.TTestRobustCoverage.AddOverloads_InvalidPlan_DoNotKeepPartiallyAddedEvents"` passes (6/6).
+Touches: `tests/unit/TestLifecycle.pas`, `tests/unit/TestReviewFindings.pas`, `tests/unit/TestRobustCoverage.pas`, `TASKS.md`
+
+### T-050 [API] Replace index-based scheduler API with Id + Snapshot model
+Outcome: Replaced the public index-driven event API with immutable event identity and snapshot inspection: added `IMaxCronEvent.Id`, scheduler `Delete(const aId: Int64)`, and `Snapshot`; removed public `Count`, `Events[]`, `Delete(Index)`, and `IndexOf`; delete-by-event now works for unnamed events and hash seed falls back to event Id when name is empty.
+Proof: Pre-fix `./build-delphi.sh tests/maxCronTests.dproj -config release` failed with missing `Id`/`Snapshot`; post-fix `./build-delphi.sh tests/maxCronTests.dproj -config release` succeeds; `./build-and-run-tests.sh` passes (Stress 2/2, Core 122/122, VCL 3/3); `./build-and-run-tests-stress.sh` passes (Stress 2/2, Core 122/122, VCL 3/3).
+Touches: `maxCron.pas`, `tests/unit/TestLifecycle.pas`, `tests/unit/TestReviewFindings.pas`, `tests/unit/TestRobustCoverage.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
 
 ### T-049 [API] Add immutable unique event names and delete-by-name
 Outcome: Event names are now read-only and immutable after `Add(...)`; non-empty names are enforced as case-insensitive unique; `Delete(const aName: string)` was added; unnamed events remain supported but can only be removed by `Delete(Index)` or `Clear` (not by `Delete(Event)` / `Delete(Name)`).

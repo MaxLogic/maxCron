@@ -790,7 +790,7 @@ begin
           end);
       end,
       'Expected parse failure for proc overload');
-    Assert.AreEqual(0, lCron.Count, 'Proc overload must not keep partially-added events');
+    Assert.AreEqual(0, Length(lCron.Snapshot), 'Proc overload must not keep partially-added events');
 
     AssertRaises(
       procedure
@@ -798,7 +798,7 @@ begin
         lCron.Add('InvalidPlanEvent', '0 0 0 * * *', NoopSchedule);
       end,
       'Expected parse failure for event overload');
-    Assert.AreEqual(0, lCron.Count, 'Event overload must not keep partially-added events');
+    Assert.AreEqual(0, Length(lCron.Snapshot), 'Event overload must not keep partially-added events');
   finally
     lCron.Free;
   end;
