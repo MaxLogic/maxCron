@@ -3974,6 +3974,7 @@ procedure TmaxCron.EvaluateAutoController(const aEngineUsed: TSchedulerEngine; c
   const aElapsedMicroseconds: Int64);
 const
   cAutoMinPerfSamples = 8;
+  cAutoDirtyDensityScale = 128.0;
   cAutoDiagLogFormat =
     'maxCron auto diag engineUsed=%s effective=%s state=%s events=%s due=%s dueEwma=%s dirtyEwma=%s scanUs=%s ' +
     'heapUs=%s baselineUs=%s switches=%s cooldown=%s trialFailLevel=%s trialFailCooldown=%s budgetHits=%s ' +
@@ -3992,6 +3993,7 @@ var
   lMutationDelta: Int64;
   lMutationNow: Int64;
   lPromoteHeap: Boolean;
+  lFastPromoteCandidate: Boolean;
   lSwitchBudgetBlocked: Boolean;
   lSwitchBudgetCooldownTicks: Integer;
   lSwitchBudgetEnabled: Boolean;
@@ -4036,7 +4038,9 @@ begin
     fAutoMutationCursor := lMutationNow;
 
     lDirtySample := 0.0;
-    if lMutationDelta > 0 then
+    if aEventCount > 0 then
+      lDirtySample := ClampAutoFloat((Double(lMutationDelta) / aEventCount) * cAutoDirtyDensityScale, 0.0, 1.0)
+    else if lMutationDelta > 0 then
       lDirtySample := 1.0;
     lDueDensitySample := 0.0;
     if aEventCount > 0 then
@@ -4121,10 +4125,26 @@ begin
             end else begin
               fAutoEnterHold := 0;
               fAutoExitHold := 0;
-              fAutoTrialTicksRemaining := lConfig.TrialTicks;
-              fAutoHeapTickUsEwma := 0;
-              fAutoState := TAutoSchedulerState.asHeapTrial;
-              SwitchAutoEffectiveEngine(TSchedulerEngine.seHeap, 'scan-enter-trial');
+              lFastPromoteCandidate :=
+                (fAutoEventCountEwma >= (lConfig.EnterMinEvents * 2.0)) and
+                (fAutoDueDensityEwma <= (lConfig.EnterMaxDueDensity * 0.5)) and
+                (fAutoDirtyRateEwma <= (lConfig.EnterMaxDirtyRate * 0.5)) and
+                (fAutoScanSampleTicks >= lMinPerfSamples);
+
+              if lFastPromoteCandidate then
+              begin
+                fAutoTrialTicksRemaining := 0;
+                fAutoHeapTickUsEwma := 0;
+                fAutoState := TAutoSchedulerState.asHeapStable;
+                fAutoTrialFailLevel := 0;
+                fAutoTrialFailCooldownTicks := 0;
+                SwitchAutoEffectiveEngine(TSchedulerEngine.seHeap, 'scan-fast-promote');
+              end else begin
+                fAutoTrialTicksRemaining := lConfig.TrialTicks;
+                fAutoHeapTickUsEwma := 0;
+                fAutoState := TAutoSchedulerState.asHeapTrial;
+                SwitchAutoEffectiveEngine(TSchedulerEngine.seHeap, 'scan-enter-trial');
+              end;
             end;
           end;
         end;
@@ -5034,7 +5054,9 @@ procedure TmaxCron.DoTickAtHeap(const aNow: TDateTime; out aDueCount: Integer);
 var
   lDepthIncreased: Boolean;
   lDueEvents: TList<TmaxCronEvent>;
+  lReschedules: TList<TCronHeapEntry>;
   lEntry: TCronHeapEntry;
+  lRescheduleEntry: TCronHeapEntry;
   lEventItem: IMaxCronEvent;
   lEvent: TmaxCronEvent;
   lDueEvent: TmaxCronEvent;
@@ -5045,6 +5067,7 @@ begin
   aDueCount := 0;
   lDepthIncreased := False;
   lDueEvents := TList<TmaxCronEvent>.Create;
+  lReschedules := TList<TCronHeapEntry>.Create;
   try
     fItemsLock.Acquire;
     try
@@ -5077,15 +5100,31 @@ begin
       if not lDueEvent.TryGetHeapScheduleSnapshot(lId, lDueAt) then
         Continue;
 
+      lRescheduleEntry.EventId := lId;
+      lRescheduleEntry.DueAt := lDueAt;
+      lReschedules.Add(lRescheduleEntry);
+    end;
+
+    if lReschedules.Count > 0 then
+    begin
       fItemsLock.Acquire;
       try
-        if TryGetEventByIdLocked(lId, lEventItem) and lDueEvent.IsHeapScheduleCurrent(lDueAt) then
-          HeapPushLocked(lDueAt, lId);
+        for lIndex := 0 to lReschedules.Count - 1 do
+        begin
+          lRescheduleEntry := lReschedules[lIndex];
+          if not TryGetEventByIdLocked(lRescheduleEntry.EventId, lEventItem) then
+            Continue;
+          if not TryGetCronEvent(lEventItem, lEvent) then
+            Continue;
+          if lEvent.IsHeapScheduleCurrent(lRescheduleEntry.DueAt) then
+            HeapPushLocked(lRescheduleEntry.DueAt, lRescheduleEntry.EventId);
+        end;
       finally
         fItemsLock.Release;
       end;
     end;
   finally
+    lReschedules.Free;
     lDueEvents.Free;
     if lDepthIncreased then
     begin

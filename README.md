@@ -115,6 +115,7 @@ Mode quick guide (production):
 `auto` mode policy (internal):
 
 - Enter heap trial when event-count EMA is high, due-density EMA stays low, and mutation/dirty EMA stays low.
+- In strongly sparse/high-cardinality low-churn phases, auto mode can fast-promote directly to heap-stable.
 - Promote to heap-stable only if measured heap tick cost beats scan baseline by margin.
 - Fall back to scan when due density rises, churn rises, event count drops, or heap stops showing benefit.
 - Apply hold counters and cooldown to avoid scan/heap thrashing.

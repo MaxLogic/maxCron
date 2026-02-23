@@ -1,13 +1,37 @@
 # Tasks
-Next task ID: T-080
+Next task ID: T-085
 
 ## Summary
-Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 80
+Open tasks: 2 (In Progress: 0, Next Today: 2, Next This Week: 0, Next Later: 0, Blocked: 0)
+Done tasks: 83
 
 ## In Progress
 
 ## Next – Today
+
+### T-083 [OBS] Extend benchmark runner with percentile/dispersion statistics and compare mode
+Outcome: Extend the standalone benchmark runner to include median/p95/stddev summaries and an optional compare mode against a baseline CSV report for run-to-run regression tracking.
+Proof:
+- Command: `./build-delphi.sh benchmarks/maxCronBenchmarks.dproj -config release`
+- Expect: build succeeds.
+- Command: `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && benchmarks\maxCronBenchmarks.exe --iterations=9 --warmup=2 --out-dir=benchmarks\results"`
+- Expect: process exits 0 and summary includes median/p95/stddev metrics.
+- Command: `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && benchmarks\maxCronBenchmarks.exe --iterations=3 --warmup=0 --compare=benchmarks\results\maxcron-benchmarks-20260223-214451.csv --out-dir=benchmarks\results --quiet"`
+- Expect: process exits 0 and compare output includes baseline deltas.
+Touches: `benchmarks/maxCronBenchmarks.dpr`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-082
+
+### T-084 [CI] Add structural performance gate script for benchmark CSV metrics
+Outcome: Add a repeatable gate script that evaluates benchmark CSV structural metrics (`events_visited`, `heap_rebuilds`, `switch_count`) against configurable thresholds, enabling stable perf regression checks independent of wall-clock variance.
+Proof:
+- Command: `./build-delphi.sh benchmarks/maxCronBenchmarks.dproj -config release`
+- Expect: build succeeds.
+- Command: `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && benchmarks\maxCronBenchmarks.exe --iterations=5 --warmup=1 --out-dir=benchmarks\results --quiet"`
+- Expect: benchmark CSV is generated.
+- Command: `./scripts/check-benchmark-metrics.sh benchmarks/results/maxcron-benchmarks-*.csv`
+- Expect: script exits 0 when thresholds are met and exits non-zero when violated.
+Touches: `scripts/check-benchmark-metrics.sh`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-083
 
 ## Next – This Week
 
@@ -19,6 +43,24 @@ Done tasks: 80
 
 
 ## Done
+
+### T-082 [PERF] Add guarded fast-promote path for sparse auto workloads
+Outcome: Added a conservative fast-promote branch in auto mode so strongly sparse/high-cardinality low-churn phases can transition directly to heap-stable, while preserving hysteresis, budget guardrails, and churn/perf-based demotion paths.
+Proof: `./build-delphi.sh tests/maxCronStressTests.dproj -config release` succeeds; `MAXCRON_ENGINE=auto ./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 14/14, Core 125/125, VCL 3/3); targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineBenchmark_AutoVsScan_SparseHighN"` passes (1/1).
+Touches: `maxCron.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-081
+
+### T-081 [PERF] Replace binary auto dirty signal with normalized mutation density
+Outcome: Changed auto-controller dirty-sample computation from binary mutation detection to normalized mutation density with bounded sensitivity scaling, reducing false churn pressure for large schedules while preserving churn demotion responsiveness.
+Proof: `./build-delphi.sh tests/maxCronStressTests.dproj -config release` succeeds; targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_HysteresisAndOverrideBehavior,TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_DiagnosticsSnapshot_ReportsControllerState,TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_ConcurrentSwitching_NoMissedDue"` passes (3/3); `MAXCRON_ENGINE=auto ./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 14/14, Core 125/125, VCL 3/3); targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_DueDensityInfluencesSwitching"` passes (1/1).
+Touches: `maxCron.pas`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-080
+
+### T-080 [PERF] Batch heap reschedule push to reduce per-due lock churn
+Outcome: Refactored heap tick reschedule flow to collect post-callback next-schedule snapshots and push them back into the heap under one `fItemsLock` section per tick (instead of one lock/relock per due event), reducing lock overhead in dense-due ticks.
+Proof: `./build-delphi.sh tests/maxCronStressTests.dproj -config release` succeeds; `MAXCRON_ENGINE=heap ./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 14/14, Core 125/125, VCL 3/3); targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineBenchmark_ScanVsHeap_HighN"` passes (1/1).
+Touches: `maxCron.pas`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-077
 
 ### T-079 [DOC] Publish reference benchmark results and mode-selection guide
 Outcome: Added a concrete standalone benchmark reference run (this machine) with measured sparse/adversarial metrics and conclusions, and added a concise production mode-selection guide for `scan`/`heap`/`auto`/`shadow`.
