@@ -4,6 +4,7 @@ interface
 
 uses
   System.Classes, System.DateUtils, System.Diagnostics, System.SyncObjs, System.SysUtils,
+  Winapi.Windows,
   DUnitX.TestFramework,
   maxCron;
 
@@ -13,9 +14,16 @@ type
   private
     procedure SetError(const aLock: TCriticalSection; var aErrorText: string;
       const aWhere, aText: string);
+    procedure SetEngineEnv(const aValue: string; out aPreviousValue: string; out aHadPrevious: Boolean);
+    procedure RestoreEngineEnv(const aPreviousValue: string; const aHadPrevious: Boolean);
+    procedure RunBenchmarkScenario(const aEngine: string; const aEventCount, aTickCount: Integer;
+      const aPlan: string; out aVisited: UInt64; out aRebuilds: UInt64; out aElapsedMs: Int64);
   public
     [Test]
     procedure ManyMixedEvents_ManyTicks_30s;
+
+    [Test]
+    procedure EngineBenchmark_ScanVsHeap_HighN;
   end;
 
 implementation
@@ -29,6 +37,59 @@ begin
       aErrorText := aWhere + ': ' + aText;
   finally
     aLock.Release;
+  end;
+end;
+
+procedure TTestHeavyStressMixed.SetEngineEnv(const aValue: string; out aPreviousValue: string;
+  out aHadPrevious: Boolean);
+begin
+  aPreviousValue := GetEnvironmentVariable('MAXCRON_ENGINE');
+  aHadPrevious := aPreviousValue <> '';
+  Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(aValue));
+end;
+
+procedure TTestHeavyStressMixed.RestoreEngineEnv(const aPreviousValue: string; const aHadPrevious: Boolean);
+begin
+  if aHadPrevious then
+    Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(aPreviousValue))
+  else
+    Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', nil);
+end;
+
+procedure TTestHeavyStressMixed.RunBenchmarkScenario(const aEngine: string; const aEventCount, aTickCount: Integer;
+  const aPlan: string; out aVisited: UInt64; out aRebuilds: UInt64; out aElapsedMs: Int64);
+var
+  lPreviousValue: string;
+  lHadPrevious: Boolean;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lNowDateTime: TDateTime;
+  lStopwatch: TStopwatch;
+  lIndex: Integer;
+begin
+  SetEngineEnv(aEngine, lPreviousValue, lHadPrevious);
+  try
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      for lIndex := 0 to aEventCount - 1 do
+      begin
+        lEvent := lCron.Add('Bench_' + aEngine + '_' + IntToStr(lIndex));
+        lEvent.EventPlan := aPlan;
+        lEvent.Run;
+      end;
+
+      lCron.ResetTickMetricsForTests;
+      lNowDateTime := Now;
+      lStopwatch := TStopwatch.StartNew;
+      for lIndex := 0 to aTickCount - 1 do
+        lCron.TickAt(lNowDateTime);
+      aElapsedMs := lStopwatch.ElapsedMilliseconds;
+      lCron.GetTickMetricsForTests(aVisited, aRebuilds);
+    finally
+      lCron.Free;
+    end;
+  finally
+    RestoreEngineEnv(lPreviousValue, lHadPrevious);
   end;
 end;
 
@@ -206,6 +267,33 @@ begin
   finally
     lErrorLock.Free;
   end;
+end;
+
+procedure TTestHeavyStressMixed.EngineBenchmark_ScanVsHeap_HighN;
+const
+  cEventCount = 1200;
+  cTickCount = 40;
+  cPlan = '0 0 1 1 * 2099 0 1';
+var
+  lScanVisited: UInt64;
+  lScanRebuilds: UInt64;
+  lScanElapsedMs: Int64;
+  lHeapVisited: UInt64;
+  lHeapRebuilds: UInt64;
+  lHeapElapsedMs: Int64;
+begin
+  RunBenchmarkScenario('scan', cEventCount, cTickCount, cPlan, lScanVisited, lScanRebuilds, lScanElapsedMs);
+  RunBenchmarkScenario('heap', cEventCount, cTickCount, cPlan, lHeapVisited, lHeapRebuilds, lHeapElapsedMs);
+
+  Writeln(Format('Benchmark scan: visited=%d rebuilds=%d elapsedMs=%d',
+    [lScanVisited, lScanRebuilds, lScanElapsedMs]));
+  Writeln(Format('Benchmark heap: visited=%d rebuilds=%d elapsedMs=%d',
+    [lHeapVisited, lHeapRebuilds, lHeapElapsedMs]));
+
+  Assert.IsTrue(lScanVisited > 0, 'Scan benchmark should visit candidates');
+  Assert.IsTrue(lHeapVisited > 0, 'Heap benchmark should visit candidates');
+  Assert.IsTrue(lHeapVisited * 5 < lScanVisited,
+    'Heap mode should reduce candidate work for high-N non-due ticks');
 end;
 
 end.

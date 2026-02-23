@@ -5,6 +5,7 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Added an opt-in heap scheduler engine (`MAXCRON_ENGINE=heap`) plus a shadow parity engine (`MAXCRON_ENGINE=shadow`) while preserving scan as the default mode. (T-057, T-058)
 - Added immutable per-event `Id` plus `TmaxCron.Snapshot` for stable event-list inspection without index-based access. (T-050)
 - Added demo event-log actions that showcase `Snapshot` listing and delete-by-name/delete-by-id flows. (T-053)
 - Added repeated serialized dispatch-start rollback regression coverage to keep retry behavior stable under tight tick timing. (T-046)
@@ -22,8 +23,10 @@ All notable user-visible changes to this project will be documented in this file
 - Added regression tests that verify `ExecutionLimit` retries correctly after injected dispatch-start failures (`imThread` and `imTTask`). (T-038)
 - Added a VCL backend test that enforces `ctVcl` creation only on the VCL main thread.
 - Added regressions for Quartz seconds-first hashed DOW ranges (`H(1-7)`) and scheduler `DefaultInvokeMode := imDefault` normalization behavior.
+- Added stress/robust tests for heap-mode execution, shadow parity churn coverage, and high-N scan-vs-heap benchmark assertions. (T-058, T-059)
 
 ### Changed
+- Added README guidance for scheduler-engine selection (`scan`/`heap`/`shadow`) with high-N benchmark expectations for selecting heap mode under sparse-due workloads. (T-059)
 - Changed scheduler ownership APIs to Id/snapshot model: removed public `Count`, `Events[]`, `Delete(Index)`, and `IndexOf`; added `Delete(Id)` for direct deletion by immutable event identity. (T-050)
 - Added a README migration section mapping old index-based API calls to Id/snapshot equivalents. (T-053)
 - Event names are now immutable after `Add(...)`; non-empty names are case-insensitive unique per scheduler; unnamed events remain supported. (T-049)

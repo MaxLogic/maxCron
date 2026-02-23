@@ -174,6 +174,14 @@ Type
 
   TmaxCron = class(TObject)
   private
+    type
+      TSchedulerEngine = (seScan, seHeap, seShadow);
+
+      TCronHeapEntry = record
+        DueAt: TDateTime;
+        EventId: Int64;
+      end;
+  private
     fRequestedTimerBackend: TmaxCronTimerBackend;
     fActiveTimerBackend: TmaxCronTimerBackend;
     fDefaultInvokeMode: TmaxCronInvokeMode;
@@ -185,6 +193,11 @@ Type
     fItems: TList<IMaxCronEvent>;
     fItemsById: TDictionary<Int64, Integer>;
     fItemsByName: TDictionary<string, Integer>;
+    fHeapItems: TList<TCronHeapEntry>;
+    fHeapDirty: Integer;
+    fSchedulerEngine: TSchedulerEngine;
+    fTickEventsVisited: UInt64;
+    fHeapRebuildCount: UInt64;
     fItemsLock: TCriticalSection;
     fPendingFree: TList<IMaxCronEvent>;
     fNextId: Int64;
@@ -197,9 +210,25 @@ Type
     function NormalizeEventName(const aName: string): string;
     function FindIndexByNameLocked(const aName: string): Integer;
     function FindIndexByIdLocked(const aId: Int64): Integer;
+    function TryGetEventByIdLocked(const aId: Int64; out aEventItem: IMaxCronEvent): Boolean;
     procedure IndexEventLocked(const aEventItem: IMaxCronEvent; const aIndex: Integer);
     procedure RemoveEventIndexLocked(const aEventItem: IMaxCronEvent);
     procedure ReindexFromLocked(const aStartIndex: Integer);
+    procedure ConfigureSchedulerEngine;
+    procedure MarkHeapDirty;
+    procedure RebuildHeapLocked;
+    procedure HeapPushLocked(const aDueAt: TDateTime; const aEventId: Int64);
+    function HeapPopLocked(out aEntry: TCronHeapEntry): Boolean;
+    function HeapPeekLocked(out aEntry: TCronHeapEntry): Boolean;
+    procedure HeapSiftUpLocked(const aIndex: Integer);
+    procedure HeapSiftDownLocked(const aIndex: Integer);
+    function HeapEntryLessThan(const aLeft, aRight: TCronHeapEntry): Boolean;
+    procedure DoTickAtScan(const aNow: TDateTime);
+    procedure DoTickAtHeap(const aNow: TDateTime);
+    procedure ValidateShadowParity(const aNow: TDateTime);
+    procedure CollectScanDueIdsLocked(const aNow: TDateTime; const aIds: TList<Int64>);
+    procedure CollectHeapDueIdsLocked(const aNow: TDateTime; const aIds: TList<Int64>);
+    function Int64ListToText(const aIds: TList<Int64>): string;
     function DeleteLocked(const aIndex: Integer): Boolean;
     procedure TimerTimer(Sender: TObject);
     procedure CreateTimer(const aRequestedBackend: TmaxCronTimerBackend);
@@ -243,6 +272,8 @@ Type
     {$IFDEF MAXCRON_TESTS}
     procedure TickAt(const aNow: TDateTime);
     procedure StartTimerForTests(const aIntervalMs: Cardinal);
+    procedure ResetTickMetricsForTests;
+    procedure GetTickMetricsForTests(out aEventsVisited: UInt64; out aHeapRebuilds: UInt64);
     {$ENDIF}
   end;
 
@@ -497,6 +528,7 @@ type
     procedure IncrementCallbackDepth;
     procedure DecrementCallbackDepth;
     function GetCallbackDepth: Integer;
+    procedure MarkHeapDirty;
     procedure KeepAsyncAlive(const aAsync: IInterface);
     procedure ReleaseAsyncAlive(const aAsync: IInterface);
     procedure FlushPendingFree;
@@ -525,6 +557,7 @@ type
     procedure IncrementCallbackDepth;
     procedure DecrementCallbackDepth;
     function GetCallbackDepth: Integer;
+    procedure MarkHeapDirty;
     procedure KeepAsyncAlive(const aAsync: IInterface);
     procedure ReleaseAsyncAlive(const aAsync: IInterface);
     procedure FlushPendingFree;
@@ -696,6 +729,8 @@ type
       out aOffsetMinutes: Integer; out aNormalized: string): Boolean;
     procedure ParseExcludedDatesCsv(const aValue: string; out aDateSerials: TArray<Integer>);
     function GetHashSeed: string;
+    function TryGetHeapScheduleSnapshot(out aId: Int64; out aDueAt: TDateTime): Boolean;
+    function IsHeapScheduleCurrent(const aDueAt: TDateTime): Boolean;
     procedure ClearAmbiguousSecondGate;
     procedure ArmAmbiguousSecondGate(const aSchedule: TDateTime);
     function ProcessAmbiguousSecondGate(const aNow: TDateTime): Boolean;
@@ -2749,6 +2784,8 @@ begin
       fNextScheduleNeedsResolve := True;
   end;
 
+  if fSharedState <> nil then
+    fSharedState.MarkHeapDirty;
 end;
 
 function TmaxCronEvent.Run: IMaxCronEvent;
@@ -2768,10 +2805,14 @@ begin
 end;
 
 procedure TmaxCronEvent.SetEnabled(const Value: boolean);
+var
+  lChanged: Boolean;
 begin
+  lChanged := False;
   fLock.Acquire;
   try
     if FEnabled = Value then Exit;
+    lChanged := True;
     if Value then
     begin
       FEnabled := True;
@@ -2785,6 +2826,9 @@ begin
   finally
     fLock.Release;
   end;
+
+  if lChanged and (fSharedState <> nil) then
+    fSharedState.MarkHeapDirty;
 end;
 
 procedure TmaxCronEvent.SetEventPlan(const Value: string);
@@ -2905,6 +2949,9 @@ begin
   finally
     fLock.Release;
   end;
+
+  if fSharedState <> nil then
+    fSharedState.MarkHeapDirty;
 end;
 
 { TSchEventList }
@@ -2941,6 +2988,7 @@ begin
       fItems.Delete(fItems.Count - 1);
       raise;
     end;
+    MarkHeapDirty;
     Result := lEventInterface;
   finally
     fItemsLock.Release;
@@ -2966,6 +3014,7 @@ begin
       end;
       fItemsById.Clear;
       fItemsByName.Clear;
+      MarkHeapDirty;
     finally
       Dec(fTickDepth);
       FlushPendingFreeLocked;
@@ -3129,6 +3178,19 @@ end;
 function TCronSharedState.GetCallbackDepth: Integer;
 begin
   Result := TInterlocked.CompareExchange(fCallbackDepth, 0, 0);
+end;
+
+procedure TCronSharedState.MarkHeapDirty;
+var
+  lOwner: TmaxCron;
+begin
+  if not TryAcquireOwner(lOwner) then
+    Exit;
+  try
+    lOwner.MarkHeapDirty;
+  finally
+    ReleaseOwner;
+  end;
 end;
 
 procedure TCronSharedState.KeepAsyncAlive(const aAsync: IInterface);
@@ -3369,6 +3431,7 @@ begin
   fItems := TList<IMaxCronEvent>.Create;
   fItemsById := TDictionary<Int64, Integer>.Create;
   fItemsByName := TDictionary<string, Integer>.Create;
+  fHeapItems := TList<TCronHeapEntry>.Create;
   fItemsLock := TCriticalSection.Create;
   fPendingFree := TList<IMaxCronEvent>.Create;
   fNextId := 0;
@@ -3381,8 +3444,30 @@ begin
   fAsyncLock := TCriticalSection.Create;
   fAsyncKeepAlive := TList<IInterface>.Create;
   fTickQueued := 0;
+  fHeapDirty := 0;
+  fTickEventsVisited := 0;
+  fHeapRebuildCount := 0;
+  ConfigureSchedulerEngine;
   fSharedState := TCronSharedState.Create(Self);
   CreateTimer(aTimerBackend);
+end;
+
+procedure TmaxCron.ConfigureSchedulerEngine;
+var
+  lValue: string;
+begin
+  lValue := LowerCase(Trim(GetEnvironmentVariable('MAXCRON_ENGINE')));
+  if lValue = 'heap' then
+    fSchedulerEngine := TSchedulerEngine.seHeap
+  else if lValue = 'shadow' then
+    fSchedulerEngine := TSchedulerEngine.seShadow
+  else
+    fSchedulerEngine := TSchedulerEngine.seScan;
+
+  if fSchedulerEngine = TSchedulerEngine.seScan then
+    fHeapDirty := 0
+  else
+    fHeapDirty := 1;
 end;
 
 procedure TmaxCron.SetDefaultInvokeMode(const aValue: TmaxCronInvokeMode);
@@ -3520,6 +3605,244 @@ begin
     Result := -1;
 end;
 
+function TmaxCron.TryGetEventByIdLocked(const aId: Int64; out aEventItem: IMaxCronEvent): Boolean;
+var
+  lIndex: Integer;
+begin
+  aEventItem := nil;
+  lIndex := FindIndexByIdLocked(aId);
+  if lIndex < 0 then
+    Exit(False);
+
+  aEventItem := fItems[lIndex];
+  if (aEventItem = nil) or (aEventItem.Id <> aId) then
+    Exit(False);
+
+  Result := True;
+end;
+
+procedure TmaxCron.MarkHeapDirty;
+begin
+  if fSchedulerEngine = TSchedulerEngine.seScan then
+    Exit;
+  TInterlocked.Exchange(fHeapDirty, 1);
+end;
+
+function TmaxCron.HeapEntryLessThan(const aLeft, aRight: TCronHeapEntry): Boolean;
+begin
+  if aLeft.DueAt < aRight.DueAt then
+    Exit(True);
+  if aLeft.DueAt > aRight.DueAt then
+    Exit(False);
+  Result := aLeft.EventId < aRight.EventId;
+end;
+
+procedure TmaxCron.HeapSiftUpLocked(const aIndex: Integer);
+var
+  lChildIndex: Integer;
+  lParentIndex: Integer;
+  lTemp: TCronHeapEntry;
+begin
+  lChildIndex := aIndex;
+  while lChildIndex > 0 do
+  begin
+    lParentIndex := (lChildIndex - 1) shr 1;
+    if not HeapEntryLessThan(fHeapItems[lChildIndex], fHeapItems[lParentIndex]) then
+      Break;
+    lTemp := fHeapItems[lChildIndex];
+    fHeapItems[lChildIndex] := fHeapItems[lParentIndex];
+    fHeapItems[lParentIndex] := lTemp;
+    lChildIndex := lParentIndex;
+  end;
+end;
+
+procedure TmaxCron.HeapSiftDownLocked(const aIndex: Integer);
+var
+  lCount: Integer;
+  lParentIndex: Integer;
+  lLeftIndex: Integer;
+  lRightIndex: Integer;
+  lSmallestIndex: Integer;
+  lTemp: TCronHeapEntry;
+begin
+  lCount := fHeapItems.Count;
+  lParentIndex := aIndex;
+  while True do
+  begin
+    lLeftIndex := (lParentIndex shl 1) + 1;
+    lRightIndex := lLeftIndex + 1;
+    lSmallestIndex := lParentIndex;
+
+    if (lLeftIndex < lCount) and HeapEntryLessThan(fHeapItems[lLeftIndex], fHeapItems[lSmallestIndex]) then
+      lSmallestIndex := lLeftIndex;
+    if (lRightIndex < lCount) and HeapEntryLessThan(fHeapItems[lRightIndex], fHeapItems[lSmallestIndex]) then
+      lSmallestIndex := lRightIndex;
+
+    if lSmallestIndex = lParentIndex then
+      Break;
+
+    lTemp := fHeapItems[lParentIndex];
+    fHeapItems[lParentIndex] := fHeapItems[lSmallestIndex];
+    fHeapItems[lSmallestIndex] := lTemp;
+    lParentIndex := lSmallestIndex;
+  end;
+end;
+
+procedure TmaxCron.HeapPushLocked(const aDueAt: TDateTime; const aEventId: Int64);
+var
+  lEntry: TCronHeapEntry;
+begin
+  lEntry.DueAt := aDueAt;
+  lEntry.EventId := aEventId;
+  fHeapItems.Add(lEntry);
+  HeapSiftUpLocked(fHeapItems.Count - 1);
+end;
+
+function TmaxCron.HeapPeekLocked(out aEntry: TCronHeapEntry): Boolean;
+begin
+  Result := (fHeapItems.Count > 0);
+  if Result then
+    aEntry := fHeapItems[0];
+end;
+
+function TmaxCron.HeapPopLocked(out aEntry: TCronHeapEntry): Boolean;
+var
+  lLastIndex: Integer;
+begin
+  Result := (fHeapItems.Count > 0);
+  if not Result then
+    Exit(False);
+
+  aEntry := fHeapItems[0];
+  lLastIndex := fHeapItems.Count - 1;
+  if lLastIndex = 0 then
+  begin
+    fHeapItems.Delete(lLastIndex);
+    Exit(True);
+  end;
+
+  fHeapItems[0] := fHeapItems[lLastIndex];
+  fHeapItems.Delete(lLastIndex);
+  HeapSiftDownLocked(0);
+end;
+
+procedure TmaxCron.RebuildHeapLocked;
+var
+  lIndex: Integer;
+  lEvent: TmaxCronEvent;
+  lId: Int64;
+  lDueAt: TDateTime;
+begin
+  fHeapItems.Clear;
+  Inc(fHeapRebuildCount);
+  Inc(fTickEventsVisited, fItems.Count);
+
+  for lIndex := 0 to fItems.Count - 1 do
+  begin
+    if not TryGetCronEvent(fItems[lIndex], lEvent) then
+      Continue;
+    if lEvent.TryGetHeapScheduleSnapshot(lId, lDueAt) then
+      HeapPushLocked(lDueAt, lId);
+  end;
+end;
+
+procedure TmaxCron.CollectScanDueIdsLocked(const aNow: TDateTime; const aIds: TList<Int64>);
+var
+  lIndex: Integer;
+  lEvent: TmaxCronEvent;
+  lId: Int64;
+  lDueAt: TDateTime;
+begin
+  aIds.Clear;
+  for lIndex := 0 to fItems.Count - 1 do
+  begin
+    if not TryGetCronEvent(fItems[lIndex], lEvent) then
+      Continue;
+    if lEvent.TryGetHeapScheduleSnapshot(lId, lDueAt) and (lDueAt <= aNow) then
+      aIds.Add(lId);
+  end;
+  aIds.Sort;
+end;
+
+procedure TmaxCron.CollectHeapDueIdsLocked(const aNow: TDateTime; const aIds: TList<Int64>);
+var
+  lIndex: Integer;
+  lEntry: TCronHeapEntry;
+  lEventItem: IMaxCronEvent;
+  lEvent: TmaxCronEvent;
+begin
+  aIds.Clear;
+  for lIndex := 0 to fHeapItems.Count - 1 do
+  begin
+    lEntry := fHeapItems[lIndex];
+    if lEntry.DueAt > aNow then
+      Continue;
+    if not TryGetEventByIdLocked(lEntry.EventId, lEventItem) then
+      Continue;
+    if not TryGetCronEvent(lEventItem, lEvent) then
+      Continue;
+    if not lEvent.IsHeapScheduleCurrent(lEntry.DueAt) then
+      Continue;
+    if aIds.IndexOf(lEntry.EventId) < 0 then
+      aIds.Add(lEntry.EventId);
+  end;
+  aIds.Sort;
+end;
+
+function TmaxCron.Int64ListToText(const aIds: TList<Int64>): string;
+var
+  lIndex: Integer;
+  lBuilder: TStringBuilder;
+begin
+  lBuilder := TStringBuilder.Create;
+  try
+    lBuilder.Append('[');
+    for lIndex := 0 to aIds.Count - 1 do
+    begin
+      if lIndex > 0 then
+        lBuilder.Append(',');
+      lBuilder.Append(IntToStr(aIds[lIndex]));
+    end;
+    lBuilder.Append(']');
+    Result := lBuilder.ToString;
+  finally
+    lBuilder.Free;
+  end;
+end;
+
+procedure TmaxCron.ValidateShadowParity(const aNow: TDateTime);
+var
+  lScanIds: TList<Int64>;
+  lHeapIds: TList<Int64>;
+  lIndex: Integer;
+begin
+  lScanIds := TList<Int64>.Create;
+  lHeapIds := TList<Int64>.Create;
+  try
+    fItemsLock.Acquire;
+    try
+      if TInterlocked.Exchange(fHeapDirty, 0) = 1 then
+        RebuildHeapLocked;
+      CollectScanDueIdsLocked(aNow, lScanIds);
+      CollectHeapDueIdsLocked(aNow, lHeapIds);
+    finally
+      fItemsLock.Release;
+    end;
+
+    if lScanIds.Count <> lHeapIds.Count then
+      raise Exception.CreateFmt('MAXCRON_ENGINE=shadow divergence at %.8f scan=%s heap=%s',
+        [aNow, Int64ListToText(lScanIds), Int64ListToText(lHeapIds)]);
+
+    for lIndex := 0 to lScanIds.Count - 1 do
+      if lScanIds[lIndex] <> lHeapIds[lIndex] then
+        raise Exception.CreateFmt('MAXCRON_ENGINE=shadow divergence at %.8f scan=%s heap=%s',
+          [aNow, Int64ListToText(lScanIds), Int64ListToText(lHeapIds)]);
+  finally
+    lHeapIds.Free;
+    lScanIds.Free;
+  end;
+end;
+
 function TmaxCron.DeleteLocked(const aIndex: Integer): Boolean;
 var
   lEvent: TmaxCronEvent;
@@ -3535,6 +3858,7 @@ begin
   if TryGetCronEvent(lEventItem, lEvent) then
     lEvent.MarkPendingDestroy;
   fPendingFree.Add(lEventItem);
+  MarkHeapDirty;
   FlushPendingFreeLocked;
   Result := True;
 end;
@@ -3770,6 +4094,7 @@ begin
   fItems.Free;
   fItemsById.Free;
   fItemsByName.Free;
+  fHeapItems.Free;
   fPendingFree.Free;
   fItemsLock.Free;
   fAsyncKeepAlive.Free;
@@ -3800,6 +4125,21 @@ begin
 end;
 
 procedure TmaxCron.DoTickAt(const aNow: TDateTime);
+begin
+  case fSchedulerEngine of
+    TSchedulerEngine.seHeap:
+      DoTickAtHeap(aNow);
+    TSchedulerEngine.seShadow:
+      begin
+        ValidateShadowParity(aNow);
+        DoTickAtHeap(aNow);
+      end;
+  else
+    DoTickAtScan(aNow);
+  end;
+end;
+
+procedure TmaxCron.DoTickAtScan(const aNow: TDateTime);
 var
   x: Integer;
   lSnapshot: TArray<IMaxCronEvent>;
@@ -3815,6 +4155,7 @@ begin
       SetLength(lSnapshot, fItems.Count);
       for x := 0 to fItems.Count - 1 do
         lSnapshot[x] := fItems[x];
+      Inc(fTickEventsVisited, Length(lSnapshot));
     finally
       fItemsLock.Release;
     end;
@@ -3823,6 +4164,74 @@ begin
       if TryGetCronEvent(lSnapshot[x], lEvent) then
         lEvent.checkTimer(aNow);
   finally
+    if lDepthIncreased then
+    begin
+      fItemsLock.Acquire;
+      try
+        Dec(fTickDepth);
+        FlushPendingFreeLocked;
+      finally
+        fItemsLock.Release;
+      end;
+    end;
+  end;
+end;
+
+procedure TmaxCron.DoTickAtHeap(const aNow: TDateTime);
+var
+  lDepthIncreased: Boolean;
+  lDueEvents: TList<TmaxCronEvent>;
+  lEntry: TCronHeapEntry;
+  lEventItem: IMaxCronEvent;
+  lEvent: TmaxCronEvent;
+  lDueEvent: TmaxCronEvent;
+  lIndex: Integer;
+  lId: Int64;
+  lDueAt: TDateTime;
+begin
+  lDepthIncreased := False;
+  lDueEvents := TList<TmaxCronEvent>.Create;
+  try
+    fItemsLock.Acquire;
+    try
+      Inc(fTickDepth);
+      lDepthIncreased := True;
+      if TInterlocked.Exchange(fHeapDirty, 0) = 1 then
+        RebuildHeapLocked;
+
+      while HeapPeekLocked(lEntry) and (lEntry.DueAt <= aNow) do
+      begin
+        HeapPopLocked(lEntry);
+        Inc(fTickEventsVisited);
+        if not TryGetEventByIdLocked(lEntry.EventId, lEventItem) then
+          Continue;
+        if not TryGetCronEvent(lEventItem, lEvent) then
+          Continue;
+        if not lEvent.IsHeapScheduleCurrent(lEntry.DueAt) then
+          Continue;
+        lDueEvents.Add(lEvent);
+      end;
+    finally
+      fItemsLock.Release;
+    end;
+
+    for lIndex := 0 to lDueEvents.Count - 1 do
+    begin
+      lDueEvent := lDueEvents[lIndex];
+      lDueEvent.checkTimer(aNow);
+      if not lDueEvent.TryGetHeapScheduleSnapshot(lId, lDueAt) then
+        Continue;
+
+      fItemsLock.Acquire;
+      try
+        if TryGetEventByIdLocked(lId, lEventItem) and lDueEvent.IsHeapScheduleCurrent(lDueAt) then
+          HeapPushLocked(lDueAt, lId);
+      finally
+        fItemsLock.Release;
+      end;
+    end;
+  finally
+    lDueEvents.Free;
     if lDepthIncreased then
     begin
       fItemsLock.Acquire;
@@ -3846,6 +4255,18 @@ procedure TmaxCron.StartTimerForTests(const aIntervalMs: Cardinal);
 begin
   if fTimer <> nil then
     fTimer.Start(aIntervalMs);
+end;
+
+procedure TmaxCron.ResetTickMetricsForTests;
+begin
+  fTickEventsVisited := 0;
+  fHeapRebuildCount := 0;
+end;
+
+procedure TmaxCron.GetTickMetricsForTests(out aEventsVisited: UInt64; out aHeapRebuilds: UInt64);
+begin
+  aEventsVisited := fTickEventsVisited;
+  aHeapRebuilds := fHeapRebuildCount;
 end;
 {$ENDIF}
 
@@ -4616,6 +5037,28 @@ begin
   Result := '#' + IntToStr(fId);
 end;
 
+function TmaxCronEvent.TryGetHeapScheduleSnapshot(out aId: Int64; out aDueAt: TDateTime): Boolean;
+begin
+  fLock.Acquire;
+  try
+    aId := fId;
+    aDueAt := fNextSchedule;
+    Result := (not fPendingDestroy) and FEnabled and (fNextSchedule > 0);
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.IsHeapScheduleCurrent(const aDueAt: TDateTime): Boolean;
+begin
+  fLock.Acquire;
+  try
+    Result := (not fPendingDestroy) and FEnabled and (fNextSchedule > 0) and (fNextSchedule = aDueAt);
+  finally
+    fLock.Release;
+  end;
+end;
+
 function TmaxCronEvent.GetName: string;
 begin
   fLock.Acquire;
@@ -5004,6 +5447,9 @@ begin
   finally
     fLock.Release;
   end;
+
+  if fSharedState <> nil then
+    fSharedState.MarkHeapDirty;
 end;
 
 function TmaxCronEvent.CanFreeNow: Boolean;

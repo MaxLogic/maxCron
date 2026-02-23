@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-057
+Next task ID: T-060
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 57
+Done tasks: 60
 
 ## In Progress
 
@@ -19,6 +19,23 @@ Done tasks: 57
 
 
 ## Done
+
+### T-059 [PERF] Add high-N benchmark harness and threshold guidance for engine selection
+Outcome: Added high-cardinality benchmark coverage plus scheduler-engine selection guidance in README, including measurable scan-vs-heap tick-work differences for sparse due workloads.
+Proof: `MAXCRON_ENGINE=scan ./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 3/3, Core 125/125, VCL 3/3); `MAXCRON_ENGINE=heap ./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 3/3, Core 125/125, VCL 3/3); `TestHeavyStressMixed.EngineBenchmark_ScanVsHeap_HighN` asserts heap candidate work reduction (`heap * 5 < scan`) on 1200-event/40-tick scenario.
+Touches: `tests/unit/TestHeavyStressMixed.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-057
+
+### T-058 [TEST] Add heap-vs-scan shadow parity verification mode
+Outcome: Added shadow parity mode (`MAXCRON_ENGINE=shadow`) that cross-checks scan and heap due decisions per tick and raises on divergence, plus churn coverage in robust tests.
+Proof: `MAXCRON_ENGINE=shadow ./build-and-run-tests.sh -cm:Quiet` passes (Stress 3/3, Core 125/125, VCL 3/3) with no divergence exceptions; `MAXCRON_ENGINE=shadow ./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 3/3, Core 125/125, VCL 3/3) with no divergence exceptions.
+Touches: `maxCron.pas`, `tests/unit/TestRobustCoverage.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-057
+
+### T-057 [PERF] Add heap-based scheduler engine behind feature flag
+Outcome: Added heap scheduler engine with `MAXCRON_ENGINE` selection (`scan` default, `heap`, `shadow`) and heap dirty/rebuild tracking so tick processing can avoid full event scans under sparse due workloads while preserving public API behavior.
+Proof: `./build-and-run-tests.sh -cm:Quiet` passes (Stress 3/3, Core 125/125, VCL 3/3) in default scan mode; `MAXCRON_ENGINE=heap ./build-and-run-tests.sh -cm:Quiet` passes (Stress 3/3, Core 125/125, VCL 3/3) in heap mode.
+Touches: `maxCron.pas`, `tests/unit/TestHeavyStressMixed.pas`, `tests/unit/TestRobustCoverage.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
 
 ### T-056 [ROBUST] Replace raw owner dereference paths with shared state + dictionary indexes
 Outcome: Replaced queue-token raw-owner dereference paths with `ICronSharedState` (alive/default snapshots + in-flight/callback depth tracking + async/flush/tick operations), removed direct worker-thread reads of `TmaxCron` internals, added dictionary-backed name/id indexes for faster `Delete(Name)` / `Delete(Id)` lookup paths, and documented `imMainThread` message-pump requirements explicitly in README/code comments.

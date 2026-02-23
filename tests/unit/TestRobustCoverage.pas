@@ -4,6 +4,7 @@ interface
 
 uses
   System.Classes, System.DateUtils, System.SyncObjs, System.SysUtils,
+  Winapi.Windows,
   DUnitX.TestFramework,
   maxCron;
 
@@ -13,6 +14,8 @@ type
   private
     procedure AssertRaises(const aProc: TProc; const aMessage: string = 'Expected exception');
     procedure NoopSchedule(aSender: IMaxCronEvent);
+    procedure SetEngineEnv(const aValue: string; out aPreviousValue: string; out aHadPrevious: Boolean);
+    procedure RestoreEngineEnv(const aPreviousValue: string; const aHadPrevious: Boolean);
     function BuildOneShotPlan(const aDateTime: TDateTime): string;
     function FindNextForPlan(const aPlan: string; const aBase: TDateTime;
       const aDayMatchMode: TmaxCronDayMatchMode): TDateTime;
@@ -77,6 +80,12 @@ type
 
     [Test]
     procedure AddOverloads_InvalidPlan_DoNotKeepPartiallyAddedEvents;
+
+    [Test]
+    procedure EngineHeapMode_ProcessesDueEvents;
+
+    [Test]
+    procedure EngineShadowMode_MixedChurn_NoDivergence;
   end;
 
 implementation
@@ -99,6 +108,22 @@ end;
 
 procedure TTestRobustCoverage.NoopSchedule(aSender: IMaxCronEvent);
 begin
+end;
+
+procedure TTestRobustCoverage.SetEngineEnv(const aValue: string; out aPreviousValue: string;
+  out aHadPrevious: Boolean);
+begin
+  aPreviousValue := GetEnvironmentVariable('MAXCRON_ENGINE');
+  aHadPrevious := aPreviousValue <> '';
+  Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(aValue));
+end;
+
+procedure TTestRobustCoverage.RestoreEngineEnv(const aPreviousValue: string; const aHadPrevious: Boolean);
+begin
+  if aHadPrevious then
+    Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(aPreviousValue))
+  else
+    Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', nil);
 end;
 
 function TTestRobustCoverage.BuildOneShotPlan(const aDateTime: TDateTime): string;
@@ -801,6 +826,121 @@ begin
     Assert.AreEqual(0, Length(lCron.Snapshot), 'Event overload must not keep partially-added events');
   finally
     lCron.Free;
+  end;
+end;
+
+procedure TTestRobustCoverage.EngineHeapMode_ProcessesDueEvents;
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lFireCount: Integer;
+  lPreviousValue: string;
+  lHadPrevious: Boolean;
+  lVisited: UInt64;
+  lRebuilds: UInt64;
+begin
+  lFireCount := 0;
+  SetEngineEnv('heap', lPreviousValue, lHadPrevious);
+  try
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      lEvent := lCron.Add('HeapEngineBasic');
+      lEvent.EventPlan := '* * * * * * * 1';
+      lEvent.OnScheduleProc :=
+        procedure(aSender: IMaxCronEvent)
+        begin
+          TInterlocked.Increment(lFireCount);
+        end;
+      lEvent.Run;
+
+      lCron.ResetTickMetricsForTests;
+      lCron.TickAt(lEvent.NextSchedule);
+
+      Assert.AreEqual(1, TInterlocked.CompareExchange(lFireCount, 0, 0));
+      lCron.GetTickMetricsForTests(lVisited, lRebuilds);
+      Assert.IsTrue(lVisited > 0, 'Heap mode should record visited candidates');
+      Assert.IsTrue(lRebuilds > 0, 'Heap mode should rebuild at least once');
+    finally
+      lCron.Free;
+    end;
+  finally
+    RestoreEngineEnv(lPreviousValue, lHadPrevious);
+  end;
+end;
+
+procedure TTestRobustCoverage.EngineShadowMode_MixedChurn_NoDivergence;
+var
+  lCron: TmaxCron;
+  lEventA: IMaxCronEvent;
+  lEventB: IMaxCronEvent;
+  lEventTemp: IMaxCronEvent;
+  lBase: TDateTime;
+  lTickAt: TDateTime;
+  lFireCount: Integer;
+  lIndex: Integer;
+  lPreviousValue: string;
+  lHadPrevious: Boolean;
+begin
+  lFireCount := 0;
+  SetEngineEnv('shadow', lPreviousValue, lHadPrevious);
+  try
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      lEventA := lCron.Add('ShadowA');
+      lEventA.EventPlan := '* * * * * * * 0';
+      lEventA.MisfirePolicy := mpCatchUpAll;
+      lEventA.OnScheduleProc :=
+        procedure(aSender: IMaxCronEvent)
+        begin
+          TInterlocked.Increment(lFireCount);
+        end;
+      lEventA.Run;
+
+      lEventB := lCron.Add('ShadowB');
+      lEventB.EventPlan := '* * * * * * * 0';
+      lEventB.OverlapMode := omSerialize;
+      lEventB.OnScheduleProc :=
+        procedure(aSender: IMaxCronEvent)
+        begin
+          TInterlocked.Increment(lFireCount);
+        end;
+      lEventB.Run;
+
+      lBase := Now;
+      for lIndex := 0 to 10 do
+      begin
+        lTickAt := IncSecond(lBase, lIndex);
+        lCron.TickAt(lTickAt);
+
+        case lIndex of
+          2:
+            begin
+              lEventTemp := lCron.Add('ShadowTemp');
+              lEventTemp.EventPlan := '* * * * * * * 0';
+              lEventTemp.OnScheduleProc :=
+                procedure(aSender: IMaxCronEvent)
+                begin
+                end;
+              lEventTemp.Run;
+            end;
+          3:
+            Assert.IsTrue(lCron.Delete('ShadowTemp'));
+          4:
+            lEventA.ValidFrom := IncSecond(lTickAt, -1);
+          5:
+            lEventB.Stop;
+          6:
+            lEventB.Run;
+        end;
+      end;
+
+      Assert.IsTrue(TInterlocked.CompareExchange(lFireCount, 0, 0) > 0,
+        'Expected callbacks to run under shadow mode without divergence');
+    finally
+      lCron.Free;
+    end;
+  finally
+    RestoreEngineEnv(lPreviousValue, lHadPrevious);
   end;
 end;
 

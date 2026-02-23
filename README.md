@@ -73,6 +73,37 @@ CronScheduler := TmaxCron.Create(ctPortable);
 
 `ctVcl` must be created on the VCL main thread. Creating `ctVcl` from a worker thread now raises an exception.
 
+## Scheduler engine selection (scan / heap / shadow)
+
+`TmaxCron` reads `MAXCRON_ENGINE` once during scheduler creation:
+
+- `scan` (default): scans all registered events each tick.
+- `heap`: keeps a min-heap of next-due schedules and processes only due candidates plus rebuilds after schedule/registry changes.
+- `shadow`: diagnostic mode that computes both scan and heap due sets and raises on divergence; execution still runs through heap.
+
+Set the engine before we create the scheduler:
+
+```bash
+export MAXCRON_ENGINE=heap
+```
+
+```cmd
+set MAXCRON_ENGINE=heap
+```
+
+Engine guidance:
+
+- Use `scan` for smaller event counts or very high churn where almost every tick mutates many schedules.
+- Use `heap` for high-cardinality schedules where only a small subset is due per tick.
+- Use `shadow` only for CI/test verification because it intentionally does extra work each tick.
+
+High-N benchmark coverage (`TestHeavyStressMixed.EngineBenchmark_ScanVsHeap_HighN`) uses 1200 far-future events and 40 ticks:
+
+- `scan`: 48,000 candidate visits (`1200 * 40`).
+- `heap`: 1,200 candidate visits (single rebuild, then no due pops).
+
+This benchmark demonstrates the expected behavior: heap mode keeps tick work growth bounded by due events (`k`) instead of total events (`n`) on sparse schedules.
+
 ## How a job is executed (per-event)
 
 Each event can override how its callback is invoked:
