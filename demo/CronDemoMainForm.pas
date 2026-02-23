@@ -91,6 +91,7 @@ Type
     Procedure UpdateDialectUi;
     Procedure SelectSample(Sender: TObject); Overload;
     Procedure SelectSample(index: Integer); Overload;
+    Procedure DemoOwnershipActions;
     Procedure calculateIntervalls;
   Public
 
@@ -213,6 +214,46 @@ Begin
   lNewSchedule.Run;
   log(lNewSchedule.name + ' next scheduled date is ' + showDate(lNewSchedule.NextSchedule));
 
+  DemoOwnershipActions;
+
+End;
+
+Procedure TForm2.DemoOwnershipActions;
+Var
+  lSnapshot: TArray<IMaxCronEvent>;
+  lEvent: IMaxCronEvent;
+  lNamed: IMaxCronEvent;
+  lUnnamed: IMaxCronEvent;
+  lIndex: Integer;
+  lNameText: String;
+Begin
+  log('--- Id/Snapshot demo actions ---');
+  lSnapshot := ChronScheduler.Snapshot;
+  log('Snapshot count = ' + IntToStr(Length(lSnapshot)));
+
+  for lIndex := 0 to Length(lSnapshot) - 1 do
+  Begin
+    lEvent := lSnapshot[lIndex];
+    if lEvent.Name = '' then
+      lNameText := '<unnamed>'
+    else
+      lNameText := lEvent.Name;
+    log('Snapshot[' + IntToStr(lIndex) + '] Id=' + IntToStr(lEvent.Id) + ' Name=' + lNameText);
+  End;
+
+  lNamed := ChronScheduler.Add('DemoDeleteByName');
+  log('Added named demo event: Id=' + IntToStr(lNamed.Id) + ' Name=' + lNamed.Name);
+  if ChronScheduler.Delete('demodeletebyname') then
+    log('Deleted named demo event with Delete(''demodeletebyname'')')
+  else
+    log('Delete by name failed unexpectedly');
+
+  lUnnamed := ChronScheduler.Add('');
+  log('Added unnamed demo event: Id=' + IntToStr(lUnnamed.Id));
+  if ChronScheduler.Delete(lUnnamed.Id) then
+    log('Deleted unnamed demo event with Delete(Id=' + IntToStr(lUnnamed.Id) + ')')
+  else
+    log('Delete by id failed unexpectedly');
 End;
 
 Procedure TForm2.OnScheduleTrigger(Sender: IMaxCronEvent);

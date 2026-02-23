@@ -124,6 +124,17 @@ begin
 end;
 ```
 
+## Migration from index API
+
+If we used older index-based calls, migrate as follows:
+
+- `CronScheduler.Count` -> `Length(CronScheduler.Snapshot)`
+- `CronScheduler.Events[i]` -> `CronScheduler.Snapshot[i]`
+- `CronScheduler.Delete(i)` -> `CronScheduler.Delete(Event.Id)` (or `Delete(Event)` / `Delete('Name')`)
+- `CronScheduler.IndexOf(Event)` -> iterate over `Snapshot` and compare `Id`
+
+Prefer storing event handles (`IMaxCronEvent`) or immutable `Id` values in our app code, instead of relying on collection positions.
+
 ## Overlap handling (per-event)
 
 When a schedule fires again while a previous execution is still running:

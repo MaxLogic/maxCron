@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-053
+Next task ID: T-054
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 53
+Done tasks: 54
 
 ## In Progress
 
@@ -19,6 +19,11 @@ Done tasks: 53
 
 
 ## Done
+
+### T-053 [DEMO] Update demo/sample guidance for Id + Snapshot APIs
+Outcome: Demo now includes explicit logged actions for `Snapshot` listing and delete-by-name/delete-by-id usage; README gained a migration section for replacing index-based calls; demo project search path was updated so CLI builds resolve `MaxLogic.PortableTimer`.
+Proof: `./build-delphi.sh demo/CronDemo.dproj -config release` succeeds; `./build-delphi.sh tests/maxCronTests.dproj -config release` succeeds; `rg -n "Migration from index API|Snapshot/list example" README.md` returns the new guidance.
+Touches: `demo/CronDemoMainForm.pas`, `demo/CronDemo.dproj`, `README.md`, `CHANGELOG.md`, `TASKS.md`
 
 ### T-052 [DOC] Document Id/Snapshot event lifecycle contract
 Outcome: Updated README and changelog to document immutable event Id ownership, Snapshot-based inspection, delete-by-id support, and removal of index-based public APIs.

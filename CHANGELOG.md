@@ -6,6 +6,7 @@ All notable user-visible changes to this project will be documented in this file
 
 ### Added
 - Added immutable per-event `Id` plus `TmaxCron.Snapshot` for stable event-list inspection without index-based access. (T-050)
+- Added demo event-log actions that showcase `Snapshot` listing and delete-by-name/delete-by-id flows. (T-053)
 - Added repeated serialized dispatch-start rollback regression coverage to keep retry behavior stable under tight tick timing. (T-046)
 - Added Quartz-style DOM/DOW modifiers (`L`, `W`, `LW`, `#`, `?`). (T-005)
 - Added cron macros (`@yearly`, `@monthly`, `@weekly`, `@daily`, `@hourly`, `@reboot`). (T-006)
@@ -24,6 +25,7 @@ All notable user-visible changes to this project will be documented in this file
 
 ### Changed
 - Changed scheduler ownership APIs to Id/snapshot model: removed public `Count`, `Events[]`, `Delete(Index)`, and `IndexOf`; added `Delete(Id)` for direct deletion by immutable event identity. (T-050)
+- Added a README migration section mapping old index-based API calls to Id/snapshot equivalents. (T-053)
 - Event names are now immutable after `Add(...)`; non-empty names are case-insensitive unique per scheduler; unnamed events remain supported. (T-049)
 - Changed the public event handle API from concrete `TmaxCronEvent` class references to `IMaxCronEvent` interfaces, while keeping scheduler-owned registration/removal (`Delete/Clear`) semantics. (T-048)
 - Clarified the README lifecycle usage contract for safe ownership/shutdown: use `Delete/Clear` instead of freeing events directly, avoid freeing scheduler from callbacks, and synchronize external concurrent reads/writes. (T-047)
@@ -39,6 +41,7 @@ All notable user-visible changes to this project will be documented in this file
 
 ### Fixed
 - Fixed unnamed-event deletion ergonomics by allowing `Delete(Event)` and `Delete(Id)` without index-based APIs. (T-050)
+- Fixed CLI demo build path resolution by adding `..\lib\maxlogicfoundation` to demo unit search path. (T-053)
 - Added `Delete(const aName: string)` with case-insensitive named-event lookup; unnamed events are rejected by `Delete(Name)`. (T-049)
 - Fixed MAXCRON_TESTS queued pre-acquire hook handling to roll back state and exit the queued path without rethrowing through `CheckSynchronize`, preventing intermittent dispatch-regression hangs. (T-045)
 - Fixed serialized overlap-chain dispatch-start failures to roll back reserved execution/overlap state, so retry ticks can continue instead of wedging after injected launch failures. (T-044)
