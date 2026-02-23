@@ -24,6 +24,9 @@ type
 
     [Test]
     procedure EngineBenchmark_ScanVsHeap_HighN;
+
+    [Test]
+    procedure EngineAutoMode_HysteresisAndOverrideBehavior;
   end;
 
 implementation
@@ -294,6 +297,82 @@ begin
   Assert.IsTrue(lHeapVisited > 0, 'Heap benchmark should visit candidates');
   Assert.IsTrue(lHeapVisited * 5 < lScanVisited,
     'Heap mode should reduce candidate work for high-N non-due ticks');
+end;
+
+procedure TTestHeavyStressMixed.EngineAutoMode_HysteresisAndOverrideBehavior;
+const
+  cEventCount = 500;
+  cAutoWarmupTicks = 96;
+  cAutoChurnTicks = 18;
+  cFuturePlan = '0 0 1 1 * 2099 0 1';
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lIndex: Integer;
+  lNowDateTime: TDateTime;
+  lConfiguredEngine: string;
+  lEffectiveEngine: string;
+  lAutoState: string;
+  lSwitchCount: UInt64;
+  lPreviousValue: string;
+  lHadPrevious: Boolean;
+begin
+  SetEngineEnv('auto', lPreviousValue, lHadPrevious);
+  try
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      for lIndex := 0 to cEventCount - 1 do
+      begin
+        lEvent := lCron.Add('AutoBench_' + IntToStr(lIndex));
+        lEvent.EventPlan := cFuturePlan;
+        lEvent.Run;
+      end;
+
+      lNowDateTime := Now;
+      for lIndex := 0 to cAutoWarmupTicks - 1 do
+        lCron.TickAt(lNowDateTime);
+
+      lCron.GetEngineStateForTests(lConfiguredEngine, lEffectiveEngine, lAutoState, lSwitchCount);
+      Assert.AreEqual('auto', lConfiguredEngine);
+      Assert.AreEqual('heap', lEffectiveEngine, 'Auto mode should promote to heap under high-N low-churn load');
+      Assert.IsTrue(lSwitchCount > 0, 'Auto mode should record at least one engine switch');
+
+      lEvent := lCron.Add('AutoChurn');
+      lEvent.EventPlan := cFuturePlan;
+      lEvent.Run;
+      for lIndex := 0 to cAutoChurnTicks - 1 do
+      begin
+        lEvent.Stop;
+        lEvent.Run;
+        lCron.TickAt(lNowDateTime);
+      end;
+
+      lCron.GetEngineStateForTests(lConfiguredEngine, lEffectiveEngine, lAutoState, lSwitchCount);
+      Assert.AreEqual('auto', lConfiguredEngine);
+      Assert.AreEqual('scan', lEffectiveEngine, 'High churn should force auto mode back to scan');
+      Assert.AreEqual('scan-stable', lAutoState);
+    finally
+      lCron.Free;
+    end;
+  finally
+    RestoreEngineEnv(lPreviousValue, lHadPrevious);
+  end;
+
+  SetEngineEnv('heap', lPreviousValue, lHadPrevious);
+  try
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      lCron.GetEngineStateForTests(lConfiguredEngine, lEffectiveEngine, lAutoState, lSwitchCount);
+      Assert.AreEqual('heap', lConfiguredEngine);
+      Assert.AreEqual('heap', lEffectiveEngine);
+      Assert.AreEqual('disabled', lAutoState);
+      Assert.AreEqual(UInt64(0), lSwitchCount);
+    finally
+      lCron.Free;
+    end;
+  finally
+    RestoreEngineEnv(lPreviousValue, lHadPrevious);
+  end;
 end;
 
 end.

@@ -73,13 +73,14 @@ CronScheduler := TmaxCron.Create(ctPortable);
 
 `ctVcl` must be created on the VCL main thread. Creating `ctVcl` from a worker thread now raises an exception.
 
-## Scheduler engine selection (scan / heap / shadow)
+## Scheduler engine selection (scan / heap / shadow / auto)
 
 `TmaxCron` reads `MAXCRON_ENGINE` once during scheduler creation:
 
 - `scan` (default): scans all registered events each tick.
 - `heap`: keeps a min-heap of next-due schedules and processes only due candidates plus rebuilds after schedule/registry changes.
 - `shadow`: diagnostic mode that computes both scan and heap due sets and raises on divergence; execution still runs through heap.
+- `auto`: adaptive mode that starts in scan and switches between scan/heap using hysteresis and cooldown.
 
 Set the engine before we create the scheduler:
 
@@ -91,11 +92,24 @@ export MAXCRON_ENGINE=heap
 set MAXCRON_ENGINE=heap
 ```
 
+```bash
+export MAXCRON_ENGINE=auto
+```
+
 Engine guidance:
 
 - Use `scan` for smaller event counts or very high churn where almost every tick mutates many schedules.
 - Use `heap` for high-cardinality schedules where only a small subset is due per tick.
 - Use `shadow` only for CI/test verification because it intentionally does extra work each tick.
+- Use `auto` when workload shape is not stable and we want runtime adaptation without hard-coding one engine.
+
+`auto` mode policy (internal):
+
+- Enter heap trial when event-count EMA is high and mutation/dirty EMA stays low.
+- Promote to heap-stable only if measured heap tick cost beats scan baseline by margin.
+- Fall back to scan when churn rises, event count drops, or heap stops showing benefit.
+- Apply hold counters and cooldown to avoid scan/heap thrashing.
+- If explicit `scan`, `heap`, or `shadow` is selected, auto-controller logic is bypassed.
 
 High-N benchmark coverage (`TestHeavyStressMixed.EngineBenchmark_ScanVsHeap_HighN`) uses 1200 far-future events and 40 ticks:
 

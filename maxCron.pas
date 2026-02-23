@@ -175,7 +175,9 @@ Type
   TmaxCron = class(TObject)
   private
     type
-      TSchedulerEngine = (seScan, seHeap, seShadow);
+      TSchedulerEngine = (seScan, seHeap, seShadow, seAuto);
+
+      TAutoSchedulerState = (asDisabled, asScanStable, asHeapTrial, asHeapStable);
 
       TCronHeapEntry = record
         DueAt: TDateTime;
@@ -196,6 +198,21 @@ Type
     fHeapItems: TList<TCronHeapEntry>;
     fHeapDirty: Integer;
     fSchedulerEngine: TSchedulerEngine;
+    fAutoEffectiveEngine: TSchedulerEngine;
+    fAutoState: TAutoSchedulerState;
+    fAutoLock: TCriticalSection;
+    fAutoMutationCounter: Int64;
+    fAutoMutationCursor: Int64;
+    fAutoEnterHold: Integer;
+    fAutoExitHold: Integer;
+    fAutoTrialTicksRemaining: Integer;
+    fAutoCooldownTicks: Integer;
+    fAutoSwitchCount: UInt64;
+    fAutoEventCountEwma: Double;
+    fAutoDirtyRateEwma: Double;
+    fAutoScanTickUsEwma: Double;
+    fAutoHeapTickUsEwma: Double;
+    fAutoScanBaselineUs: Double;
     fTickEventsVisited: UInt64;
     fHeapRebuildCount: UInt64;
     fItemsLock: TCriticalSection;
@@ -216,6 +233,12 @@ Type
     procedure ReindexFromLocked(const aStartIndex: Integer);
     procedure ConfigureSchedulerEngine;
     procedure MarkHeapDirty;
+    function SchedulerEngineToText(const aEngine: TSchedulerEngine): string;
+    function AutoStateToText(const aState: TAutoSchedulerState): string;
+    function UpdateEwma(const aCurrent, aSample, aAlpha: Double): Double;
+    procedure SwitchAutoEffectiveEngine(const aEngine: TSchedulerEngine);
+    procedure EvaluateAutoController(const aEngineUsed: TSchedulerEngine; const aEventCount: Integer;
+      const aElapsedMicroseconds: Int64);
     procedure RebuildHeapLocked;
     procedure HeapPushLocked(const aDueAt: TDateTime; const aEventId: Int64);
     function HeapPopLocked(out aEntry: TCronHeapEntry): Boolean;
@@ -274,6 +297,8 @@ Type
     procedure StartTimerForTests(const aIntervalMs: Cardinal);
     procedure ResetTickMetricsForTests;
     procedure GetTickMetricsForTests(out aEventsVisited: UInt64; out aHeapRebuilds: UInt64);
+    procedure GetEngineStateForTests(out aConfiguredEngine: string; out aEffectiveEngine: string;
+      out aAutoState: string; out aSwitchCount: UInt64);
     {$ENDIF}
   end;
 
@@ -3432,6 +3457,7 @@ begin
   fItemsById := TDictionary<Int64, Integer>.Create;
   fItemsByName := TDictionary<string, Integer>.Create;
   fHeapItems := TList<TCronHeapEntry>.Create;
+  fAutoLock := TCriticalSection.Create;
   fItemsLock := TCriticalSection.Create;
   fPendingFree := TList<IMaxCronEvent>.Create;
   fNextId := 0;
@@ -3445,6 +3471,20 @@ begin
   fAsyncKeepAlive := TList<IInterface>.Create;
   fTickQueued := 0;
   fHeapDirty := 0;
+  fAutoEffectiveEngine := TSchedulerEngine.seScan;
+  fAutoState := TAutoSchedulerState.asDisabled;
+  fAutoMutationCounter := 0;
+  fAutoMutationCursor := 0;
+  fAutoEnterHold := 0;
+  fAutoExitHold := 0;
+  fAutoTrialTicksRemaining := 0;
+  fAutoCooldownTicks := 0;
+  fAutoSwitchCount := 0;
+  fAutoEventCountEwma := 0;
+  fAutoDirtyRateEwma := 0;
+  fAutoScanTickUsEwma := 0;
+  fAutoHeapTickUsEwma := 0;
+  fAutoScanBaselineUs := 0;
   fTickEventsVisited := 0;
   fHeapRebuildCount := 0;
   ConfigureSchedulerEngine;
@@ -3461,13 +3501,225 @@ begin
     fSchedulerEngine := TSchedulerEngine.seHeap
   else if lValue = 'shadow' then
     fSchedulerEngine := TSchedulerEngine.seShadow
+  else if lValue = 'auto' then
+    fSchedulerEngine := TSchedulerEngine.seAuto
   else
     fSchedulerEngine := TSchedulerEngine.seScan;
+
+  fAutoLock.Acquire;
+  try
+    fAutoEffectiveEngine := TSchedulerEngine.seScan;
+    fAutoState := TAutoSchedulerState.asDisabled;
+    fAutoMutationCounter := 0;
+    fAutoMutationCursor := 0;
+    fAutoEnterHold := 0;
+    fAutoExitHold := 0;
+    fAutoTrialTicksRemaining := 0;
+    fAutoCooldownTicks := 0;
+    fAutoSwitchCount := 0;
+    fAutoEventCountEwma := 0;
+    fAutoDirtyRateEwma := 0;
+    fAutoScanTickUsEwma := 0;
+    fAutoHeapTickUsEwma := 0;
+    fAutoScanBaselineUs := 0;
+    if fSchedulerEngine = TSchedulerEngine.seAuto then
+      fAutoState := TAutoSchedulerState.asScanStable;
+  finally
+    fAutoLock.Release;
+  end;
 
   if fSchedulerEngine = TSchedulerEngine.seScan then
     fHeapDirty := 0
   else
     fHeapDirty := 1;
+end;
+
+function TmaxCron.SchedulerEngineToText(const aEngine: TSchedulerEngine): string;
+begin
+  case aEngine of
+    TSchedulerEngine.seHeap:
+      Result := 'heap';
+    TSchedulerEngine.seShadow:
+      Result := 'shadow';
+    TSchedulerEngine.seAuto:
+      Result := 'auto';
+  else
+    Result := 'scan';
+  end;
+end;
+
+function TmaxCron.AutoStateToText(const aState: TAutoSchedulerState): string;
+begin
+  case aState of
+    TAutoSchedulerState.asScanStable:
+      Result := 'scan-stable';
+    TAutoSchedulerState.asHeapTrial:
+      Result := 'heap-trial';
+    TAutoSchedulerState.asHeapStable:
+      Result := 'heap-stable';
+  else
+    Result := 'disabled';
+  end;
+end;
+
+function TmaxCron.UpdateEwma(const aCurrent, aSample, aAlpha: Double): Double;
+begin
+  if aCurrent <= 0 then
+    Exit(aSample);
+  Result := (aCurrent * (1.0 - aAlpha)) + (aSample * aAlpha);
+end;
+
+procedure TmaxCron.SwitchAutoEffectiveEngine(const aEngine: TSchedulerEngine);
+begin
+  if aEngine = TSchedulerEngine.seAuto then
+    Exit;
+  if fAutoEffectiveEngine = aEngine then
+    Exit;
+  fAutoEffectiveEngine := aEngine;
+  Inc(fAutoSwitchCount);
+  fAutoCooldownTicks := 128;
+  if aEngine = TSchedulerEngine.seHeap then
+    TInterlocked.Exchange(fHeapDirty, 1);
+end;
+
+procedure TmaxCron.EvaluateAutoController(const aEngineUsed: TSchedulerEngine; const aEventCount: Integer;
+  const aElapsedMicroseconds: Int64);
+const
+  cAutoEwmaAlpha = 0.125;
+  cAutoEnterMinEvents = 256.0;
+  cAutoExitMaxEvents = 160.0;
+  cAutoEnterMaxDirtyRate = 0.15;
+  cAutoExitMinDirtyRate = 0.40;
+  cAutoEnterHoldTicks = 3;
+  cAutoExitHoldTicks = 3;
+  cAutoTrialTicks = 32;
+  cAutoPromoteRatio = 0.85;
+  cAutoDemoteRatio = 1.05;
+var
+  lDirtySample: Double;
+  lEnterCandidate: Boolean;
+  lExitCandidate: Boolean;
+  lMutationDelta: Int64;
+  lMutationNow: Int64;
+  lPromoteHeap: Boolean;
+begin
+  if fSchedulerEngine <> TSchedulerEngine.seAuto then
+    Exit;
+
+  fAutoLock.Acquire;
+  try
+    if aEngineUsed = TSchedulerEngine.seScan then
+    begin
+      fAutoScanTickUsEwma := UpdateEwma(fAutoScanTickUsEwma, aElapsedMicroseconds, cAutoEwmaAlpha);
+      fAutoScanBaselineUs := UpdateEwma(fAutoScanBaselineUs, aElapsedMicroseconds, cAutoEwmaAlpha);
+    end else if aEngineUsed = TSchedulerEngine.seHeap then
+      fAutoHeapTickUsEwma := UpdateEwma(fAutoHeapTickUsEwma, aElapsedMicroseconds, cAutoEwmaAlpha);
+
+    lMutationNow := TInterlocked.Read(fAutoMutationCounter);
+    lMutationDelta := lMutationNow - fAutoMutationCursor;
+    if lMutationDelta < 0 then
+      lMutationDelta := 0;
+    fAutoMutationCursor := lMutationNow;
+
+    lDirtySample := 0.0;
+    if lMutationDelta > 0 then
+      lDirtySample := 1.0;
+
+    fAutoEventCountEwma := UpdateEwma(fAutoEventCountEwma, aEventCount, cAutoEwmaAlpha);
+    fAutoDirtyRateEwma := UpdateEwma(fAutoDirtyRateEwma, lDirtySample, cAutoEwmaAlpha);
+
+    if fAutoCooldownTicks > 0 then
+      Dec(fAutoCooldownTicks);
+
+    case fAutoState of
+      TAutoSchedulerState.asScanStable:
+        begin
+          lEnterCandidate :=
+            (fAutoEventCountEwma >= cAutoEnterMinEvents) and
+            (fAutoDirtyRateEwma <= cAutoEnterMaxDirtyRate) and
+            (fAutoCooldownTicks = 0);
+
+          if lEnterCandidate then
+            Inc(fAutoEnterHold)
+          else
+            fAutoEnterHold := 0;
+
+          if fAutoEnterHold >= cAutoEnterHoldTicks then
+          begin
+            fAutoEnterHold := 0;
+            fAutoExitHold := 0;
+            fAutoTrialTicksRemaining := cAutoTrialTicks;
+            fAutoHeapTickUsEwma := 0;
+            fAutoState := TAutoSchedulerState.asHeapTrial;
+            SwitchAutoEffectiveEngine(TSchedulerEngine.seHeap);
+          end;
+        end;
+
+      TAutoSchedulerState.asHeapTrial:
+        begin
+          lExitCandidate :=
+            (fAutoEventCountEwma <= cAutoExitMaxEvents) or
+            (fAutoDirtyRateEwma >= cAutoExitMinDirtyRate);
+
+          if lExitCandidate then
+          begin
+            fAutoEnterHold := 0;
+            fAutoExitHold := 0;
+            fAutoTrialTicksRemaining := 0;
+            fAutoState := TAutoSchedulerState.asScanStable;
+            SwitchAutoEffectiveEngine(TSchedulerEngine.seScan);
+            Exit;
+          end;
+
+          if fAutoTrialTicksRemaining > 0 then
+            Dec(fAutoTrialTicksRemaining);
+
+          if fAutoTrialTicksRemaining = 0 then
+          begin
+            lPromoteHeap :=
+              (fAutoScanBaselineUs > 0) and
+              (fAutoHeapTickUsEwma > 0) and
+              (fAutoHeapTickUsEwma <= (fAutoScanBaselineUs * cAutoPromoteRatio));
+
+            if lPromoteHeap then
+            begin
+              fAutoState := TAutoSchedulerState.asHeapStable;
+              fAutoExitHold := 0;
+            end else begin
+              fAutoState := TAutoSchedulerState.asScanStable;
+              SwitchAutoEffectiveEngine(TSchedulerEngine.seScan);
+            end;
+          end;
+        end;
+
+      TAutoSchedulerState.asHeapStable:
+        begin
+          lExitCandidate :=
+            (fAutoEventCountEwma <= cAutoExitMaxEvents) or
+            (fAutoDirtyRateEwma >= cAutoExitMinDirtyRate) or
+            ((fAutoScanBaselineUs > 0) and (fAutoHeapTickUsEwma > (fAutoScanBaselineUs * cAutoDemoteRatio)));
+
+          if lExitCandidate then
+            Inc(fAutoExitHold)
+          else
+            fAutoExitHold := 0;
+
+          if fAutoExitHold >= cAutoExitHoldTicks then
+          begin
+            fAutoExitHold := 0;
+            fAutoState := TAutoSchedulerState.asScanStable;
+            SwitchAutoEffectiveEngine(TSchedulerEngine.seScan);
+          end;
+        end;
+    else
+      fAutoState := TAutoSchedulerState.asScanStable;
+    end;
+
+    if (aEngineUsed = TSchedulerEngine.seScan) and (fAutoEffectiveEngine = TSchedulerEngine.seHeap) then
+      TInterlocked.Exchange(fHeapDirty, 1);
+  finally
+    fAutoLock.Release;
+  end;
 end;
 
 procedure TmaxCron.SetDefaultInvokeMode(const aValue: TmaxCronInvokeMode);
@@ -3626,6 +3878,8 @@ begin
   if fSchedulerEngine = TSchedulerEngine.seScan then
     Exit;
   TInterlocked.Exchange(fHeapDirty, 1);
+  if fSchedulerEngine = TSchedulerEngine.seAuto then
+    TInterlocked.Increment(fAutoMutationCounter);
 end;
 
 function TmaxCron.HeapEntryLessThan(const aLeft, aRight: TCronHeapEntry): Boolean;
@@ -3728,10 +3982,10 @@ end;
 
 procedure TmaxCron.RebuildHeapLocked;
 var
+  lCount: Integer;
+  lEntry: TCronHeapEntry;
   lIndex: Integer;
   lEvent: TmaxCronEvent;
-  lId: Int64;
-  lDueAt: TDateTime;
 begin
   fHeapItems.Clear;
   Inc(fHeapRebuildCount);
@@ -3741,8 +3995,17 @@ begin
   begin
     if not TryGetCronEvent(fItems[lIndex], lEvent) then
       Continue;
-    if lEvent.TryGetHeapScheduleSnapshot(lId, lDueAt) then
-      HeapPushLocked(lDueAt, lId);
+    if lEvent.TryGetHeapScheduleSnapshot(lEntry.EventId, lEntry.DueAt) then
+      fHeapItems.Add(lEntry);
+  end;
+
+  lCount := fHeapItems.Count;
+  if lCount <= 1 then
+    Exit;
+
+  for lIndex := (lCount shr 1) - 1 downto 0 do
+  begin
+    HeapSiftDownLocked(lIndex);
   end;
 end;
 
@@ -4095,6 +4358,7 @@ begin
   fItemsById.Free;
   fItemsByName.Free;
   fHeapItems.Free;
+  fAutoLock.Free;
   fPendingFree.Free;
   fItemsLock.Free;
   fAsyncKeepAlive.Free;
@@ -4125,7 +4389,49 @@ begin
 end;
 
 procedure TmaxCron.DoTickAt(const aNow: TDateTime);
+var
+  lElapsedMicroseconds: Int64;
+  lElapsedTicks: Int64;
+  lEngineUsed: TSchedulerEngine;
+  lEventCount: Integer;
+  lStartTicks: Int64;
 begin
+  if fSchedulerEngine = TSchedulerEngine.seAuto then
+  begin
+    fAutoLock.Acquire;
+    try
+      lEngineUsed := fAutoEffectiveEngine;
+    finally
+      fAutoLock.Release;
+    end;
+
+    fItemsLock.Acquire;
+    try
+      lEventCount := fItems.Count;
+    finally
+      fItemsLock.Release;
+    end;
+
+    lStartTicks := TStopwatch.GetTimeStamp;
+    case lEngineUsed of
+      TSchedulerEngine.seHeap:
+        DoTickAtHeap(aNow);
+    else
+      DoTickAtScan(aNow);
+    end;
+
+    lElapsedTicks := TStopwatch.GetTimeStamp - lStartTicks;
+    if lElapsedTicks < 0 then
+      lElapsedTicks := 0;
+    if TStopwatch.Frequency > 0 then
+      lElapsedMicroseconds := (lElapsedTicks * 1000000) div TStopwatch.Frequency
+    else
+      lElapsedMicroseconds := 0;
+
+    EvaluateAutoController(lEngineUsed, lEventCount, lElapsedMicroseconds);
+    Exit;
+  end;
+
   case fSchedulerEngine of
     TSchedulerEngine.seHeap:
       DoTickAtHeap(aNow);
@@ -4134,6 +4440,8 @@ begin
         ValidateShadowParity(aNow);
         DoTickAtHeap(aNow);
       end;
+    TSchedulerEngine.seAuto:
+      DoTickAtScan(aNow);
   else
     DoTickAtScan(aNow);
   end;
@@ -4267,6 +4575,33 @@ procedure TmaxCron.GetTickMetricsForTests(out aEventsVisited: UInt64; out aHeapR
 begin
   aEventsVisited := fTickEventsVisited;
   aHeapRebuilds := fHeapRebuildCount;
+end;
+
+procedure TmaxCron.GetEngineStateForTests(out aConfiguredEngine: string; out aEffectiveEngine: string;
+  out aAutoState: string; out aSwitchCount: UInt64);
+var
+  lEffectiveEngine: TSchedulerEngine;
+  lAutoState: TAutoSchedulerState;
+begin
+  aConfiguredEngine := SchedulerEngineToText(fSchedulerEngine);
+  lEffectiveEngine := fSchedulerEngine;
+  lAutoState := TAutoSchedulerState.asDisabled;
+  aSwitchCount := 0;
+
+  fAutoLock.Acquire;
+  try
+    if fSchedulerEngine = TSchedulerEngine.seAuto then
+    begin
+      lEffectiveEngine := fAutoEffectiveEngine;
+      lAutoState := fAutoState;
+      aSwitchCount := fAutoSwitchCount;
+    end;
+  finally
+    fAutoLock.Release;
+  end;
+
+  aEffectiveEngine := SchedulerEngineToText(lEffectiveEngine);
+  aAutoState := AutoStateToText(lAutoState);
 end;
 {$ENDIF}
 

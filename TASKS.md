@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-060
+Next task ID: T-061
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 60
+Done tasks: 61
 
 ## In Progress
 
@@ -19,6 +19,12 @@ Done tasks: 60
 
 
 ## Done
+
+### T-060 [PERF] Add adaptive auto scheduler mode with hysteresis
+Outcome: Added adaptive scheduler engine mode (`MAXCRON_ENGINE=auto`) with scan/heap hysteresis, cooldown, and trial promotion/fallback logic, including race-safe effective-engine switching under concurrent ticks and linear-time heap rebuild during reindex.
+Proof: `MAXCRON_ENGINE=auto ./build-and-run-tests.sh -cm:Quiet` passes (Stress 4/4, Core 125/125, VCL 3/3); `MAXCRON_ENGINE=auto ./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 4/4, Core 125/125, VCL 3/3); targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_HysteresisAndOverrideBehavior"` passes (1/1).
+Touches: `maxCron.pas`, `tests/unit/TestHeavyStressMixed.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-057, T-058, T-059
 
 ### T-059 [PERF] Add high-N benchmark harness and threshold guidance for engine selection
 Outcome: Added high-cardinality benchmark coverage plus scheduler-engine selection guidance in README, including measurable scan-vs-heap tick-work differences for sparse due workloads.

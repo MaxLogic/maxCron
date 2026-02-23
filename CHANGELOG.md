@@ -5,6 +5,7 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Added adaptive scheduler mode (`MAXCRON_ENGINE=auto`) with hysteresis/cooldown switching between scan and heap under mixed workloads. (T-060)
 - Added an opt-in heap scheduler engine (`MAXCRON_ENGINE=heap`) plus a shadow parity engine (`MAXCRON_ENGINE=shadow`) while preserving scan as the default mode. (T-057, T-058)
 - Added immutable per-event `Id` plus `TmaxCron.Snapshot` for stable event-list inspection without index-based access. (T-050)
 - Added demo event-log actions that showcase `Snapshot` listing and delete-by-name/delete-by-id flows. (T-053)
@@ -26,6 +27,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added stress/robust tests for heap-mode execution, shadow parity churn coverage, and high-N scan-vs-heap benchmark assertions. (T-058, T-059)
 
 ### Changed
+- Updated scheduler engine docs to cover `auto` mode behavior and explicit-mode override semantics. (T-060)
 - Added README guidance for scheduler-engine selection (`scan`/`heap`/`shadow`) with high-N benchmark expectations for selecting heap mode under sparse-due workloads. (T-059)
 - Changed scheduler ownership APIs to Id/snapshot model: removed public `Count`, `Events[]`, `Delete(Index)`, and `IndexOf`; added `Delete(Id)` for direct deletion by immutable event identity. (T-050)
 - Added a README migration section mapping old index-based API calls to Id/snapshot equivalents. (T-053)
@@ -44,6 +46,7 @@ All notable user-visible changes to this project will be documented in this file
 - Clarified documentation that `imMainThread` dispatch requires an active main-thread message pump (non-UI/service hosts should use async/thread invoke modes).
 
 ### Fixed
+- Fixed heap rebuild complexity by switching to linear-time heapify during rebuild (`O(n)` instead of repeated `O(log n)` inserts). (T-060)
 - Fixed unnamed-event deletion ergonomics by allowing `Delete(Event)` and `Delete(Id)` without index-based APIs. (T-050)
 - Fixed CLI demo build path resolution by adding `..\lib\maxlogicfoundation` to demo unit search path. (T-053)
 - Added `Delete(const aName: string)` with case-insensitive named-event lookup; unnamed events are rejected by `Delete(Name)`. (T-049)
