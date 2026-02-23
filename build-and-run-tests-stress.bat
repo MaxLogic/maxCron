@@ -6,7 +6,8 @@ pushd "%~dp0"
 
 set "MAXCRON_STRESS=1"
 
-call build-delphi.bat tests\maxCronStressTests.dproj -config release ^
+call build-delphi.bat demo\CronDemo.dproj -config release ^
+  && call build-delphi.bat tests\maxCronStressTests.dproj -config release ^
   && call build-delphi.bat tests\maxCronTests.dproj -config release ^
   && call build-delphi.bat tests\maxCronVclTests.dproj -config release ^
   && call tests\maxCronStressTests.exe %* ^

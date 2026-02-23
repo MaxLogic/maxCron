@@ -5,7 +5,8 @@ chcp 65001 >nul
 
 pushd "%~dp0"
 
-call build-delphi.bat tests\maxCronStressTests.dproj -config release ^
+call build-delphi.bat demo\CronDemo.dproj -config release ^
+  && call build-delphi.bat tests\maxCronStressTests.dproj -config release ^
   && call build-delphi.bat tests\maxCronTests.dproj -config release ^
   && call build-delphi.bat tests\maxCronVclTests.dproj -config release ^
   && call tests\maxCronStressTests.exe %* ^

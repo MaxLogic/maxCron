@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-054
+Next task ID: T-055
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 54
+Done tasks: 55
 
 ## In Progress
 
@@ -19,6 +19,11 @@ Done tasks: 54
 
 
 ## Done
+
+### T-054 [CI] Build demo project in canonical test scripts
+Outcome: `build-and-run-tests.bat` and `build-and-run-tests-stress.bat` now compile `demo/CronDemo.dproj` before test projects, so CI runs using canonical scripts always validate demo compileability too.
+Proof: `./build-and-run-tests.sh -cm:Quiet` passes (includes `BUILD : demo\\CronDemo.dproj`, then Stress 2/2, Core 122/122, VCL 3/3); `./build-and-run-tests-stress.sh -cm:Quiet` passes with the same demo-build precheck and test pass counts.
+Touches: `build-and-run-tests.bat`, `build-and-run-tests-stress.bat`, `TASKS.md`
 
 ### T-053 [DEMO] Update demo/sample guidance for Id + Snapshot APIs
 Outcome: Demo now includes explicit logged actions for `Snapshot` listing and delete-by-name/delete-by-id usage; README gained a migration section for replacing index-based calls; demo project search path was updated so CLI builds resolve `MaxLogic.PortableTimer`.
