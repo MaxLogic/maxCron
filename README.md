@@ -110,6 +110,7 @@ Engine guidance:
 - Fall back to scan when due density rises, churn rises, event count drops, or heap stops showing benefit.
 - Apply hold counters and cooldown to avoid scan/heap thrashing.
 - Apply trial-failure re-entry backoff so repeated failed heap trials cannot immediately retrigger.
+- Apply rolling switch-budget caps to hard-bound switch rate under adversarial oscillation patterns.
 - Require minimum scan/heap performance samples before ratio-based promote/demote checks.
 - Increase cooldown adaptively when rapid consecutive switches are detected.
 - If explicit `scan`, `heap`, or `shadow` is selected, auto-controller logic is bypassed.
@@ -131,6 +132,9 @@ Engine guidance:
 | `MAXCRON_AUTO_TRIAL_TICKS` | `32` | Heap trial length before promote/fallback decision | clamped to `[1..4096]` |
 | `MAXCRON_AUTO_COOLDOWN` | `128` | Cooldown ticks after each engine switch | clamped to `[0..8192]` |
 | `MAXCRON_AUTO_TRIAL_FAIL_COOLDOWN` | `16` | Base re-entry backoff ticks after failed heap trials (applies exponentially for consecutive failures; `0` disables) | clamped to `[0..8192]` |
+| `MAXCRON_AUTO_SWITCH_BUDGET_WINDOW` | `256` | Rolling window size (ticks) used for switch-rate budgeting (`0` disables) | clamped to `[0..65536]` |
+| `MAXCRON_AUTO_SWITCH_BUDGET_MAX` | `12` | Maximum switches allowed inside the budget window (`0` disables) | clamped to `[0..1024]`, normalized to `<= WINDOW` |
+| `MAXCRON_AUTO_SWITCH_BUDGET_COOLDOWN` | `64` | Cooldown ticks applied when switch budget is exceeded (`0` disables) | clamped to `[0..8192]` |
 | `MAXCRON_AUTO_PROMOTE_RATIO` | `0.85` | Heap promotion threshold (`heap_us <= scan_us * ratio`) | clamped to `[0.25..4.0]` |
 | `MAXCRON_AUTO_DEMOTE_RATIO` | `1.05` | Heap demotion threshold (`heap_us > scan_us * ratio`) | clamped to `[0.25..4.0]`, then normalized to `> PROMOTE_RATIO` |
 | `MAXCRON_AUTO_DIAG_LOG_INTERVAL` | `0` | Emit periodic auto diagnostics logs every N auto ticks (`0` = disabled) | clamped to `[0..1000000]` |
@@ -148,6 +152,7 @@ Parsing rules:
 - Mixed workload with periodic bursts: keep defaults first, then tune `ENTER_HOLD`/`EXIT_HOLD` upward (`3-6`) if switches are too frequent.
 - Dense-due bursts (many events due each tick): lower `EXIT_DUE_DENSITY` so auto mode leaves heap sooner during burst windows.
 - Churn-heavy (frequent stop/run or plan edits): raise `ENTER_EVENTS`, raise `ENTER_HOLD`, and tune `TRIAL_FAIL_COOLDOWN` upward if failed heap trials retry too aggressively.
+- Adversarial oscillation patterns: tighten `SWITCH_BUDGET_MAX`, shorten `SWITCH_BUDGET_WINDOW`, and raise `SWITCH_BUDGET_COOLDOWN` to enforce a hard switch-rate ceiling.
 
 ### Oscillation troubleshooting
 
@@ -157,6 +162,7 @@ If we observe scan/heap oscillation in logs or profiling:
 - Increase hold counters (`ENTER_HOLD`, `EXIT_HOLD`) so one short burst does not trigger flips.
 - Increase `COOLDOWN` so post-switch settling time is longer.
 - Increase `TRIAL_FAIL_COOLDOWN` so repeated failed heap trials re-enter less frequently.
+- Lower `SWITCH_BUDGET_MAX` and/or raise `SWITCH_BUDGET_COOLDOWN` to clamp maximum switch frequency.
 - If churn remains continuously high, pin to `scan` explicitly (`MAXCRON_ENGINE=scan`) for that deployment.
 
 ### Auto rollout checklist
@@ -182,7 +188,7 @@ end;
 ```
 
 `TryGetAutoDiagnostics` returns `True` only when `MAXCRON_ENGINE=auto`; otherwise it returns `False`.
-The snapshot includes EWMAs, sample counters, cooldown/backoff state, and last switch reason for tuning/operations visibility.
+The snapshot includes EWMAs, sample counters, cooldown/backoff state (including trial-failure and switch-budget counters), and last switch reason for tuning/operations visibility.
 
 ### Auto diagnostics periodic logging (opt-in)
 

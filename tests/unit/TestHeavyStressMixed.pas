@@ -43,6 +43,9 @@ type
     procedure EngineAutoMode_OscillationBackoff_BoundsSwitchRate;
 
     [Test]
+    procedure EngineAutoMode_SwitchBudgetLimiter_BoundsAdversarialChurn;
+
+    [Test]
     procedure EngineAutoMode_TrialFailureBackoff_BoundsRapidRetrials;
 
     [Test]
@@ -687,6 +690,9 @@ begin
       Assert.IsTrue(lDiagBefore.CooldownTicks >= 0);
       Assert.IsTrue(lDiagBefore.TrialFailLevel >= 0);
       Assert.IsTrue(lDiagBefore.TrialFailCooldownTicks >= 0);
+      Assert.IsTrue(lDiagBefore.SwitchBudgetHits >= 0);
+      Assert.IsTrue(lDiagBefore.SwitchBudgetCooldownTicks >= 0);
+      Assert.IsTrue(lDiagBefore.SwitchBudgetRecentSwitches >= 0);
       Assert.IsTrue(lDiagBefore.SwitchBurstLevel >= 0);
       Assert.IsTrue(lDiagBefore.TicksSinceSwitch >= 0);
       Assert.IsTrue(lDiagBefore.LastSwitchReason <> '');
@@ -708,6 +714,9 @@ begin
       Assert.IsTrue(lDiagAfter.CooldownTicks >= 0);
       Assert.IsTrue(lDiagAfter.TrialFailLevel >= 0);
       Assert.IsTrue(lDiagAfter.TrialFailCooldownTicks >= 0);
+      Assert.IsTrue(lDiagAfter.SwitchBudgetHits >= 0);
+      Assert.IsTrue(lDiagAfter.SwitchBudgetCooldownTicks >= 0);
+      Assert.IsTrue(lDiagAfter.SwitchBudgetRecentSwitches >= 0);
       Assert.IsTrue(lDiagAfter.SwitchBurstLevel >= 0);
       Assert.IsTrue(lDiagAfter.LastSwitchReason <> '');
       Assert.IsTrue(
@@ -830,6 +839,119 @@ begin
     RestoreEnvVar('MAXCRON_AUTO_TRIAL_TICKS', lPreviousTrialTicksValue, lHadTrialTicksValue);
     RestoreEnvVar('MAXCRON_AUTO_EXIT_HOLD', lPreviousExitHoldValue, lHadExitHoldValue);
     RestoreEnvVar('MAXCRON_AUTO_ENTER_HOLD', lPreviousEnterHoldValue, lHadEnterHoldValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_DIRTY', lPreviousExitDirtyValue, lHadExitDirtyValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_DIRTY', lPreviousEnterDirtyValue, lHadEnterDirtyValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_EVENTS', lPreviousExitEventsValue, lHadExitEventsValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_EVENTS', lPreviousEnterEventsValue, lHadEnterEventsValue);
+    RestoreEnvVar('MAXCRON_ENGINE', lPreviousEngineValue, lHadEngineValue);
+  end;
+end;
+
+procedure TTestHeavyStressMixed.EngineAutoMode_SwitchBudgetLimiter_BoundsAdversarialChurn;
+const
+  cEventCount = 360;
+  cTickCount = 160;
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lDiag: TMaxCronAutoDiagnostics;
+  lIndex: Integer;
+  lTickAt: TDateTime;
+  lPreviousEngineValue: string;
+  lPreviousEnterEventsValue: string;
+  lPreviousExitEventsValue: string;
+  lPreviousEnterDueDensityValue: string;
+  lPreviousExitDueDensityValue: string;
+  lPreviousEnterDirtyValue: string;
+  lPreviousExitDirtyValue: string;
+  lPreviousEnterHoldValue: string;
+  lPreviousExitHoldValue: string;
+  lPreviousTrialTicksValue: string;
+  lPreviousCooldownValue: string;
+  lPreviousTrialFailCooldownValue: string;
+  lPreviousPromoteRatioValue: string;
+  lPreviousDemoteRatioValue: string;
+  lPreviousSwitchBudgetWindowValue: string;
+  lPreviousSwitchBudgetMaxValue: string;
+  lPreviousSwitchBudgetCooldownValue: string;
+  lHadEngineValue: Boolean;
+  lHadEnterEventsValue: Boolean;
+  lHadExitEventsValue: Boolean;
+  lHadEnterDueDensityValue: Boolean;
+  lHadExitDueDensityValue: Boolean;
+  lHadEnterDirtyValue: Boolean;
+  lHadExitDirtyValue: Boolean;
+  lHadEnterHoldValue: Boolean;
+  lHadExitHoldValue: Boolean;
+  lHadTrialTicksValue: Boolean;
+  lHadCooldownValue: Boolean;
+  lHadTrialFailCooldownValue: Boolean;
+  lHadPromoteRatioValue: Boolean;
+  lHadDemoteRatioValue: Boolean;
+  lHadSwitchBudgetWindowValue: Boolean;
+  lHadSwitchBudgetMaxValue: Boolean;
+  lHadSwitchBudgetCooldownValue: Boolean;
+begin
+  SetEnvVar('MAXCRON_ENGINE', 'auto', lPreviousEngineValue, lHadEngineValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_EVENTS', '128', lPreviousEnterEventsValue, lHadEnterEventsValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_EVENTS', '96', lPreviousExitEventsValue, lHadExitEventsValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_DUE_DENSITY', '1.00', lPreviousEnterDueDensityValue, lHadEnterDueDensityValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_DUE_DENSITY', '1.00', lPreviousExitDueDensityValue, lHadExitDueDensityValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_DIRTY', '1.00', lPreviousEnterDirtyValue, lHadEnterDirtyValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_DIRTY', '1.00', lPreviousExitDirtyValue, lHadExitDirtyValue);
+  SetEnvVar('MAXCRON_AUTO_ENTER_HOLD', '1', lPreviousEnterHoldValue, lHadEnterHoldValue);
+  SetEnvVar('MAXCRON_AUTO_EXIT_HOLD', '1', lPreviousExitHoldValue, lHadExitHoldValue);
+  SetEnvVar('MAXCRON_AUTO_TRIAL_TICKS', '2', lPreviousTrialTicksValue, lHadTrialTicksValue);
+  SetEnvVar('MAXCRON_AUTO_COOLDOWN', '0', lPreviousCooldownValue, lHadCooldownValue);
+  SetEnvVar('MAXCRON_AUTO_TRIAL_FAIL_COOLDOWN', '0', lPreviousTrialFailCooldownValue, lHadTrialFailCooldownValue);
+  SetEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', '0.25', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
+  SetEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', '0.50', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
+  SetEnvVar('MAXCRON_AUTO_SWITCH_BUDGET_WINDOW', '48',
+    lPreviousSwitchBudgetWindowValue, lHadSwitchBudgetWindowValue);
+  SetEnvVar('MAXCRON_AUTO_SWITCH_BUDGET_MAX', '2',
+    lPreviousSwitchBudgetMaxValue, lHadSwitchBudgetMaxValue);
+  SetEnvVar('MAXCRON_AUTO_SWITCH_BUDGET_COOLDOWN', '20',
+    lPreviousSwitchBudgetCooldownValue, lHadSwitchBudgetCooldownValue);
+  try
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      lTickAt := Now;
+      for lIndex := 0 to cEventCount - 1 do
+      begin
+        lEvent := lCron.Add('AutoBudget_' + IntToStr(lIndex));
+        lEvent.EventPlan := '* * * * * * * 0';
+        lEvent.Run;
+      end;
+
+      for lIndex := 0 to cTickCount - 1 do
+        lCron.TickAt(IncSecond(lTickAt, lIndex));
+
+      Assert.IsTrue(lCron.TryGetAutoDiagnostics(lDiag), 'Diagnostics should be available in auto mode');
+      Assert.AreEqual('auto', lDiag.ConfiguredEngine);
+      Assert.IsTrue(lDiag.SwitchCount > 0, 'Switch budget scenario should still produce switches');
+      Assert.IsTrue(lDiag.SwitchBudgetHits > 0, 'Switch budget should engage under adversarial churn');
+      Assert.IsTrue(lDiag.SwitchBudgetCooldownTicks >= 0, 'Switch budget cooldown should stay non-negative');
+      Assert.IsTrue(lDiag.SwitchBudgetRecentSwitches >= 0, 'Switch budget recent-switch count should stay non-negative');
+      Assert.IsTrue(lDiag.SwitchCount <= 16,
+        Format('Switch budget should hard-cap oscillation rate (observed switches=%d)', [Int64(lDiag.SwitchCount)]));
+    finally
+      lCron.Free;
+    end;
+  finally
+    RestoreEnvVar('MAXCRON_AUTO_SWITCH_BUDGET_COOLDOWN',
+      lPreviousSwitchBudgetCooldownValue, lHadSwitchBudgetCooldownValue);
+    RestoreEnvVar('MAXCRON_AUTO_SWITCH_BUDGET_MAX', lPreviousSwitchBudgetMaxValue, lHadSwitchBudgetMaxValue);
+    RestoreEnvVar('MAXCRON_AUTO_SWITCH_BUDGET_WINDOW',
+      lPreviousSwitchBudgetWindowValue, lHadSwitchBudgetWindowValue);
+    RestoreEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
+    RestoreEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
+    RestoreEnvVar('MAXCRON_AUTO_TRIAL_FAIL_COOLDOWN', lPreviousTrialFailCooldownValue, lHadTrialFailCooldownValue);
+    RestoreEnvVar('MAXCRON_AUTO_COOLDOWN', lPreviousCooldownValue, lHadCooldownValue);
+    RestoreEnvVar('MAXCRON_AUTO_TRIAL_TICKS', lPreviousTrialTicksValue, lHadTrialTicksValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_HOLD', lPreviousExitHoldValue, lHadExitHoldValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_HOLD', lPreviousEnterHoldValue, lHadEnterHoldValue);
+    RestoreEnvVar('MAXCRON_AUTO_EXIT_DUE_DENSITY', lPreviousExitDueDensityValue, lHadExitDueDensityValue);
+    RestoreEnvVar('MAXCRON_AUTO_ENTER_DUE_DENSITY', lPreviousEnterDueDensityValue, lHadEnterDueDensityValue);
     RestoreEnvVar('MAXCRON_AUTO_EXIT_DIRTY', lPreviousExitDirtyValue, lHadExitDirtyValue);
     RestoreEnvVar('MAXCRON_AUTO_ENTER_DIRTY', lPreviousEnterDirtyValue, lHadEnterDirtyValue);
     RestoreEnvVar('MAXCRON_AUTO_EXIT_EVENTS', lPreviousExitEventsValue, lHadExitEventsValue);

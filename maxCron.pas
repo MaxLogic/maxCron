@@ -188,6 +188,9 @@ Type
     CooldownTicks: Integer;
     TrialFailLevel: Integer;
     TrialFailCooldownTicks: Integer;
+    SwitchBudgetHits: Integer;
+    SwitchBudgetCooldownTicks: Integer;
+    SwitchBudgetRecentSwitches: Integer;
     SwitchBurstLevel: Integer;
     ScanSampleTicks: Integer;
     HeapSampleTicks: Integer;
@@ -214,6 +217,9 @@ Type
         TrialTicks: Integer;
         CooldownTicks: Integer;
         TrialFailCooldownBaseTicks: Integer;
+        SwitchBudgetWindowTicks: Integer;
+        SwitchBudgetMaxSwitches: Integer;
+        SwitchBudgetCooldownTicks: Integer;
         PromoteRatio: Double;
         DemoteRatio: Double;
         DiagLogIntervalTicks: Integer;
@@ -249,6 +255,10 @@ Type
     fAutoCooldownTicks: Integer;
     fAutoTrialFailLevel: Integer;
     fAutoTrialFailCooldownTicks: Integer;
+    fAutoSwitchBudgetHits: Integer;
+    fAutoControllerTick: UInt64;
+    fAutoSwitchBudgetUntilTick: UInt64;
+    fAutoSwitchHistory: TQueue<UInt64>;
     fAutoSwitchCount: UInt64;
     fAutoEventCountEwma: Double;
     fAutoDueDensityEwma: Double;
@@ -291,6 +301,10 @@ Type
     function SchedulerEngineToText(const aEngine: TSchedulerEngine): string;
     function AutoStateToText(const aState: TAutoSchedulerState): string;
     function UpdateEwma(const aCurrent, aSample, aAlpha: Double): Double;
+    procedure PruneAutoSwitchHistoryLocked(const aCurrentTick: UInt64; const aWindowTicks: Integer);
+    function IsAutoSwitchBudgetExceededLocked(const aCurrentTick: UInt64; const aWindowTicks,
+      aMaxSwitches: Integer): Boolean;
+    function GetAutoSwitchBudgetCooldownTicksLocked(const aCurrentTick: UInt64): Integer;
     procedure ApplyAutoTrialFailureBackoff(const aBaseCooldownTicks: Integer);
     procedure SwitchAutoEffectiveEngine(const aEngine: TSchedulerEngine; const aReason: string);
     procedure EvaluateAutoController(const aEngineUsed: TSchedulerEngine; const aEventCount, aDueCount: Integer;
@@ -3514,6 +3528,7 @@ begin
   fItemsById := TDictionary<Int64, Integer>.Create;
   fItemsByName := TDictionary<string, Integer>.Create;
   fHeapItems := TList<TCronHeapEntry>.Create;
+  fAutoSwitchHistory := TQueue<UInt64>.Create;
   fAutoLock := TCriticalSection.Create;
   fItemsLock := TCriticalSection.Create;
   fPendingFree := TList<IMaxCronEvent>.Create;
@@ -3538,6 +3553,9 @@ begin
   fAutoCooldownTicks := 0;
   fAutoTrialFailLevel := 0;
   fAutoTrialFailCooldownTicks := 0;
+  fAutoSwitchBudgetHits := 0;
+  fAutoControllerTick := 0;
+  fAutoSwitchBudgetUntilTick := 0;
   fAutoSwitchCount := 0;
   fAutoEventCountEwma := 0;
   fAutoDueDensityEwma := 0;
@@ -3630,6 +3648,9 @@ const
   cDefaultTrialTicks = 32;
   cDefaultCooldownTicks = 128;
   cDefaultTrialFailCooldownBaseTicks = 16;
+  cDefaultSwitchBudgetWindowTicks = 256;
+  cDefaultSwitchBudgetMaxSwitches = 12;
+  cDefaultSwitchBudgetCooldownTicks = 64;
   cDefaultPromoteRatio = 0.85;
   cDefaultDemoteRatio = 1.05;
   cDefaultDiagLogIntervalTicks = 0;
@@ -3650,6 +3671,12 @@ const
   cMaxCooldownTicks = 8192;
   cMinTrialFailCooldownBaseTicks = 0;
   cMaxTrialFailCooldownBaseTicks = 8192;
+  cMinSwitchBudgetWindowTicks = 0;
+  cMaxSwitchBudgetWindowTicks = 65536;
+  cMinSwitchBudgetMaxSwitches = 0;
+  cMaxSwitchBudgetMaxSwitches = 1024;
+  cMinSwitchBudgetCooldownTicks = 0;
+  cMaxSwitchBudgetCooldownTicks = 8192;
   cMinRatio = 0.25;
   cMaxRatio = 4.0;
   cMinRatioGap = 0.01;
@@ -3671,6 +3698,9 @@ begin
   fAutoConfig.TrialTicks := cDefaultTrialTicks;
   fAutoConfig.CooldownTicks := cDefaultCooldownTicks;
   fAutoConfig.TrialFailCooldownBaseTicks := cDefaultTrialFailCooldownBaseTicks;
+  fAutoConfig.SwitchBudgetWindowTicks := cDefaultSwitchBudgetWindowTicks;
+  fAutoConfig.SwitchBudgetMaxSwitches := cDefaultSwitchBudgetMaxSwitches;
+  fAutoConfig.SwitchBudgetCooldownTicks := cDefaultSwitchBudgetCooldownTicks;
   fAutoConfig.PromoteRatio := cDefaultPromoteRatio;
   fAutoConfig.DemoteRatio := cDefaultDemoteRatio;
   fAutoConfig.DiagLogIntervalTicks := cDefaultDiagLogIntervalTicks;
@@ -3698,6 +3728,15 @@ begin
   if TryReadAutoIntEnv('MAXCRON_AUTO_TRIAL_FAIL_COOLDOWN', lIntValue) then
     fAutoConfig.TrialFailCooldownBaseTicks :=
       ClampAutoInt(lIntValue, cMinTrialFailCooldownBaseTicks, cMaxTrialFailCooldownBaseTicks);
+  if TryReadAutoIntEnv('MAXCRON_AUTO_SWITCH_BUDGET_WINDOW', lIntValue) then
+    fAutoConfig.SwitchBudgetWindowTicks :=
+      ClampAutoInt(lIntValue, cMinSwitchBudgetWindowTicks, cMaxSwitchBudgetWindowTicks);
+  if TryReadAutoIntEnv('MAXCRON_AUTO_SWITCH_BUDGET_MAX', lIntValue) then
+    fAutoConfig.SwitchBudgetMaxSwitches :=
+      ClampAutoInt(lIntValue, cMinSwitchBudgetMaxSwitches, cMaxSwitchBudgetMaxSwitches);
+  if TryReadAutoIntEnv('MAXCRON_AUTO_SWITCH_BUDGET_COOLDOWN', lIntValue) then
+    fAutoConfig.SwitchBudgetCooldownTicks :=
+      ClampAutoInt(lIntValue, cMinSwitchBudgetCooldownTicks, cMaxSwitchBudgetCooldownTicks);
   if TryReadAutoFloatEnv('MAXCRON_AUTO_PROMOTE_RATIO', lDoubleValue) then
     fAutoConfig.PromoteRatio := ClampAutoFloat(lDoubleValue, cMinRatio, cMaxRatio);
   if TryReadAutoFloatEnv('MAXCRON_AUTO_DEMOTE_RATIO', lDoubleValue) then
@@ -3713,6 +3752,9 @@ begin
     fAutoConfig.ExitMinDirtyRate := fAutoConfig.EnterMaxDirtyRate;
   if fAutoConfig.DemoteRatio <= fAutoConfig.PromoteRatio then
     fAutoConfig.DemoteRatio := ClampAutoFloat(fAutoConfig.PromoteRatio + cMinRatioGap, cMinRatio, cMaxRatio);
+  if (fAutoConfig.SwitchBudgetWindowTicks > 0) and (fAutoConfig.SwitchBudgetMaxSwitches > 0) and
+    (fAutoConfig.SwitchBudgetMaxSwitches > fAutoConfig.SwitchBudgetWindowTicks) then
+    fAutoConfig.SwitchBudgetMaxSwitches := fAutoConfig.SwitchBudgetWindowTicks;
 end;
 
 procedure TmaxCron.ConfigureSchedulerEngine;
@@ -3743,6 +3785,10 @@ begin
     fAutoCooldownTicks := 0;
     fAutoTrialFailLevel := 0;
     fAutoTrialFailCooldownTicks := 0;
+    fAutoSwitchBudgetHits := 0;
+    fAutoControllerTick := 0;
+    fAutoSwitchBudgetUntilTick := 0;
+    fAutoSwitchHistory.Clear;
     fAutoSwitchCount := 0;
     fAutoEventCountEwma := 0;
     fAutoDueDensityEwma := 0;
@@ -3806,6 +3852,51 @@ begin
   Result := (aCurrent * (1.0 - aAlpha)) + (aSample * aAlpha);
 end;
 
+procedure TmaxCron.PruneAutoSwitchHistoryLocked(const aCurrentTick: UInt64; const aWindowTicks: Integer);
+var
+  lCutoffTick: UInt64;
+begin
+  if aWindowTicks <= 0 then
+  begin
+    fAutoSwitchHistory.Clear;
+    Exit;
+  end;
+
+  if aCurrentTick > UInt64(aWindowTicks) then
+    lCutoffTick := aCurrentTick - UInt64(aWindowTicks)
+  else
+    lCutoffTick := 0;
+
+  while fAutoSwitchHistory.Count > 0 do
+    if fAutoSwitchHistory.Peek < lCutoffTick then
+      fAutoSwitchHistory.Dequeue
+    else
+      Break;
+end;
+
+function TmaxCron.IsAutoSwitchBudgetExceededLocked(const aCurrentTick: UInt64; const aWindowTicks,
+  aMaxSwitches: Integer): Boolean;
+begin
+  if (aWindowTicks <= 0) or (aMaxSwitches <= 0) then
+    Exit(False);
+
+  PruneAutoSwitchHistoryLocked(aCurrentTick, aWindowTicks);
+  Result := (fAutoSwitchHistory.Count >= aMaxSwitches);
+end;
+
+function TmaxCron.GetAutoSwitchBudgetCooldownTicksLocked(const aCurrentTick: UInt64): Integer;
+var
+  lRemainingTicks: UInt64;
+begin
+  if fAutoSwitchBudgetUntilTick <= aCurrentTick then
+    Exit(0);
+
+  lRemainingTicks := fAutoSwitchBudgetUntilTick - aCurrentTick;
+  if lRemainingTicks > UInt64(High(Integer)) then
+    Exit(High(Integer));
+  Result := Integer(lRemainingTicks);
+end;
+
 procedure TmaxCron.ApplyAutoTrialFailureBackoff(const aBaseCooldownTicks: Integer);
 const
   cAutoMaxTrialFailureLevel = 6;
@@ -3857,6 +3948,12 @@ begin
     fAutoSwitchBurstLevel := 0;
 
   fAutoEffectiveEngine := aEngine;
+  if fAutoConfig.SwitchBudgetWindowTicks > 0 then
+  begin
+    PruneAutoSwitchHistoryLocked(fAutoControllerTick, fAutoConfig.SwitchBudgetWindowTicks);
+    fAutoSwitchHistory.Enqueue(fAutoControllerTick);
+  end else
+    fAutoSwitchHistory.Clear;
   Inc(fAutoSwitchCount);
   if aReason <> '' then
     fAutoLastSwitchReason := aReason
@@ -3879,9 +3976,11 @@ const
   cAutoMinPerfSamples = 8;
   cAutoDiagLogFormat =
     'maxCron auto diag engineUsed=%s effective=%s state=%s events=%s due=%s dueEwma=%s dirtyEwma=%s scanUs=%s ' +
-    'heapUs=%s baselineUs=%s switches=%s cooldown=%s trialFailLevel=%s trialFailCooldown=%s burst=%s reason=%s';
+    'heapUs=%s baselineUs=%s switches=%s cooldown=%s trialFailLevel=%s trialFailCooldown=%s budgetHits=%s ' +
+    'budgetCooldown=%s budgetRecent=%s burst=%s reason=%s';
 var
   lConfig: TAutoControllerConfig;
+  lBudgetUntilTick: UInt64;
   lDueDensitySample: Double;
   lDirtySample: Double;
   lEnterCandidate: Boolean;
@@ -3893,6 +3992,10 @@ var
   lMutationDelta: Int64;
   lMutationNow: Int64;
   lPromoteHeap: Boolean;
+  lSwitchBudgetBlocked: Boolean;
+  lSwitchBudgetCooldownTicks: Integer;
+  lSwitchBudgetEnabled: Boolean;
+  lSwitchBudgetExceeded: Boolean;
 begin
   if fSchedulerEngine <> TSchedulerEngine.seAuto then
     Exit;
@@ -3900,6 +4003,13 @@ begin
   fAutoLock.Acquire;
   try
     lConfig := fAutoConfig;
+    if fAutoControllerTick < High(UInt64) then
+      Inc(fAutoControllerTick);
+    PruneAutoSwitchHistoryLocked(fAutoControllerTick, lConfig.SwitchBudgetWindowTicks);
+    lSwitchBudgetEnabled :=
+      (lConfig.SwitchBudgetWindowTicks > 0) and
+      (lConfig.SwitchBudgetMaxSwitches > 0) and
+      (lConfig.SwitchBudgetCooldownTicks > 0);
     lMinPerfSamples := cAutoMinPerfSamples;
     if lConfig.TrialTicks < lMinPerfSamples then
       lMinPerfSamples := ClampAutoInt(lConfig.TrialTicks, 1, cAutoMinPerfSamples);
@@ -3940,6 +4050,8 @@ begin
       Dec(fAutoCooldownTicks);
     if fAutoTrialFailCooldownTicks > 0 then
       Dec(fAutoTrialFailCooldownTicks);
+    lSwitchBudgetCooldownTicks := GetAutoSwitchBudgetCooldownTicksLocked(fAutoControllerTick);
+    lSwitchBudgetBlocked := lSwitchBudgetEnabled and (lSwitchBudgetCooldownTicks > 0);
 
     if lConfig.DiagLogIntervalTicks > 0 then
     begin
@@ -3965,6 +4077,9 @@ begin
             IntToStr(fAutoCooldownTicks),
             IntToStr(fAutoTrialFailLevel),
             IntToStr(fAutoTrialFailCooldownTicks),
+            IntToStr(fAutoSwitchBudgetHits),
+            IntToStr(lSwitchBudgetCooldownTicks),
+            IntToStr(fAutoSwitchHistory.Count),
             IntToStr(fAutoSwitchBurstLevel),
             fAutoLastSwitchReason
           ]);
@@ -3982,6 +4097,7 @@ begin
             (fAutoDueDensityEwma <= lConfig.EnterMaxDueDensity) and
             (fAutoDirtyRateEwma <= lConfig.EnterMaxDirtyRate) and
             (fAutoCooldownTicks = 0) and
+            (not lSwitchBudgetBlocked) and
             (fAutoTrialFailCooldownTicks = 0);
 
           if lEnterCandidate then
@@ -3991,12 +4107,25 @@ begin
 
           if fAutoEnterHold >= lConfig.EnterHoldTicks then
           begin
-            fAutoEnterHold := 0;
-            fAutoExitHold := 0;
-            fAutoTrialTicksRemaining := lConfig.TrialTicks;
-            fAutoHeapTickUsEwma := 0;
-            fAutoState := TAutoSchedulerState.asHeapTrial;
-            SwitchAutoEffectiveEngine(TSchedulerEngine.seHeap, 'scan-enter-trial');
+            lSwitchBudgetExceeded := lSwitchBudgetEnabled and
+              IsAutoSwitchBudgetExceededLocked(fAutoControllerTick, lConfig.SwitchBudgetWindowTicks,
+              lConfig.SwitchBudgetMaxSwitches);
+            if lSwitchBudgetExceeded then
+            begin
+              if fAutoSwitchBudgetHits < High(Integer) then
+                Inc(fAutoSwitchBudgetHits);
+              lBudgetUntilTick := fAutoControllerTick + UInt64(lConfig.SwitchBudgetCooldownTicks);
+              if lBudgetUntilTick > fAutoSwitchBudgetUntilTick then
+                fAutoSwitchBudgetUntilTick := lBudgetUntilTick;
+              fAutoEnterHold := 0;
+            end else begin
+              fAutoEnterHold := 0;
+              fAutoExitHold := 0;
+              fAutoTrialTicksRemaining := lConfig.TrialTicks;
+              fAutoHeapTickUsEwma := 0;
+              fAutoState := TAutoSchedulerState.asHeapTrial;
+              SwitchAutoEffectiveEngine(TSchedulerEngine.seHeap, 'scan-enter-trial');
+            end;
           end;
         end;
 
@@ -4721,6 +4850,7 @@ begin
   fItemsById.Free;
   fItemsByName.Free;
   fHeapItems.Free;
+  fAutoSwitchHistory.Free;
   fAutoLock.Free;
   fPendingFree.Free;
   fItemsLock.Free;
@@ -4772,6 +4902,10 @@ begin
       aDiagnostics.CooldownTicks := fAutoCooldownTicks;
       aDiagnostics.TrialFailLevel := fAutoTrialFailLevel;
       aDiagnostics.TrialFailCooldownTicks := fAutoTrialFailCooldownTicks;
+      PruneAutoSwitchHistoryLocked(fAutoControllerTick, fAutoConfig.SwitchBudgetWindowTicks);
+      aDiagnostics.SwitchBudgetHits := fAutoSwitchBudgetHits;
+      aDiagnostics.SwitchBudgetCooldownTicks := GetAutoSwitchBudgetCooldownTicksLocked(fAutoControllerTick);
+      aDiagnostics.SwitchBudgetRecentSwitches := fAutoSwitchHistory.Count;
       aDiagnostics.SwitchBurstLevel := fAutoSwitchBurstLevel;
       aDiagnostics.ScanSampleTicks := fAutoScanSampleTicks;
       aDiagnostics.HeapSampleTicks := fAutoHeapSampleTicks;

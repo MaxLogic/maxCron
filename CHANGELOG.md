@@ -5,6 +5,8 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Added rolling switch-budget controls (`MAXCRON_AUTO_SWITCH_BUDGET_WINDOW`, `MAXCRON_AUTO_SWITCH_BUDGET_MAX`, `MAXCRON_AUTO_SWITCH_BUDGET_COOLDOWN`) to hard-bound adaptive scan/heap switch rate under adversarial oscillation workloads. (T-072)
+- Added adversarial-churn stress coverage validating switch-budget engagement and bounded switch counts in auto mode. (T-072)
 - Added adaptive heap-trial failure re-entry backoff (`MAXCRON_AUTO_TRIAL_FAIL_COOLDOWN`) so repeated failed heap trials are damped under low cooldown tuning. (T-069)
 - Added stress regression coverage for rapid heap-trial retrials to validate bounded switch behavior under sustained trial-failure pressure. (T-069)
 - Added due-density auto-controller signal and thresholds (`MAXCRON_AUTO_ENTER_DUE_DENSITY`, `MAXCRON_AUTO_EXIT_DUE_DENSITY`) so dense-due phases can demote from heap earlier and sparse-due phases can promote with stronger confidence. (T-066)
@@ -36,6 +38,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added stress/robust tests for heap-mode execution, shadow parity churn coverage, and high-N scan-vs-heap benchmark assertions. (T-058, T-059)
 
 ### Changed
+- Extended auto diagnostics snapshot/log payload with switch-budget counters (`SwitchBudgetHits`, `SwitchBudgetCooldownTicks`, `SwitchBudgetRecentSwitches`) for runtime budget-tuning visibility. (T-073)
 - Extended auto diagnostics snapshot/log payload with trial-failure backoff state (`TrialFailLevel`, `TrialFailCooldownTicks`) for runtime tuning visibility. (T-070)
 - Expanded README with an auto-mode operations/tuning playbook (knob reference, archetype guidance, oscillation troubleshooting, rollout checklist). (T-063)
 - Updated scheduler engine docs to cover `auto` mode behavior and explicit-mode override semantics. (T-060)

@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-072
+Next task ID: T-075
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 72
+Done tasks: 75
 
 ## In Progress
 
@@ -19,6 +19,24 @@ Done tasks: 72
 
 
 ## Done
+
+### T-074 [DOC] Publish switch-budget limiter tuning guidance
+Outcome: Documented rolling switch-budget limiter knobs and tuning guidance for adversarial oscillation workloads (`SWITCH_BUDGET_WINDOW`, `SWITCH_BUDGET_MAX`, `SWITCH_BUDGET_COOLDOWN`), including troubleshooting updates.
+Proof: `rg -n "MAXCRON_AUTO_SWITCH_BUDGET_(WINDOW|MAX|COOLDOWN)|switch-budget" README.md` returns the new guidance lines; `./build-delphi.sh tests/maxCronStressTests.dproj -config release` succeeds.
+Touches: `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-072
+
+### T-073 [OBS] Expose switch-budget state in auto diagnostics
+Outcome: Extended `TMaxCronAutoDiagnostics` and periodic auto diagnostics payload with switch-budget visibility (`SwitchBudgetHits`, `SwitchBudgetCooldownTicks`, `SwitchBudgetRecentSwitches`) for runtime tuning.
+Proof: `MAXCRON_ENGINE=auto MAXCRON_AUTO_DIAG_LOG_INTERVAL=10 ./build-and-run-tests.sh -cm:Quiet` passes (Stress 12/12, Core 125/125, VCL 3/3); targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_DiagnosticsSnapshot_ReportsControllerState"` passes (1/1).
+Touches: `maxCron.pas`, `tests/unit/TestHeavyStressMixed.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-072
+
+### T-072 [PERF] Add rolling switch-budget limiter for auto scheduler
+Outcome: Added rolling switch-budget limiter with cooldown gating (`MAXCRON_AUTO_SWITCH_BUDGET_WINDOW`, `MAXCRON_AUTO_SWITCH_BUDGET_MAX`, `MAXCRON_AUTO_SWITCH_BUDGET_COOLDOWN`) to bound adaptive switch frequency under adversarial oscillation pressure.
+Proof: `MAXCRON_ENGINE=auto ./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 12/12, Core 125/125, VCL 3/3); targeted `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineAutoMode_SwitchBudgetLimiter_BoundsAdversarialChurn"` passes (1/1).
+Touches: `maxCron.pas`, `tests/unit/TestHeavyStressMixed.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-069, T-070, T-071
 
 ### T-071 [DOC] Publish trial-failure backoff tuning guidance
 Outcome: Documented `MAXCRON_AUTO_TRIAL_FAIL_COOLDOWN` and updated auto-mode tuning/troubleshooting guidance for repeated failed heap trials in mixed burst/churn workloads.
