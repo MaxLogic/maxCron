@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-085
+Next task ID: T-087
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 85
+Done tasks: 87
 
 ## In Progress
 
@@ -19,6 +19,18 @@ Done tasks: 85
 
 
 ## Done
+
+### T-086 [OBS] Add benchmark trend report generator
+Outcome: Added `scripts/generate-benchmark-trend-report.sh`, which aggregates benchmark CSV history and writes a markdown trend report with per-scenario mean metrics and elapsed/visited deltas versus the previous included run.
+Proof: `./scripts/generate-benchmark-trend-report.sh --input-dir=benchmarks/results --limit=5 --output=benchmarks/results/trend-latest.md` succeeds and writes `benchmarks/results/trend-latest.md` with per-run rows for all benchmark scenarios.
+Touches: `scripts/generate-benchmark-trend-report.sh`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-085
+
+### T-085 [CLI] Add one-command local performance gate runner
+Outcome: Added `scripts/perf-gate-local.sh`, a one-command local flow that builds benchmark runner, executes benchmark run, optionally compares against baseline CSV, resolves artifact paths, and runs structural gate checks on the generated CSV.
+Proof: `./scripts/perf-gate-local.sh --iterations=3 --warmup=1 --out-dir=benchmarks/results --baseline=benchmarks/results/maxcron-benchmarks-20260223-214451.csv` succeeds (exit `0`), prints baseline deltas, and passes structural gate checks; generated artifacts: `benchmarks/results/maxcron-benchmarks-20260223-235526.csv` and `benchmarks/results/maxcron-benchmarks-20260223-235526.md`.
+Touches: `scripts/perf-gate-local.sh`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-084
 
 ### T-084 [CI] Add structural performance gate script for benchmark CSV metrics
 Outcome: Added a repeatable `scripts/check-benchmark-metrics.sh` gate that evaluates benchmark CSV structural ratios (`events_visited`, `heap_rebuilds`, `switch_count`) against configurable thresholds for stable perf-regression checks independent of wall-clock timing.

@@ -5,6 +5,8 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Added `scripts/perf-gate-local.sh` for one-command local performance verification (build benchmark runner, execute benchmark, optional baseline compare, structural gate check). (T-085)
+- Added `scripts/generate-benchmark-trend-report.sh` to generate markdown trend reports from benchmark CSV history with per-scenario means and run-to-run deltas. (T-086)
 - Added `scripts/check-benchmark-metrics.sh` to gate structural benchmark ratios (`visited`, `rebuilds`, `switches`) with configurable thresholds for stable perf regression checks independent of wall-clock variance. (T-084)
 - Added a standalone non-DUnit benchmark runner (`benchmarks/maxCronBenchmarks.exe`) that executes sparse and adversarial scheduler scenarios and exports raw CSV plus Markdown summary reports for trend tracking. (T-077)
 - Added benchmark scenarios for adaptive mode: sparse high-N (`auto` vs `scan`) and adversarial oscillation (`auto` without/with switch-budget limiter) in stress coverage. (T-075)
@@ -41,6 +43,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added stress/robust tests for heap-mode execution, shadow parity churn coverage, and high-N scan-vs-heap benchmark assertions. (T-058, T-059)
 
 ### Changed
+- Updated benchmark documentation with local (on-demand) perf-gate workflow and trend report generation commands; no scheduler/CI requirement. (T-085, T-086)
 - Extended standalone benchmark summaries with elapsed median/p95/stddev and added `--compare=<baseline.csv>` mode for run-to-run delta reporting in console and Markdown output. (T-083)
 - Added a guarded sparse-workload fast-promote path in auto mode so strongly sparse/high-cardinality low-churn phases can enter heap-stable earlier without waiting for a full trial window. (T-082)
 - Reduced heap-mode lock churn by batching post-callback heap reschedule pushes under a single lock section per tick instead of one lock/relock per due event. (T-080)

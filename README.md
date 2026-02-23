@@ -275,7 +275,7 @@ Interpretation rules:
 - Timing summaries include mean/median/p95/stddev to expose both central tendency and jitter.
 - Elapsed time is environment-sensitive; use it with the structural work metrics (`visited`, `rebuilds`, `switches`) for robust conclusions.
 
-### Structural perf gate (stable CI signal)
+### Structural perf gate (stable local signal)
 
 Use structural ratios from benchmark CSVs to gate regressions without relying on wall-clock timing:
 
@@ -296,6 +296,31 @@ Thresholds are configurable by env vars:
 - `MAXCRON_GATE_BUDGET_SWITCH_RATIO` (default `1.05`)
 - `MAXCRON_GATE_BUDGET_REBUILD_RATIO` (default `1.05`)
 - `MAXCRON_GATE_BUDGET_VISITED_RATIO` (default `1.05`)
+
+### One-command local perf gate
+
+For on-demand local verification, we can run build + benchmark + optional baseline compare + structural gate in one command:
+
+```bash
+./scripts/perf-gate-local.sh --iterations=3 --warmup=1 --out-dir=benchmarks/results --baseline=benchmarks/results/maxcron-benchmarks-20260223-214451.csv
+```
+
+This script:
+
+- builds `benchmarks/maxCronBenchmarks.exe`
+- runs the benchmark with our selected options
+- resolves generated CSV/Markdown artifact paths
+- runs `scripts/check-benchmark-metrics.sh` against the generated CSV
+
+### Local trend report generator
+
+To inspect run-to-run behavior over recent benchmark history:
+
+```bash
+./scripts/generate-benchmark-trend-report.sh --input-dir=benchmarks/results --limit=5 --output=benchmarks/results/trend-latest.md
+```
+
+The generated markdown includes per-scenario mean metrics and elapsed/visited deltas versus the previous included run.
 
 ### Reference benchmark run (this machine)
 
