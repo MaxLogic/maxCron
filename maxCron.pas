@@ -172,6 +172,24 @@ Type
     procedure SetOnTimer(const aValue: TNotifyEvent);
   end;
 
+  TMaxCronAutoDiagnostics = record
+    ConfiguredEngine: string;
+    EffectiveEngine: string;
+    AutoState: string;
+    LastSwitchReason: string;
+    SwitchCount: UInt64;
+    EventCountEwma: Double;
+    DirtyRateEwma: Double;
+    ScanTickUsEwma: Double;
+    HeapTickUsEwma: Double;
+    ScanBaselineUs: Double;
+    CooldownTicks: Integer;
+    SwitchBurstLevel: Integer;
+    ScanSampleTicks: Integer;
+    HeapSampleTicks: Integer;
+    TicksSinceSwitch: Integer;
+  end;
+
   TmaxCron = class(TObject)
   private
     type
@@ -231,6 +249,7 @@ Type
     fAutoHeapSampleTicks: Integer;
     fAutoTicksSinceSwitch: Integer;
     fAutoSwitchBurstLevel: Integer;
+    fAutoLastSwitchReason: string;
     fAutoConfig: TAutoControllerConfig;
     fTickEventsVisited: UInt64;
     fHeapRebuildCount: UInt64;
@@ -260,7 +279,7 @@ Type
     function SchedulerEngineToText(const aEngine: TSchedulerEngine): string;
     function AutoStateToText(const aState: TAutoSchedulerState): string;
     function UpdateEwma(const aCurrent, aSample, aAlpha: Double): Double;
-    procedure SwitchAutoEffectiveEngine(const aEngine: TSchedulerEngine);
+    procedure SwitchAutoEffectiveEngine(const aEngine: TSchedulerEngine; const aReason: string);
     procedure EvaluateAutoController(const aEngineUsed: TSchedulerEngine; const aEventCount: Integer;
       const aElapsedMicroseconds: Int64);
     procedure RebuildHeapLocked;
@@ -307,6 +326,7 @@ Type
     function Delete(const aName: string): boolean; overload;
     function Delete(event: IMaxCronEvent): boolean; overload;
     function Snapshot: TArray<IMaxCronEvent>;
+    function TryGetAutoDiagnostics(out aDiagnostics: TMaxCronAutoDiagnostics): Boolean;
 
     property RequestedTimerBackend: TmaxCronTimerBackend read fRequestedTimerBackend;
     property ActiveTimerBackend: TmaxCronTimerBackend read fActiveTimerBackend;
@@ -3513,6 +3533,7 @@ begin
   fAutoHeapSampleTicks := 0;
   fAutoTicksSinceSwitch := 0;
   fAutoSwitchBurstLevel := 0;
+  fAutoLastSwitchReason := '';
   fTickEventsVisited := 0;
   fHeapRebuildCount := 0;
   ConfigureSchedulerEngine;
@@ -3688,6 +3709,7 @@ begin
     fAutoHeapSampleTicks := 0;
     fAutoTicksSinceSwitch := 0;
     fAutoSwitchBurstLevel := 0;
+    fAutoLastSwitchReason := '';
     if fSchedulerEngine = TSchedulerEngine.seAuto then
       fAutoState := TAutoSchedulerState.asScanStable;
   finally
@@ -3735,7 +3757,7 @@ begin
   Result := (aCurrent * (1.0 - aAlpha)) + (aSample * aAlpha);
 end;
 
-procedure TmaxCron.SwitchAutoEffectiveEngine(const aEngine: TSchedulerEngine);
+procedure TmaxCron.SwitchAutoEffectiveEngine(const aEngine: TSchedulerEngine; const aReason: string);
 const
   cAutoMaxSwitchBurstLevel = 4;
   cAutoMaxBackoffCooldown = 8192;
@@ -3764,6 +3786,10 @@ begin
 
   fAutoEffectiveEngine := aEngine;
   Inc(fAutoSwitchCount);
+  if aReason <> '' then
+    fAutoLastSwitchReason := aReason
+  else
+    fAutoLastSwitchReason := 'unspecified';
   lCooldownTicks := lBaseCooldown * (1 + fAutoSwitchBurstLevel);
   fAutoCooldownTicks := ClampAutoInt(lCooldownTicks, 0, cAutoMaxBackoffCooldown);
   fAutoTicksSinceSwitch := 0;
@@ -3851,7 +3877,7 @@ begin
             fAutoTrialTicksRemaining := lConfig.TrialTicks;
             fAutoHeapTickUsEwma := 0;
             fAutoState := TAutoSchedulerState.asHeapTrial;
-            SwitchAutoEffectiveEngine(TSchedulerEngine.seHeap);
+            SwitchAutoEffectiveEngine(TSchedulerEngine.seHeap, 'scan-enter-trial');
           end;
         end;
 
@@ -3867,7 +3893,7 @@ begin
             fAutoExitHold := 0;
             fAutoTrialTicksRemaining := 0;
             fAutoState := TAutoSchedulerState.asScanStable;
-            SwitchAutoEffectiveEngine(TSchedulerEngine.seScan);
+            SwitchAutoEffectiveEngine(TSchedulerEngine.seScan, 'heap-trial-exit-churn');
             Exit;
           end;
 
@@ -3890,7 +3916,7 @@ begin
               fAutoExitHold := 0;
             end else begin
               fAutoState := TAutoSchedulerState.asScanStable;
-              SwitchAutoEffectiveEngine(TSchedulerEngine.seScan);
+              SwitchAutoEffectiveEngine(TSchedulerEngine.seScan, 'heap-trial-fallback-perf');
             end;
           end;
         end;
@@ -3914,7 +3940,7 @@ begin
           begin
             fAutoExitHold := 0;
             fAutoState := TAutoSchedulerState.asScanStable;
-            SwitchAutoEffectiveEngine(TSchedulerEngine.seScan);
+            SwitchAutoEffectiveEngine(TSchedulerEngine.seScan, 'heap-stable-exit');
           end;
         end;
     else
@@ -4584,6 +4610,45 @@ begin
   finally
     fItemsLock.Release;
   end;
+end;
+
+function TmaxCron.TryGetAutoDiagnostics(out aDiagnostics: TMaxCronAutoDiagnostics): Boolean;
+var
+  lAutoState: TAutoSchedulerState;
+  lEffectiveEngine: TSchedulerEngine;
+begin
+  aDiagnostics := Default(TMaxCronAutoDiagnostics);
+  aDiagnostics.ConfiguredEngine := SchedulerEngineToText(fSchedulerEngine);
+  lEffectiveEngine := fSchedulerEngine;
+  lAutoState := TAutoSchedulerState.asDisabled;
+  Result := False;
+
+  fAutoLock.Acquire;
+  try
+    if fSchedulerEngine = TSchedulerEngine.seAuto then
+    begin
+      Result := True;
+      lEffectiveEngine := fAutoEffectiveEngine;
+      lAutoState := fAutoState;
+      aDiagnostics.LastSwitchReason := fAutoLastSwitchReason;
+      aDiagnostics.SwitchCount := fAutoSwitchCount;
+      aDiagnostics.EventCountEwma := fAutoEventCountEwma;
+      aDiagnostics.DirtyRateEwma := fAutoDirtyRateEwma;
+      aDiagnostics.ScanTickUsEwma := fAutoScanTickUsEwma;
+      aDiagnostics.HeapTickUsEwma := fAutoHeapTickUsEwma;
+      aDiagnostics.ScanBaselineUs := fAutoScanBaselineUs;
+      aDiagnostics.CooldownTicks := fAutoCooldownTicks;
+      aDiagnostics.SwitchBurstLevel := fAutoSwitchBurstLevel;
+      aDiagnostics.ScanSampleTicks := fAutoScanSampleTicks;
+      aDiagnostics.HeapSampleTicks := fAutoHeapSampleTicks;
+      aDiagnostics.TicksSinceSwitch := fAutoTicksSinceSwitch;
+    end;
+  finally
+    fAutoLock.Release;
+  end;
+
+  aDiagnostics.EffectiveEngine := SchedulerEngineToText(lEffectiveEngine);
+  aDiagnostics.AutoState := AutoStateToText(lAutoState);
 end;
 
 procedure TmaxCron.DoTick;

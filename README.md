@@ -160,6 +160,23 @@ If we observe scan/heap oscillation in logs or profiling:
 4. Tune `MAXCRON_AUTO_*` only when measured behavior is unstable or suboptimal.
 5. Roll out broadly with the tuned values and keep `scan` override ready for quick rollback.
 
+### Auto diagnostics snapshot API
+
+We can query the adaptive controller state at runtime:
+
+```delphi
+var
+  Diag: TMaxCronAutoDiagnostics;
+begin
+  if CronScheduler.TryGetAutoDiagnostics(Diag) then
+    Memo1.Lines.Add(Format('%s -> %s (%s) switches=%d reason=%s',
+      [Diag.ConfiguredEngine, Diag.EffectiveEngine, Diag.AutoState, Int64(Diag.SwitchCount), Diag.LastSwitchReason]));
+end;
+```
+
+`TryGetAutoDiagnostics` returns `True` only when `MAXCRON_ENGINE=auto`; otherwise it returns `False`.
+The snapshot includes EWMAs, sample counters, cooldown/backoff state, and last switch reason for tuning/operations visibility.
+
 High-N benchmark coverage (`TestHeavyStressMixed.EngineBenchmark_ScanVsHeap_HighN`) uses 1200 far-future events and 40 ticks:
 
 - `scan`: 48,000 candidate visits (`1200 * 40`).
