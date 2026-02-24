@@ -26,6 +26,9 @@ type
     procedure Next_DomDow_OrVsAnd;
 
     [Test]
+    procedure Next_DomDow_OrMode_Oracle_BruteForceMatrix;
+
+    [Test]
     procedure Next_Dow_Sunday_ZeroOrSeven;
 
     [Test]
@@ -161,6 +164,85 @@ begin
     Assert.AreEqual(EncodeDateTime(2025, 9, 1, 0, 0, 0, 0), NextDt, 0.0);
   finally
     Plan.Free;
+  end;
+end;
+
+procedure TTestScheduleNext.Next_DomDow_OrMode_Oracle_BruteForceMatrix;
+const
+  cDomValues: array [0 .. 4] of Word = (1, 2, 15, 28, 31);
+  cDowValues: array [0 .. 6] of Word = (0, 1, 2, 3, 4, 5, 6);
+var
+  lPlan: TCronSchedulePlan;
+  lBaseDates: array [0 .. 7] of TDateTime;
+  lDomIndex: Integer;
+  lDowIndex: Integer;
+  lBaseIndex: Integer;
+  lDayScan: Integer;
+  lDomValue: Word;
+  lDowValue: Word;
+  lExpr: string;
+  lBase: TDateTime;
+  lActual: TDateTime;
+  lExpected: TDateTime;
+  lCandidate: TDateTime;
+  lFound: Boolean;
+  lCandidateDow: Integer;
+begin
+  lPlan := TCronSchedulePlan.Create;
+  try
+    lBaseDates[0] := EncodeDateTime(2024, 2, 29, 23, 59, 59, 0);
+    lBaseDates[1] := EncodeDateTime(2025, 1, 1, 23, 59, 59, 0);
+    lBaseDates[2] := EncodeDateTime(2025, 2, 28, 23, 59, 59, 0);
+    lBaseDates[3] := EncodeDateTime(2025, 3, 1, 12, 0, 0, 0);
+    lBaseDates[4] := EncodeDateTime(2025, 6, 15, 8, 30, 0, 0);
+    lBaseDates[5] := EncodeDateTime(2025, 12, 31, 23, 59, 59, 0);
+    lBaseDates[6] := EncodeDateTime(2026, 1, 31, 23, 59, 59, 0);
+    lBaseDates[7] := EncodeDateTime(2026, 2, 1, 0, 0, 0, 0);
+
+    for lDomIndex := Low(cDomValues) to High(cDomValues) do
+    begin
+      lDomValue := cDomValues[lDomIndex];
+      for lDowIndex := Low(cDowValues) to High(cDowValues) do
+      begin
+        lDowValue := cDowValues[lDowIndex];
+        lExpr := Format('0 0 %d * %d * 0 0', [lDomValue, lDowValue]);
+        lPlan.Parse(lExpr);
+        lPlan.DayMatchMode := TmaxCronDayMatchMode.dmOr;
+
+        for lBaseIndex := Low(lBaseDates) to High(lBaseDates) do
+        begin
+          lBase := lBaseDates[lBaseIndex];
+          lExpected := 0;
+          Assert.IsTrue(lPlan.FindNextScheduleDate(lBase, lActual),
+            Format('Scheduler did not find next date for expr=%s base=%s',
+              [lExpr, DateTimeToStr(lBase)]));
+
+          lCandidate := Trunc(lBase);
+          if lCandidate <= lBase then
+            lCandidate := IncDay(lCandidate);
+
+          lFound := False;
+          for lDayScan := 0 to 3660 do
+          begin
+            lCandidateDow := DayOfTheWeek(lCandidate) mod 7;
+            if (DayOf(lCandidate) = lDomValue) or (lCandidateDow = lDowValue) then
+            begin
+              lExpected := lCandidate;
+              lFound := True;
+              Break;
+            end;
+            lCandidate := IncDay(lCandidate);
+          end;
+
+          Assert.IsTrue(lFound,
+            Format('Oracle did not find next date for expr=%s base=%s', [lExpr, DateTimeToStr(lBase)]));
+          Assert.AreEqual(lExpected, lActual, 0.0,
+            Format('Oracle mismatch for expr=%s base=%s', [lExpr, DateTimeToStr(lBase)]));
+        end;
+      end;
+    end;
+  finally
+    lPlan.Free;
   end;
 end;
 

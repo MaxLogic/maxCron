@@ -22,6 +22,9 @@ type
 
     [Test]
     procedure FailedFree_ShouldNotDetachSharedStateDefaults;
+
+    [Test]
+    procedure QueuedMainThread_DeleteBeforeAcquire_Stress_NoDanglingAccess;
   end;
 
 implementation
@@ -295,6 +298,79 @@ begin
     lBlockEntered.Free;
     if lCron <> nil then
       lCron.Free;
+  end;
+end;
+
+procedure TTestReviewFindings.QueuedMainThread_DeleteBeforeAcquire_Stress_NoDanglingAccess;
+const
+  cIterations = 200;
+var
+  lAttempt: Integer;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lWorker: TThread;
+  lWorkerDone: TEvent;
+  lNextAt: TDateTime;
+  lHookCalls: Integer;
+  lWaitRes: TWaitResult;
+begin
+  lCron := nil;
+  lWorker := nil;
+  lWorkerDone := nil;
+  for lAttempt := 1 to cIterations do
+  begin
+    lHookCalls := 0;
+    lCron := TmaxCron.Create(ctPortable);
+    lWorkerDone := TEvent.Create(nil, True, False, '');
+    try
+      lEvent := lCron.Add(Format('QueuedAcquireRaceStress_%d', [lAttempt]));
+      lEvent.EventPlan := '* * * * * * * 0';
+      lEvent.InvokeMode := imMainThread;
+      lEvent.OnScheduleProc :=
+        procedure(aSender: IMaxCronEvent)
+        begin
+        end;
+      lEvent.Run;
+      lNextAt := lEvent.NextSchedule;
+
+      SetMaxCronBeforeQueuedAcquireHook(
+        procedure(const aEvent: IMaxCronEvent)
+        begin
+          if aEvent = lEvent then
+          begin
+            TInterlocked.Increment(lHookCalls);
+            if (aEvent.Id and 1) = 0 then
+              lCron.Delete(aEvent.Id)
+            else
+              lCron.Delete(lEvent);
+          end;
+        end);
+
+      lWorker := TThread.CreateAnonymousThread(
+        procedure
+        begin
+          lCron.TickAt(lNextAt);
+          lWorkerDone.SetEvent;
+        end);
+      lWorker.FreeOnTerminate := True;
+      lWorker.Start;
+
+      lWaitRes := lWorkerDone.WaitFor(2500);
+      Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes,
+        Format('Worker did not complete (attempt %d)', [lAttempt]));
+
+      CheckSynchronize(500);
+      Assert.IsTrue(TInterlocked.CompareExchange(lHookCalls, 0, 0) > 0,
+        Format('Pre-acquire hook did not execute (attempt %d)', [lAttempt]));
+      Assert.AreEqual(0, Length(lCron.Snapshot),
+        Format('Deleted event should not survive queued acquire path (attempt %d)', [lAttempt]));
+    finally
+      SetMaxCronBeforeQueuedAcquireHook(nil);
+      lWorkerDone.Free;
+      lCron.Free;
+      lWorkerDone := nil;
+      lCron := nil;
+    end;
   end;
 end;
 
