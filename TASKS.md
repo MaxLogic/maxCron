@@ -1,9 +1,9 @@
 # Tasks
-Next task ID: T-087
+Next task ID: T-088
 
 ## Summary
 Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
-Done tasks: 87
+Done tasks: 88
 
 ## In Progress
 
@@ -19,6 +19,12 @@ Done tasks: 87
 
 
 ## Done
+
+### T-087 [PERF] Remove redundant heap reschedule lookups on dense due ticks
+Outcome: Optimized `TmaxCron.DoTickAtHeap` by carrying due-event references in local reschedule entries and removing redundant id/dictionary/interface lookups in the post-callback heap-push loop, while preserving `IsHeapScheduleCurrent` correctness gating before every push.
+Proof: `./build-and-run-tests.sh -cm:Quiet` passes (Stress 14/14, Core 126/126, VCL 4/4); `./build-and-run-tests-stress.sh -cm:Quiet` passes (Stress 14/14, Core 126/126, VCL 4/4); `/mnt/c/Windows/System32/cmd.exe /C "cd /d F:\projects\MaxLogic\maxCron\maxCron && benchmarks\maxCronBenchmarks.exe --iterations=7 --warmup=1 --compare=benchmarks\results\maxcron-benchmarks-20260224-095249.csv --out-dir=benchmarks\results --quiet"` reports elapsed deltas vs baseline: `sparse_high_n_heap -19.0847%`, `sparse_high_n_auto -14.8205%`, `adversarial_auto_no_budget -5.9706%`, `adversarial_auto_budget -0.7026%`.
+Touches: `maxCron.pas`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-080
 
 ### T-086 [OBS] Add benchmark trend report generator
 Outcome: Added `scripts/generate-benchmark-trend-report.sh`, which aggregates benchmark CSV history and writes a markdown trend report with per-scenario mean metrics and elapsed/visited deltas versus the previous included run.

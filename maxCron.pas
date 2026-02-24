@@ -5146,12 +5146,18 @@ begin
 end;
 
 procedure TmaxCron.DoTickAtHeap(const aNow: TDateTime; out aDueCount: Integer);
+type
+  THeapRescheduleEntry = record
+    Event: TmaxCronEvent;
+    EventId: Int64;
+    DueAt: TDateTime;
+  end;
 var
   lDepthIncreased: Boolean;
   lDueEvents: TList<TmaxCronEvent>;
-  lReschedules: TList<TCronHeapEntry>;
+  lReschedules: TList<THeapRescheduleEntry>;
   lEntry: TCronHeapEntry;
-  lRescheduleEntry: TCronHeapEntry;
+  lRescheduleEntry: THeapRescheduleEntry;
   lEventItem: IMaxCronEvent;
   lEvent: TmaxCronEvent;
   lDueEvent: TmaxCronEvent;
@@ -5162,7 +5168,7 @@ begin
   aDueCount := 0;
   lDepthIncreased := False;
   lDueEvents := TList<TmaxCronEvent>.Create;
-  lReschedules := TList<TCronHeapEntry>.Create;
+  lReschedules := TList<THeapRescheduleEntry>.Create;
   try
     fItemsLock.Acquire;
     try
@@ -5195,6 +5201,7 @@ begin
       if not lDueEvent.TryGetHeapScheduleSnapshot(lId, lDueAt) then
         Continue;
 
+      lRescheduleEntry.Event := lDueEvent;
       lRescheduleEntry.EventId := lId;
       lRescheduleEntry.DueAt := lDueAt;
       lReschedules.Add(lRescheduleEntry);
@@ -5207,9 +5214,8 @@ begin
         for lIndex := 0 to lReschedules.Count - 1 do
         begin
           lRescheduleEntry := lReschedules[lIndex];
-          if not TryGetEventByIdLocked(lRescheduleEntry.EventId, lEventItem) then
-            Continue;
-          if not TryGetCronEvent(lEventItem, lEvent) then
+          lEvent := lRescheduleEntry.Event;
+          if lEvent = nil then
             Continue;
           if lEvent.IsHeapScheduleCurrent(lRescheduleEntry.DueAt) then
             HeapPushLocked(lRescheduleEntry.DueAt, lRescheduleEntry.EventId);
