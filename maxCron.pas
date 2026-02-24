@@ -5154,8 +5154,10 @@ type
   end;
 var
   lDepthIncreased: Boolean;
-  lDueEvents: TList<TmaxCronEvent>;
-  lReschedules: TList<THeapRescheduleEntry>;
+  lDueEvents: TArray<TmaxCronEvent>;
+  lDueEventCount: Integer;
+  lReschedules: TArray<THeapRescheduleEntry>;
+  lRescheduleCount: Integer;
   lEntry: TCronHeapEntry;
   lRescheduleEntry: THeapRescheduleEntry;
   lEventItem: IMaxCronEvent;
@@ -5164,11 +5166,36 @@ var
   lIndex: Integer;
   lId: Int64;
   lDueAt: TDateTime;
+  lCurrentLength: Integer;
+
+  procedure EnsureDueEventsCapacity;
+  begin
+    if lDueEventCount < Length(lDueEvents) then
+      Exit;
+
+    lCurrentLength := Length(lDueEvents);
+    if lCurrentLength = 0 then
+      SetLength(lDueEvents, 16)
+    else
+      SetLength(lDueEvents, lCurrentLength * 2);
+  end;
+
+  procedure EnsureReschedulesCapacity;
+  begin
+    if lRescheduleCount < Length(lReschedules) then
+      Exit;
+
+    lCurrentLength := Length(lReschedules);
+    if lCurrentLength = 0 then
+      SetLength(lReschedules, 16)
+    else
+      SetLength(lReschedules, lCurrentLength * 2);
+  end;
 begin
   aDueCount := 0;
   lDepthIncreased := False;
-  lDueEvents := TList<TmaxCronEvent>.Create;
-  lReschedules := TList<THeapRescheduleEntry>.Create;
+  lDueEventCount := 0;
+  lRescheduleCount := 0;
   try
     fItemsLock.Acquire;
     try
@@ -5187,13 +5214,15 @@ begin
           Continue;
         if not lEvent.IsHeapScheduleCurrent(lEntry.DueAt) then
           Continue;
-        lDueEvents.Add(lEvent);
+        EnsureDueEventsCapacity;
+        lDueEvents[lDueEventCount] := lEvent;
+        Inc(lDueEventCount);
       end;
     finally
       fItemsLock.Release;
     end;
 
-    for lIndex := 0 to lDueEvents.Count - 1 do
+    for lIndex := 0 to lDueEventCount - 1 do
     begin
       Inc(aDueCount);
       lDueEvent := lDueEvents[lIndex];
@@ -5204,14 +5233,16 @@ begin
       lRescheduleEntry.Event := lDueEvent;
       lRescheduleEntry.EventId := lId;
       lRescheduleEntry.DueAt := lDueAt;
-      lReschedules.Add(lRescheduleEntry);
+      EnsureReschedulesCapacity;
+      lReschedules[lRescheduleCount] := lRescheduleEntry;
+      Inc(lRescheduleCount);
     end;
 
-    if lReschedules.Count > 0 then
+    if lRescheduleCount > 0 then
     begin
       fItemsLock.Acquire;
       try
-        for lIndex := 0 to lReschedules.Count - 1 do
+        for lIndex := 0 to lRescheduleCount - 1 do
         begin
           lRescheduleEntry := lReschedules[lIndex];
           lEvent := lRescheduleEntry.Event;
@@ -5225,8 +5256,6 @@ begin
       end;
     end;
   finally
-    lReschedules.Free;
-    lDueEvents.Free;
     if lDepthIncreased then
     begin
       fItemsLock.Acquire;
