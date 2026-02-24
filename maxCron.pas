@@ -237,6 +237,7 @@ Type
     fDefaultDialect: TmaxCronDialect;
     fDefaultMisfirePolicy: TmaxCronMisfirePolicy;
     fDefaultMisfireCatchUpLimit: Cardinal;
+    fDefaultsLock: TCriticalSection;
     fTimer: ICronTimer;
     fItems: TList<IMaxCronEvent>;
     fItemsById: TDictionary<Int64, Integer>;
@@ -624,6 +625,7 @@ type
     procedure IncrementCallbackDepth;
     procedure DecrementCallbackDepth;
     function GetCallbackDepth: Integer;
+    procedure Attach(const aOwner: TmaxCron);
     procedure MarkHeapDirty;
     procedure KeepAsyncAlive(const aAsync: IInterface);
     procedure ReleaseAsyncAlive(const aAsync: IInterface);
@@ -644,6 +646,7 @@ type
     constructor Create(const aOwner: TmaxCron);
     destructor Destroy; override;
     procedure Detach;
+    procedure Attach(const aOwner: TmaxCron);
     function IsAlive: Boolean;
     function TryGetDefaultInvokeMode(out aInvokeMode: TmaxCronInvokeMode): Boolean;
     function TryGetDefaultDayMatchMode(out aDayMatchMode: TmaxCronDayMatchMode): Boolean;
@@ -3058,9 +3061,19 @@ var
   lEventInterface: IMaxCronEvent;
   lSharedState: ICronSharedState;
   lNormalizedName: string;
+  lDefaultDayMatchMode: TmaxCronDayMatchMode;
+  lDefaultDialect: TmaxCronDialect;
 begin
   lNormalizedName := NormalizeEventName(aName);
   Result := nil;
+
+  fDefaultsLock.Acquire;
+  try
+    lDefaultDayMatchMode := fDefaultDayMatchMode;
+    lDefaultDialect := fDefaultDialect;
+  finally
+    fDefaultsLock.Release;
+  end;
 
   fItemsLock.Acquire;
   try
@@ -3071,9 +3084,9 @@ begin
     lEventInterface := lEvent as IMaxCronEvent;
     if Supports(fSharedState, ICronSharedState, lSharedState) then
       lEvent.fSharedState := lSharedState;
-    lEvent.fScheduler.DayMatchMode := fDefaultDayMatchMode;
-    lEvent.fDialect := fDefaultDialect;
-    lEvent.fScheduler.Dialect := fDefaultDialect;
+    lEvent.fScheduler.DayMatchMode := lDefaultDayMatchMode;
+    lEvent.fDialect := lDefaultDialect;
+    lEvent.fScheduler.Dialect := lDefaultDialect;
     lEvent.fId := TInterlocked.Increment(fNextId);
     lEvent.FName := lNormalizedName;
     lEvent.fScheduler.HashSeed := lEvent.GetHashSeed;
@@ -3174,6 +3187,16 @@ begin
   end;
 end;
 
+procedure TCronSharedState.Attach(const aOwner: TmaxCron);
+begin
+  fLock.Acquire;
+  try
+    fOwner := aOwner;
+  finally
+    fLock.Release;
+  end;
+end;
+
 function TCronSharedState.IsAlive: Boolean;
 begin
   fLock.Acquire;
@@ -3193,7 +3216,12 @@ begin
   if not TryAcquireOwner(lOwner) then
     Exit(False);
   try
-    aInvokeMode := lOwner.fDefaultInvokeMode;
+    lOwner.fDefaultsLock.Acquire;
+    try
+      aInvokeMode := lOwner.fDefaultInvokeMode;
+    finally
+      lOwner.fDefaultsLock.Release;
+    end;
     Result := True;
   finally
     ReleaseOwner;
@@ -3209,7 +3237,12 @@ begin
   if not TryAcquireOwner(lOwner) then
     Exit(False);
   try
-    aDayMatchMode := lOwner.fDefaultDayMatchMode;
+    lOwner.fDefaultsLock.Acquire;
+    try
+      aDayMatchMode := lOwner.fDefaultDayMatchMode;
+    finally
+      lOwner.fDefaultsLock.Release;
+    end;
     Result := True;
   finally
     ReleaseOwner;
@@ -3227,8 +3260,13 @@ begin
   if not TryAcquireOwner(lOwner) then
     Exit(False);
   try
-    aMisfirePolicy := lOwner.fDefaultMisfirePolicy;
-    aCatchUpLimit := lOwner.fDefaultMisfireCatchUpLimit;
+    lOwner.fDefaultsLock.Acquire;
+    try
+      aMisfirePolicy := lOwner.fDefaultMisfirePolicy;
+      aCatchUpLimit := lOwner.fDefaultMisfireCatchUpLimit;
+    finally
+      lOwner.fDefaultsLock.Release;
+    end;
     Result := True;
   finally
     ReleaseOwner;
@@ -3531,6 +3569,7 @@ begin
   fAutoSwitchHistory := TQueue<UInt64>.Create;
   fAutoLock := TCriticalSection.Create;
   fItemsLock := TCriticalSection.Create;
+  fDefaultsLock := TCriticalSection.Create;
   fPendingFree := TList<IMaxCronEvent>.Create;
   fNextId := 0;
   fTickDepth := 0;
@@ -4235,22 +4274,39 @@ begin
 end;
 
 procedure TmaxCron.SetDefaultInvokeMode(const aValue: TmaxCronInvokeMode);
+var
+  lMode: TmaxCronInvokeMode;
 begin
   if aValue = TmaxCronInvokeMode.imDefault then
-    fDefaultInvokeMode := TmaxCronInvokeMode.imMainThread
+    lMode := TmaxCronInvokeMode.imMainThread
   else
-    fDefaultInvokeMode := aValue;
+    lMode := aValue;
+
+  fDefaultsLock.Acquire;
+  try
+    fDefaultInvokeMode := lMode;
+  finally
+    fDefaultsLock.Release;
+  end;
 end;
 
 procedure TmaxCron.SetDefaultDayMatchMode(const Value: TmaxCronDayMatchMode);
 var
   x: Integer;
   lEvent: IMaxCronEvent;
+  lMode: TmaxCronDayMatchMode;
 begin
   if Value = TmaxCronDayMatchMode.dmDefault then
-    fDefaultDayMatchMode := TmaxCronDayMatchMode.dmAnd
+    lMode := TmaxCronDayMatchMode.dmAnd
   else
-    fDefaultDayMatchMode := Value;
+    lMode := Value;
+
+  fDefaultsLock.Acquire;
+  try
+    fDefaultDayMatchMode := lMode;
+  finally
+    fDefaultsLock.Release;
+  end;
 
   fItemsLock.Acquire;
   try
@@ -4267,23 +4323,46 @@ end;
 
 procedure TmaxCron.SetDefaultDialect(const Value: TmaxCronDialect);
 begin
-  fDefaultDialect := Value;
+  fDefaultsLock.Acquire;
+  try
+    fDefaultDialect := Value;
+  finally
+    fDefaultsLock.Release;
+  end;
 end;
 
 procedure TmaxCron.SetDefaultMisfirePolicy(const aValue: TmaxCronMisfirePolicy);
+var
+  lPolicy: TmaxCronMisfirePolicy;
 begin
   if aValue = TmaxCronMisfirePolicy.mpDefault then
-    fDefaultMisfirePolicy := TmaxCronMisfirePolicy.mpCatchUpAll
+    lPolicy := TmaxCronMisfirePolicy.mpCatchUpAll
   else
-    fDefaultMisfirePolicy := aValue;
+    lPolicy := aValue;
+
+  fDefaultsLock.Acquire;
+  try
+    fDefaultMisfirePolicy := lPolicy;
+  finally
+    fDefaultsLock.Release;
+  end;
 end;
 
 procedure TmaxCron.SetDefaultMisfireCatchUpLimit(const Value: Cardinal);
+var
+  lLimit: Cardinal;
 begin
   if Value = 0 then
-    fDefaultMisfireCatchUpLimit := 1
+    lLimit := 1
   else
-    fDefaultMisfireCatchUpLimit := Value;
+    lLimit := Value;
+
+  fDefaultsLock.Acquire;
+  try
+    fDefaultMisfireCatchUpLimit := lLimit;
+  finally
+    fDefaultsLock.Release;
+  end;
 end;
 
 function TmaxCron.NormalizeEventName(const aName: string): string;
@@ -4813,10 +4892,16 @@ const
 var
   lSharedState: ICronSharedState;
   lDone: Boolean;
+  lDetachedSharedState: Boolean;
   lWait: TStopwatch;
 begin
+  lDetachedSharedState := False;
   lSharedState := nil;
   Supports(fSharedState, ICronSharedState, lSharedState);
+
+  if (fActiveTimerBackend = TmaxCronTimerBackend.ctVcl) and
+    (TThread.CurrentThread.ThreadID <> MainThreadID) then
+    raise Exception.Create('TmaxCron.Free for ctVcl backend must be called on the main thread');
 
   if Pointer(Self) = gMaxCronExecutingCron then
     raise Exception.Create('TmaxCron.Free cannot be called from one of its own callbacks');
@@ -4824,21 +4909,30 @@ begin
   if lSharedState <> nil then
   begin
     lSharedState.Detach;
-
-    if (lSharedState.GetInFlightCount > 0) or (lSharedState.GetCallbackDepth > 0) then
-    begin
-      lWait := TStopwatch.StartNew;
-      while ((lSharedState.GetInFlightCount > 0) or (lSharedState.GetCallbackDepth > 0)) and
-        (lWait.ElapsedMilliseconds < cCallbackDrainGraceMs) do
-      begin
-        if TThread.CurrentThread.ThreadID = MainThreadID then
-          CheckSynchronize(1)
-        else
-          TThread.Sleep(1);
-      end;
-
+    lDetachedSharedState := True;
+    try
       if (lSharedState.GetInFlightCount > 0) or (lSharedState.GetCallbackDepth > 0) then
-        raise Exception.Create('TmaxCron.Free cannot be called from one of its own callbacks');
+      begin
+        lWait := TStopwatch.StartNew;
+        while ((lSharedState.GetInFlightCount > 0) or (lSharedState.GetCallbackDepth > 0)) and
+          (lWait.ElapsedMilliseconds < cCallbackDrainGraceMs) do
+        begin
+          if TThread.CurrentThread.ThreadID = MainThreadID then
+            CheckSynchronize(1)
+          else
+            TThread.Sleep(1);
+        end;
+
+        if (lSharedState.GetInFlightCount > 0) or (lSharedState.GetCallbackDepth > 0) then
+          raise Exception.Create('TmaxCron.Free cannot be called from one of its own callbacks');
+      end;
+    except
+      if lDetachedSharedState then
+      begin
+        lSharedState.Attach(Self);
+        lDetachedSharedState := False;
+      end;
+      raise;
     end;
   end;
 
@@ -4874,6 +4968,7 @@ begin
   fAutoLock.Free;
   fPendingFree.Free;
   fItemsLock.Free;
+  fDefaultsLock.Free;
   fAsyncKeepAlive.Free;
   fAsyncLock.Free;
   inherited;

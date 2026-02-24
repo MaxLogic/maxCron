@@ -19,6 +19,9 @@ type
 
     [Test]
     procedure QueuedMainThread_DeleteBeforeAcquire_ShouldNotAccessFreedEvent;
+
+    [Test]
+    procedure FailedFree_ShouldNotDetachSharedStateDefaults;
   end;
 
 implementation
@@ -200,6 +203,98 @@ begin
     SetMaxCronBeforeQueuedAcquireHook(nil);
     lCron.Free;
     lWorkerDone.Free;
+  end;
+end;
+
+procedure TTestReviewFindings.FailedFree_ShouldNotDetachSharedStateDefaults;
+var
+  lCron: TmaxCron;
+  lBlockingEvent: IMaxCronEvent;
+  lProbeEvent: IMaxCronEvent;
+  lBlockEntered: TEvent;
+  lBlockGate: TEvent;
+  lFreeDone: TEvent;
+  lProbeFired: TEvent;
+  lWaitRes: TWaitResult;
+  lFreeRaised: Integer;
+  lProbeThreadId: Integer;
+  lFreeThread: TThread;
+begin
+  lCron := nil;
+  lFreeThread := nil;
+  lBlockEntered := TEvent.Create(nil, True, False, '');
+  lBlockGate := TEvent.Create(nil, True, False, '');
+  lFreeDone := TEvent.Create(nil, True, False, '');
+  lProbeFired := TEvent.Create(nil, True, False, '');
+  lFreeRaised := 0;
+  lProbeThreadId := MainThreadID;
+  try
+    lCron := TmaxCron.Create(ctPortable);
+    lCron.DefaultInvokeMode := imThread;
+
+    lBlockingEvent := lCron.Add('BlockWhileFreeing');
+    lBlockingEvent.EventPlan := '* * * * * * * 1';
+    lBlockingEvent.InvokeMode := imThread;
+    lBlockingEvent.OverlapMode := omSerialize;
+    lBlockingEvent.OnScheduleProc :=
+      procedure(aSender: IMaxCronEvent)
+      begin
+        lBlockEntered.SetEvent;
+        lBlockGate.WaitFor(3000);
+      end;
+    lBlockingEvent.Run;
+
+    lCron.TickAt(lBlockingEvent.NextSchedule);
+    lWaitRes := lBlockEntered.WaitFor(2000);
+    Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes, 'Blocking callback did not start');
+
+    lFreeThread := TThread.CreateAnonymousThread(
+      procedure
+      begin
+        try
+          lCron.Free;
+        except
+          on Exception do
+            TInterlocked.Exchange(lFreeRaised, 1);
+        end;
+        lFreeDone.SetEvent;
+      end);
+    lFreeThread.FreeOnTerminate := True;
+    lFreeThread.Start;
+
+    lWaitRes := lFreeDone.WaitFor(3000);
+    Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes, 'Cross-thread free did not return');
+    Assert.AreEqual(1, TInterlocked.CompareExchange(lFreeRaised, 0, 0),
+      'Expected fail-fast free while callback is active');
+
+    lBlockGate.SetEvent;
+    CheckSynchronize(250);
+    TThread.Sleep(50);
+
+    lProbeEvent := lCron.Add('DefaultInvokeProbe');
+    lProbeEvent.EventPlan := '* * * * * * * 1';
+    lProbeEvent.InvokeMode := imDefault;
+    lProbeEvent.OnScheduleProc :=
+      procedure(aSender: IMaxCronEvent)
+      begin
+        TInterlocked.Exchange(lProbeThreadId, TThread.CurrentThread.ThreadID);
+        lProbeFired.SetEvent;
+      end;
+    lProbeEvent.Run;
+
+    lCron.TickAt(lProbeEvent.NextSchedule);
+    lWaitRes := lProbeFired.WaitFor(2000);
+    Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes, 'Probe callback did not run');
+    Assert.IsTrue(TInterlocked.CompareExchange(lProbeThreadId, 0, 0) <> MainThreadID,
+      'Failed free should not detach shared state defaults');
+  finally
+    lBlockGate.SetEvent;
+    lProbeFired.Free;
+    lFreeDone.Free;
+    lBlockGate.Free;
+    lBlockEntered.Free;
+    if lCron <> nil then
+      lCron.Free;
   end;
 end;
 

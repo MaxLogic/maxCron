@@ -5,6 +5,7 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Added regression tests for VCL cross-thread free rejection and failed-free shared-state recovery (`TestVclBackend.FreeCtVcl_OnWorkerThread_Raises`, `TestReviewFindings.FailedFree_ShouldNotDetachSharedStateDefaults`).
 - Added `scripts/perf-gate-local.sh` for one-command local performance verification (build benchmark runner, execute benchmark, optional baseline compare, structural gate check). (T-085)
 - Added `scripts/generate-benchmark-trend-report.sh` to generate markdown trend reports from benchmark CSV history with per-scenario means and run-to-run deltas. (T-086)
 - Added `scripts/check-benchmark-metrics.sh` to gate structural benchmark ratios (`visited`, `rebuilds`, `switches`) with configurable thresholds for stable perf regression checks independent of wall-clock variance. (T-084)
@@ -73,6 +74,8 @@ All notable user-visible changes to this project will be documented in this file
 - Clarified documentation that `imMainThread` dispatch requires an active main-thread message pump (non-UI/service hosts should use async/thread invoke modes).
 
 ### Fixed
+- Fixed `TmaxCron.Free` lifecycle/thread-safety by rejecting `ctVcl` backend free calls off the main thread and by restoring shared-state attachment when a fail-fast free attempt is aborted while callbacks are still active.
+- Fixed scheduler default-policy races by synchronizing default invoke/day-match/dialect/misfire reads/writes across callback and mutation threads.
 - Fixed heap rebuild complexity by switching to linear-time heapify during rebuild (`O(n)` instead of repeated `O(log n)` inserts). (T-060)
 - Fixed unnamed-event deletion ergonomics by allowing `Delete(Event)` and `Delete(Id)` without index-based APIs. (T-050)
 - Fixed CLI demo build path resolution by adding `..\lib\maxlogicfoundation` to demo unit search path. (T-053)

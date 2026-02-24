@@ -20,6 +20,9 @@ type
 
     [Test]
     procedure CreateCtVcl_OnWorkerThread_Raises;
+
+    [Test]
+    procedure FreeCtVcl_OnWorkerThread_Raises;
   end;
 
 implementation
@@ -112,6 +115,46 @@ begin
     Assert.AreEqual(1, TInterlocked.CompareExchange(lRaised, 0, 0),
       'Expected ctVcl creation off the main thread to fail');
   finally
+    lDone.Free;
+  end;
+end;
+
+procedure TTestVclBackend.FreeCtVcl_OnWorkerThread_Raises;
+var
+  lCron: TmaxCron;
+  lDone: TEvent;
+  lRaised: Integer;
+  lFreed: Integer;
+  lThread: TThread;
+begin
+  lCron := TmaxCron.Create(ctVcl);
+  lDone := TEvent.Create(nil, True, False, '');
+  lRaised := 0;
+  lFreed := 0;
+  try
+    lThread := TThread.CreateAnonymousThread(
+      procedure
+      begin
+        try
+          lCron.Free;
+          TInterlocked.Exchange(lFreed, 1);
+        except
+          on Exception do
+            TInterlocked.Exchange(lRaised, 1);
+        end;
+        lDone.SetEvent;
+      end);
+    lThread.FreeOnTerminate := True;
+    lThread.Start;
+
+    Assert.AreEqual(TWaitResult.wrSignaled, lDone.WaitFor(3000), 'Worker did not complete');
+    Assert.AreEqual(0, TInterlocked.CompareExchange(lFreed, 0, 0),
+      'Expected cross-thread free to be rejected');
+    Assert.AreEqual(1, TInterlocked.CompareExchange(lRaised, 0, 0),
+      'Expected ctVcl free off the main thread to fail fast');
+  finally
+    if TInterlocked.CompareExchange(lFreed, 0, 0) = 0 then
+      lCron.Free;
     lDone.Free;
   end;
 end;
