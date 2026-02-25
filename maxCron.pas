@@ -4451,6 +4451,7 @@ end;
 function TmaxCron.TryGetEventByIdLocked(const aId: Int64; out aEventItem: IMaxCronEvent): Boolean;
 var
   lIndex: Integer;
+  lCronEvent: TmaxCronEvent;
 begin
   aEventItem := nil;
   lIndex := FindIndexByIdLocked(aId);
@@ -4458,8 +4459,24 @@ begin
     Exit(False);
 
   aEventItem := fItems[lIndex];
-  if (aEventItem = nil) or (aEventItem.Id <> aId) then
+  if aEventItem = nil then
     Exit(False);
+
+  if TryGetCronEvent(aEventItem, lCronEvent) then
+  begin
+    if lCronEvent.fId <> aId then
+    begin
+      aEventItem := nil;
+      Exit(False);
+    end;
+    Exit(True);
+  end;
+
+  if aEventItem.Id <> aId then
+  begin
+    aEventItem := nil;
+    Exit(False);
+  end;
 
   Result := True;
 end;
@@ -5108,6 +5125,8 @@ var
   lSnapshot: TArray<IMaxCronEvent>;
   lDepthIncreased: Boolean;
   lEvent: TmaxCronEvent;
+  lId: Int64;
+  lDueAt: TDateTime;
 begin
   aDueCount := 0;
   lDepthIncreased := False;
@@ -5127,7 +5146,7 @@ begin
     for x := 0 to Length(lSnapshot) - 1 do
       if TryGetCronEvent(lSnapshot[x], lEvent) then
       begin
-        if lEvent.Enabled and (lEvent.NextSchedule > 0) and (lEvent.NextSchedule <= aNow) then
+        if lEvent.TryGetHeapScheduleSnapshot(lId, lDueAt) and (lDueAt <= aNow) then
           Inc(aDueCount);
         lEvent.checkTimer(aNow);
       end;
