@@ -25,6 +25,12 @@ Type
 
   TmaxCronNotifyEvent = procedure(Sender: IMaxCronEvent) of object;
   TmaxCronNotifyProc = reference to procedure(Sender: IMaxCronEvent);
+  TmaxCronDeadLetterEvent = procedure(Sender: IMaxCronEvent; const aErrorText: string;
+    const aAttemptCount: Integer) of object;
+  TmaxCronDeadLetterProc = reference to procedure(Sender: IMaxCronEvent; const aErrorText: string;
+    const aAttemptCount: Integer);
+
+  TmaxCronShutdownPolicy = (spWait, spCancel, spForce);
 
   TmaxCronInvokeMode = (
     imDefault,    // use scheduler DefaultInvokeMode
@@ -81,6 +87,41 @@ Type
   TWordArray = array of Word;
   TFindNextScheduleResult = (fnsFound, fnsNotFound, fnsSearchLimitReached);
 
+  TMaxCronPersistedEvent = record
+    Name: string;
+    EventPlan: string;
+    Enabled: Boolean;
+    InvokeMode: TmaxCronInvokeMode;
+    OverlapMode: TmaxCronOverlapMode;
+    DayMatchMode: TmaxCronDayMatchMode;
+    Dialect: TmaxCronDialect;
+    MisfirePolicy: TmaxCronMisfirePolicy;
+    TimeZoneId: string;
+    DstSpringPolicy: TmaxCronDstSpringPolicy;
+    DstFallPolicy: TmaxCronDstFallPolicy;
+    WeekdaysOnly: Boolean;
+    ExcludedDatesCsv: string;
+    BlackoutStartTime: TDateTime;
+    BlackoutEndTime: TDateTime;
+    ValidFrom: TDateTime;
+    ValidTo: TDateTime;
+    Tag: Integer;
+    NumOfExecutionsPerformed: UInt64;
+    LastExecution: TDateTime;
+    NextSchedule: TDateTime;
+    NextScheduleNeedsResolve: Boolean;
+    RetryMaxAttempts: Integer;
+    RetryInitialDelayMs: Cardinal;
+    RetryBackoffMultiplier: Double;
+    RetryMaxDelayMs: Cardinal;
+  end;
+
+  IMaxCronScheduleStore = interface
+    ['{502728E8-EFA0-4FE3-AC8D-2F3C7BF8B2D8}']
+    procedure Save(const aEvents: TArray<TMaxCronPersistedEvent>);
+    function TryLoad(out aEvents: TArray<TMaxCronPersistedEvent>): Boolean;
+  end;
+
   IMaxCronEvent = interface
     ['{FA8F7A40-5E06-4C8A-B908-6CB2D9FC2C89}']
     function Run: IMaxCronEvent;
@@ -113,6 +154,18 @@ Type
     procedure SetDialect(const aValue: TmaxCronDialect);
     function GetMisfirePolicy: TmaxCronMisfirePolicy;
     procedure SetMisfirePolicy(const aValue: TmaxCronMisfirePolicy);
+    function GetRetryMaxAttempts: Integer;
+    procedure SetRetryMaxAttempts(const aValue: Integer);
+    function GetRetryInitialDelayMs: Cardinal;
+    procedure SetRetryInitialDelayMs(const aValue: Cardinal);
+    function GetRetryBackoffMultiplier: Double;
+    procedure SetRetryBackoffMultiplier(const aValue: Double);
+    function GetRetryMaxDelayMs: Cardinal;
+    procedure SetRetryMaxDelayMs(const aValue: Cardinal);
+    function GetOnDeadLetterEvent: TmaxCronDeadLetterEvent;
+    procedure SetOnDeadLetterEvent(const aValue: TmaxCronDeadLetterEvent);
+    function GetOnDeadLetterProc: TmaxCronDeadLetterProc;
+    procedure SetOnDeadLetterProc(const aValue: TmaxCronDeadLetterProc);
     function GetTimeZoneId: string;
     procedure SetTimeZoneId(const aValue: string);
     function GetDstSpringPolicy: TmaxCronDstSpringPolicy;
@@ -148,6 +201,12 @@ Type
     property DayMatchMode: TmaxCronDayMatchMode read GetDayMatchMode write SetDayMatchMode;
     property Dialect: TmaxCronDialect read GetDialect write SetDialect;
     property MisfirePolicy: TmaxCronMisfirePolicy read GetMisfirePolicy write SetMisfirePolicy;
+    property RetryMaxAttempts: Integer read GetRetryMaxAttempts write SetRetryMaxAttempts;
+    property RetryInitialDelayMs: Cardinal read GetRetryInitialDelayMs write SetRetryInitialDelayMs;
+    property RetryBackoffMultiplier: Double read GetRetryBackoffMultiplier write SetRetryBackoffMultiplier;
+    property RetryMaxDelayMs: Cardinal read GetRetryMaxDelayMs write SetRetryMaxDelayMs;
+    property OnDeadLetterEvent: TmaxCronDeadLetterEvent read GetOnDeadLetterEvent write SetOnDeadLetterEvent;
+    property OnDeadLetterProc: TmaxCronDeadLetterProc read GetOnDeadLetterProc write SetOnDeadLetterProc;
     property TimeZoneId: string read GetTimeZoneId write SetTimeZoneId;
     property DstSpringPolicy: TmaxCronDstSpringPolicy read GetDstSpringPolicy write SetDstSpringPolicy;
     property DstFallPolicy: TmaxCronDstFallPolicy read GetDstFallPolicy write SetDstFallPolicy;
@@ -255,6 +314,7 @@ Type
 
       TCronHeapEntry = record
         DueAt: TDateTime;
+        DueAtUnits: Int64;
         EventId: Int64;
       end;
   private
@@ -266,6 +326,7 @@ Type
     fDefaultMisfirePolicy: TmaxCronMisfirePolicy;
     fDefaultMisfireCatchUpLimit: Cardinal;
     fDefaultsLock: TCriticalSection;
+    fUsePooledThreadDispatch: Boolean;
     fTimer: ICronTimer;
     fItems: TList<IMaxCronEvent>;
     fItemsById: TDictionary<Int64, Integer>;
@@ -312,12 +373,20 @@ Type
     fWatchdogSwitchWindowTicks: Integer;
     fWatchdogTickLagMs: Cardinal;
     fWatchdogLastTickElapsedUs: Int64;
+    fGlobalDispatchLock: TCriticalSection;
+    fGlobalMaxConcurrentCallbacks: Integer;
+    fGlobalMaxDispatchPerSecond: Integer;
+    fGlobalActiveCallbacks: Integer;
+    fGlobalRateWindowStartTick: UInt64;
+    fGlobalRateWindowDispatches: Integer;
+    fShutdownRequested: Integer;
     fItemsLock: TCriticalSection;
     fPendingFree: TList<IMaxCronEvent>;
     fNextId: Int64;
     fTickDepth: Integer;
     fTickQueued: Integer;
     fSharedState: IInterface;
+    fScheduleStore: IMaxCronScheduleStore;
     fAsyncKeepAlive: TList<IInterface>;
     fAsyncLock: TCriticalSection;
     function EventNameKey(const aName: string): string;
@@ -339,6 +408,10 @@ Type
     function SchedulerEngineToText(const aEngine: TSchedulerEngine): string;
     function AutoStateToText(const aState: TAutoSchedulerState): string;
     function UpdateEwma(const aCurrent, aSample, aAlpha: Double): Double;
+    function IsShutdownRequested: Boolean;
+    function HasDispatchLimits: Boolean;
+    function TryAcquireDispatchPermit(const aTimeoutMs: Cardinal): Boolean;
+    procedure ReleaseDispatchPermit;
     function GetWatchdogSwitchChurn: Integer;
     procedure UpdateWatchdogAfterTick(const aTickNow, aWallNow: TDateTime; const aElapsedMicroseconds: Int64);
     procedure PruneAutoSwitchHistoryLocked(const aCurrentTick: UInt64; const aWindowTicks: Integer);
@@ -377,6 +450,12 @@ Type
     procedure SetDefaultDialect(const Value: TmaxCronDialect);
     procedure SetDefaultMisfirePolicy(const aValue: TmaxCronMisfirePolicy);
     procedure SetDefaultMisfireCatchUpLimit(const Value: Cardinal);
+    function GetScheduleStore: IMaxCronScheduleStore;
+    procedure SetScheduleStore(const aStore: IMaxCronScheduleStore);
+    function GetGlobalMaxConcurrentCallbacks: Integer;
+    procedure SetGlobalMaxConcurrentCallbacks(const aValue: Integer);
+    function GetGlobalMaxDispatchPerSecond: Integer;
+    procedure SetGlobalMaxDispatchPerSecond(const aValue: Integer);
 
   public
     constructor Create; overload;
@@ -396,6 +475,9 @@ Type
     function TryGetAutoDiagnostics(out aDiagnostics: TMaxCronAutoDiagnostics): Boolean;
     function TryGetWatchdogDiagnostics(out aDiagnostics: TMaxCronWatchdogDiagnostics): Boolean;
     function GetMetricsSnapshot: TMaxCronMetricsSnapshot;
+    function SaveScheduleState: Integer;
+    function RestoreScheduleState(const aReplaceExisting: Boolean = True): Integer;
+    function Shutdown(const aTimeoutMs: Cardinal; const aPolicy: TmaxCronShutdownPolicy = spWait): Boolean;
 
     property RequestedTimerBackend: TmaxCronTimerBackend read fRequestedTimerBackend;
     property ActiveTimerBackend: TmaxCronTimerBackend read fActiveTimerBackend;
@@ -404,6 +486,11 @@ Type
     property DefaultDialect: TmaxCronDialect read fDefaultDialect write SetDefaultDialect;
     property DefaultMisfirePolicy: TmaxCronMisfirePolicy read fDefaultMisfirePolicy write SetDefaultMisfirePolicy;
     property DefaultMisfireCatchUpLimit: Cardinal read fDefaultMisfireCatchUpLimit write SetDefaultMisfireCatchUpLimit;
+    property ScheduleStore: IMaxCronScheduleStore read GetScheduleStore write SetScheduleStore;
+    property GlobalMaxConcurrentCallbacks: Integer read GetGlobalMaxConcurrentCallbacks
+      write SetGlobalMaxConcurrentCallbacks;
+    property GlobalMaxDispatchPerSecond: Integer read GetGlobalMaxDispatchPerSecond
+      write SetGlobalMaxDispatchPerSecond;
 
     {$IFDEF MAXCRON_TESTS}
     procedure TickAt(const aNow: TDateTime);
@@ -673,6 +760,11 @@ type
     procedure FlushPendingFree;
     procedure ExecuteQueuedTick;
     procedure ResetTickQueued;
+    function ShouldUsePooledThreadDispatch: Boolean;
+    function HasDispatchLimits: Boolean;
+    function AcquireDispatchPermit(const aTimeoutMs: Cardinal): Boolean;
+    procedure ReleaseDispatchPermit;
+    function IsShutdownRequested: Boolean;
   end;
 
   TCronSharedState = class(TInterfacedObject, ICronSharedState)
@@ -703,6 +795,11 @@ type
     procedure FlushPendingFree;
     procedure ExecuteQueuedTick;
     procedure ResetTickQueued;
+    function ShouldUsePooledThreadDispatch: Boolean;
+    function HasDispatchLimits: Boolean;
+    function AcquireDispatchPermit(const aTimeoutMs: Cardinal): Boolean;
+    procedure ReleaseDispatchPermit;
+    function IsShutdownRequested: Boolean;
   end;
 
   TVclCronTimer = class(TInterfacedObject, ICronTimer)
@@ -756,6 +853,8 @@ type
     FValidFrom: TDateTime;
     FValidTo: TDateTime;
     FOnScheduleProc: TmaxCronNotifyProc;
+    FOnDeadLetterEvent: TmaxCronDeadLetterEvent;
+    FOnDeadLetterProc: TmaxCronDeadLetterProc;
     fNumOfExecutions: UInt64;
     fNumOfDue: UInt64;
     fLastExecutionTime: TDateTime;
@@ -766,9 +865,17 @@ type
     fDayMatchMode: TmaxCronDayMatchMode;
     fDialect: TmaxCronDialect;
     fMisfirePolicy: TmaxCronMisfirePolicy;
+    fRetryMaxAttempts: Integer;
+    fRetryInitialDelayMs: Cardinal;
+    fRetryBackoffMultiplier: Double;
+    fRetryMaxDelayMs: Cardinal;
     fTimeZoneId: string;
     fTimeZoneKind: TCronTimeZoneKind;
     fTimeZoneOffsetMinutes: Integer;
+    fTimeZoneOffsetDayFraction: Double;
+    fUtcToLocalCacheHourKey: Int64;
+    fUtcToLocalCacheOffsetDays: Double;
+    fUtcToLocalCacheStable: Boolean;
     fDstSpringPolicy: TmaxCronDstSpringPolicy;
     fDstFallPolicy: TmaxCronDstFallPolicy;
     fWeekdaysOnly: Boolean;
@@ -795,8 +902,14 @@ type
     function GetUserDataInterface: IInterface;
     function GetOnScheduleEvent: TmaxCronNotifyEvent;
     function GetOnScheduleProc: TmaxCronNotifyProc;
+    function GetOnDeadLetterEvent: TmaxCronDeadLetterEvent;
+    function GetOnDeadLetterProc: TmaxCronDeadLetterProc;
     function GetInvokeMode: TmaxCronInvokeMode;
     function GetDialect: TmaxCronDialect;
+    function GetRetryMaxAttempts: Integer;
+    function GetRetryInitialDelayMs: Cardinal;
+    function GetRetryBackoffMultiplier: Double;
+    function GetRetryMaxDelayMs: Cardinal;
     function GetTimeZoneId: string;
     function GetDstSpringPolicy: TmaxCronDstSpringPolicy;
     function GetDstFallPolicy: TmaxCronDstFallPolicy;
@@ -808,6 +921,7 @@ type
     function GetValidTo: TDateTime;
 
     procedure SetOnScheduleEvent(const Value: TmaxCronNotifyEvent);
+    procedure SetOnDeadLetterEvent(const Value: TmaxCronDeadLetterEvent);
     procedure SetTag(const Value: Integer);
     procedure SetUserData(const Value: Pointer);
     procedure SetEventPlan(const Value: string);
@@ -817,11 +931,16 @@ type
     procedure SetValidTo(const Value: TDateTime);
     procedure SetUserDataInterface(const Value: IInterface);
     procedure SetOnScheduleProc(const Value: TmaxCronNotifyProc);
+    procedure SetOnDeadLetterProc(const Value: TmaxCronDeadLetterProc);
     procedure SetInvokeMode(const Value: TmaxCronInvokeMode);
     procedure SetOverlapMode(const Value: TmaxCronOverlapMode);
     procedure SetDayMatchMode(const Value: TmaxCronDayMatchMode);
     procedure SetDialect(const Value: TmaxCronDialect);
     procedure SetMisfirePolicy(const Value: TmaxCronMisfirePolicy);
+    procedure SetRetryMaxAttempts(const Value: Integer);
+    procedure SetRetryInitialDelayMs(const Value: Cardinal);
+    procedure SetRetryBackoffMultiplier(const Value: Double);
+    procedure SetRetryMaxDelayMs(const Value: Cardinal);
     procedure SetTimeZoneId(const Value: string);
     procedure SetDstSpringPolicy(const Value: TmaxCronDstSpringPolicy);
     procedure SetDstFallPolicy(const Value: TmaxCronDstFallPolicy);
@@ -865,6 +984,7 @@ type
     function FindNextScheduleWithPolicies(const aBaseSystemLocal: TDateTime; out aNextSystemLocal: TDateTime): TFindNextScheduleResult;
     function SystemLocalToEventLocal(const aSystemLocal: TDateTime): TDateTime;
     function EventLocalToSystemLocal(const aEventLocal: TDateTime; out aSystemLocal: TDateTime): Boolean;
+    function TryGetStableLocalOffsetForUtc(const aUtc: TDateTime; out aOffsetDays: Double): Boolean;
     function TryParseTimeZone(const aValue: string; out aKind: TCronTimeZoneKind;
       out aOffsetMinutes: Integer; out aNormalized: string): Boolean;
     procedure ParseExcludedDatesCsv(const aValue: string; out aDateSerials: TArray<Integer>);
@@ -895,12 +1015,18 @@ type
     property UserDataInterface: IInterface read FUserDataInterface write SetUserDataInterface;
     property OnScheduleEvent: TmaxCronNotifyEvent read FOnScheduleEvent write SetOnScheduleEvent;
     property OnScheduleProc: TmaxCronNotifyProc read FOnScheduleProc write SetOnScheduleProc;
+    property OnDeadLetterEvent: TmaxCronDeadLetterEvent read GetOnDeadLetterEvent write SetOnDeadLetterEvent;
+    property OnDeadLetterProc: TmaxCronDeadLetterProc read GetOnDeadLetterProc write SetOnDeadLetterProc;
     property Enabled: Boolean read GetEnabled write SetEnabled;
     property InvokeMode: TmaxCronInvokeMode read fInvokeMode write SetInvokeMode;
     property OverlapMode: TmaxCronOverlapMode read GetOverlapMode write SetOverlapMode;
     property DayMatchMode: TmaxCronDayMatchMode read GetDayMatchMode write SetDayMatchMode;
     property Dialect: TmaxCronDialect read fDialect write SetDialect;
     property MisfirePolicy: TmaxCronMisfirePolicy read GetMisfirePolicy write SetMisfirePolicy;
+    property RetryMaxAttempts: Integer read GetRetryMaxAttempts write SetRetryMaxAttempts;
+    property RetryInitialDelayMs: Cardinal read GetRetryInitialDelayMs write SetRetryInitialDelayMs;
+    property RetryBackoffMultiplier: Double read GetRetryBackoffMultiplier write SetRetryBackoffMultiplier;
+    property RetryMaxDelayMs: Cardinal read GetRetryMaxDelayMs write SetRetryMaxDelayMs;
     property TimeZoneId: string read fTimeZoneId write SetTimeZoneId;
     property DstSpringPolicy: TmaxCronDstSpringPolicy read fDstSpringPolicy write SetDstSpringPolicy;
     property DstFallPolicy: TmaxCronDstFallPolicy read fDstFallPolicy write SetDstFallPolicy;
@@ -959,6 +1085,21 @@ const
   OneMinute = 1 / 24 / 60;
   OneSecond = OneMinute / 60;
   OneHour = 1 / 24;
+  cTickUnitsPerDay = 24.0 * 60.0 * 60.0 * 1000.0;
+
+function DateTimeToTickUnits(const aValue: TDateTime): Int64;
+var
+  lScaled: Double;
+begin
+  lScaled := aValue * cTickUnitsPerDay;
+  if IsNan(lScaled) then
+    Exit(0);
+  if lScaled > High(Int64) then
+    Exit(High(Int64));
+  if lScaled < Low(Int64) then
+    Exit(Low(Int64));
+  Result := Round(lScaled);
+end;
 
 const
   DayNames: array [1 .. 7] of string = (
@@ -2854,9 +2995,17 @@ begin
   fDayMatchMode := TmaxCronDayMatchMode.dmDefault;
   fDialect := cdMaxCron;
   fMisfirePolicy := TmaxCronMisfirePolicy.mpDefault;
+  fRetryMaxAttempts := 0;
+  fRetryInitialDelayMs := 0;
+  fRetryBackoffMultiplier := 2.0;
+  fRetryMaxDelayMs := 30000;
   fTimeZoneId := 'LOCAL';
   fTimeZoneKind := TCronTimeZoneKind.ctzLocal;
   fTimeZoneOffsetMinutes := 0;
+  fTimeZoneOffsetDayFraction := 0;
+  fUtcToLocalCacheHourKey := Low(Int64);
+  fUtcToLocalCacheOffsetDays := 0;
+  fUtcToLocalCacheStable := False;
   fDstSpringPolicy := TmaxCronDstSpringPolicy.dspSkip;
   fDstFallPolicy := TmaxCronDstFallPolicy.dfpRunOnce;
   fWeekdaysOnly := False;
@@ -3012,6 +3161,16 @@ begin
   end;
 end;
 
+procedure TmaxCronEvent.SetOnDeadLetterEvent(const Value: TmaxCronDeadLetterEvent);
+begin
+  fLock.Acquire;
+  try
+    FOnDeadLetterEvent := Value;
+  finally
+    fLock.Release;
+  end;
+end;
+
 procedure TmaxCronEvent.SetNumOfExecutions(const Value: uint64);
 begin
   fLock.Acquire;
@@ -3109,6 +3268,8 @@ var
 begin
   lNormalizedName := NormalizeEventName(aName);
   Result := nil;
+  if IsShutdownRequested then
+    raise Exception.Create('Scheduler is shut down');
 
   fDefaultsLock.Acquire;
   try
@@ -3443,6 +3604,75 @@ begin
   end;
 end;
 
+function TCronSharedState.ShouldUsePooledThreadDispatch: Boolean;
+var
+  lOwner: TmaxCron;
+begin
+  Result := False;
+  if not TryAcquireOwner(lOwner) then
+    Exit;
+  try
+    Result := lOwner.fUsePooledThreadDispatch;
+  finally
+    ReleaseOwner;
+  end;
+end;
+
+function TCronSharedState.HasDispatchLimits: Boolean;
+var
+  lOwner: TmaxCron;
+begin
+  Result := False;
+  if not TryAcquireOwner(lOwner) then
+    Exit;
+  try
+    Result := lOwner.HasDispatchLimits;
+  finally
+    ReleaseOwner;
+  end;
+end;
+
+function TCronSharedState.AcquireDispatchPermit(const aTimeoutMs: Cardinal): Boolean;
+var
+  lOwner: TmaxCron;
+begin
+  Result := False;
+  if not TryAcquireOwner(lOwner) then
+    Exit;
+  try
+    Result := lOwner.TryAcquireDispatchPermit(aTimeoutMs);
+  finally
+    ReleaseOwner;
+  end;
+end;
+
+procedure TCronSharedState.ReleaseDispatchPermit;
+var
+  lOwner: TmaxCron;
+begin
+  if not TryAcquireOwner(lOwner) then
+    Exit;
+  try
+    lOwner.ReleaseDispatchPermit;
+  finally
+    ReleaseOwner;
+  end;
+end;
+
+function TCronSharedState.IsShutdownRequested: Boolean;
+var
+  lOwner: TmaxCron;
+begin
+  Result := True;
+  if not TryAcquireOwner(lOwner) then
+    Exit;
+  try
+    Result := lOwner.IsShutdownRequested;
+  finally
+    ReleaseOwner;
+  end;
+end;
+
 constructor TVclCronTimer.Create;
 begin
   inherited Create;
@@ -3602,6 +3832,8 @@ begin
 end;
 
 constructor TmaxCron.Create(const aTimerBackend: TmaxCronTimerBackend);
+var
+  lIntValue: Integer;
 begin
   inherited Create;
 
@@ -3612,6 +3844,7 @@ begin
   fAutoSwitchHistory := TQueue<UInt64>.Create;
   fAutoLock := TCriticalSection.Create;
   fWatchdogLock := TCriticalSection.Create;
+  fGlobalDispatchLock := TCriticalSection.Create;
   fItemsLock := TCriticalSection.Create;
   fDefaultsLock := TCriticalSection.Create;
   fPendingFree := TList<IMaxCronEvent>.Create;
@@ -3622,6 +3855,14 @@ begin
   fDefaultDialect := cdMaxCron;
   fDefaultMisfirePolicy := TmaxCronMisfirePolicy.mpCatchUpAll;
   fDefaultMisfireCatchUpLimit := 1;
+  fUsePooledThreadDispatch := SameText(Trim(GetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL')), '1') or
+    SameText(Trim(GetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL')), 'true');
+  fGlobalMaxConcurrentCallbacks := 0;
+  fGlobalMaxDispatchPerSecond := 0;
+  fGlobalActiveCallbacks := 0;
+  fGlobalRateWindowStartTick := 0;
+  fGlobalRateWindowDispatches := 0;
+  fShutdownRequested := 0;
   fAsyncLock := TCriticalSection.Create;
   fAsyncKeepAlive := TList<IInterface>.Create;
   fTickQueued := 0;
@@ -3661,6 +3902,10 @@ begin
   fWatchdogMaxInFlightCallbacks := 128;
   fWatchdogMaxSwitchChurn := 8;
   fWatchdogSwitchWindowTicks := 256;
+  if TryReadAutoIntEnv('MAXCRON_GLOBAL_MAX_CONCURRENT', lIntValue) then
+    fGlobalMaxConcurrentCallbacks := ClampAutoInt(lIntValue, 0, High(Integer));
+  if TryReadAutoIntEnv('MAXCRON_GLOBAL_MAX_DISPATCH_PER_SECOND', lIntValue) then
+    fGlobalMaxDispatchPerSecond := ClampAutoInt(lIntValue, 0, High(Integer));
   ConfigureWatchdogSettings;
   ConfigureSchedulerEngine;
   fSharedState := TCronSharedState.Create(Self);
@@ -3969,6 +4214,106 @@ begin
   if aCurrent <= 0 then
     Exit(aSample);
   Result := (aCurrent * (1.0 - aAlpha)) + (aSample * aAlpha);
+end;
+
+function TmaxCron.IsShutdownRequested: Boolean;
+begin
+  Result := TInterlocked.CompareExchange(fShutdownRequested, 0, 0) <> 0;
+end;
+
+function TmaxCron.HasDispatchLimits: Boolean;
+begin
+  Result := (fGlobalMaxConcurrentCallbacks > 0) or (fGlobalMaxDispatchPerSecond > 0);
+end;
+
+function TmaxCron.TryAcquireDispatchPermit(const aTimeoutMs: Cardinal): Boolean;
+var
+  lStartTick: UInt64;
+  lNowTick: UInt64;
+  lElapsedTick: UInt64;
+  lRemainingTick: UInt64;
+  lWindowElapsed: UInt64;
+  lWaitMs: Cardinal;
+begin
+  Result := False;
+  if IsShutdownRequested then
+    Exit;
+  if not HasDispatchLimits then
+    Exit(True);
+
+  lStartTick := TThread.GetTickCount64;
+  while True do
+  begin
+    if IsShutdownRequested then
+      Exit(False);
+
+    fGlobalDispatchLock.Acquire;
+    try
+      lNowTick := TThread.GetTickCount64;
+      if fGlobalMaxDispatchPerSecond > 0 then
+      begin
+        lWindowElapsed := lNowTick - fGlobalRateWindowStartTick;
+        if (fGlobalRateWindowStartTick = 0) or (lWindowElapsed >= 1000) then
+        begin
+          fGlobalRateWindowStartTick := lNowTick;
+          fGlobalRateWindowDispatches := 0;
+        end;
+      end;
+
+      if (fGlobalMaxConcurrentCallbacks > 0) and
+        (fGlobalActiveCallbacks >= fGlobalMaxConcurrentCallbacks) then
+        lWaitMs := 1
+      else if (fGlobalMaxDispatchPerSecond > 0) and
+        (fGlobalRateWindowDispatches >= fGlobalMaxDispatchPerSecond) then
+      begin
+        lWindowElapsed := lNowTick - fGlobalRateWindowStartTick;
+        if lWindowElapsed >= 1000 then
+        begin
+          fGlobalRateWindowStartTick := lNowTick;
+          fGlobalRateWindowDispatches := 0;
+          lWaitMs := 0;
+        end else
+          lWaitMs := Cardinal(1000 - lWindowElapsed);
+      end else
+        lWaitMs := 0;
+
+      if lWaitMs = 0 then
+      begin
+        Inc(fGlobalActiveCallbacks);
+        if fGlobalMaxDispatchPerSecond > 0 then
+          Inc(fGlobalRateWindowDispatches);
+        Exit(True);
+      end;
+    finally
+      fGlobalDispatchLock.Release;
+    end;
+
+    if aTimeoutMs <> High(Cardinal) then
+    begin
+      lNowTick := TThread.GetTickCount64;
+      lElapsedTick := lNowTick - lStartTick;
+      if lElapsedTick >= UInt64(aTimeoutMs) then
+        Exit(False);
+      lRemainingTick := UInt64(aTimeoutMs) - lElapsedTick;
+      if UInt64(lWaitMs) > lRemainingTick then
+        lWaitMs := Cardinal(lRemainingTick);
+    end;
+
+    if lWaitMs = 0 then
+      lWaitMs := 1;
+    TThread.Sleep(lWaitMs);
+  end;
+end;
+
+procedure TmaxCron.ReleaseDispatchPermit;
+begin
+  fGlobalDispatchLock.Acquire;
+  try
+    if fGlobalActiveCallbacks > 0 then
+      Dec(fGlobalActiveCallbacks);
+  finally
+    fGlobalDispatchLock.Release;
+  end;
 end;
 
 function TmaxCron.GetWatchdogSwitchChurn: Integer;
@@ -4496,6 +4841,74 @@ begin
   end;
 end;
 
+function TmaxCron.GetScheduleStore: IMaxCronScheduleStore;
+begin
+  fDefaultsLock.Acquire;
+  try
+    Result := fScheduleStore;
+  finally
+    fDefaultsLock.Release;
+  end;
+end;
+
+procedure TmaxCron.SetScheduleStore(const aStore: IMaxCronScheduleStore);
+begin
+  fDefaultsLock.Acquire;
+  try
+    fScheduleStore := aStore;
+  finally
+    fDefaultsLock.Release;
+  end;
+end;
+
+function TmaxCron.GetGlobalMaxConcurrentCallbacks: Integer;
+begin
+  fGlobalDispatchLock.Acquire;
+  try
+    Result := fGlobalMaxConcurrentCallbacks;
+  finally
+    fGlobalDispatchLock.Release;
+  end;
+end;
+
+procedure TmaxCron.SetGlobalMaxConcurrentCallbacks(const aValue: Integer);
+begin
+  fGlobalDispatchLock.Acquire;
+  try
+    if aValue < 0 then
+      fGlobalMaxConcurrentCallbacks := 0
+    else
+      fGlobalMaxConcurrentCallbacks := aValue;
+  finally
+    fGlobalDispatchLock.Release;
+  end;
+end;
+
+function TmaxCron.GetGlobalMaxDispatchPerSecond: Integer;
+begin
+  fGlobalDispatchLock.Acquire;
+  try
+    Result := fGlobalMaxDispatchPerSecond;
+  finally
+    fGlobalDispatchLock.Release;
+  end;
+end;
+
+procedure TmaxCron.SetGlobalMaxDispatchPerSecond(const aValue: Integer);
+begin
+  fGlobalDispatchLock.Acquire;
+  try
+    if aValue < 0 then
+      fGlobalMaxDispatchPerSecond := 0
+    else
+      fGlobalMaxDispatchPerSecond := aValue;
+    fGlobalRateWindowStartTick := 0;
+    fGlobalRateWindowDispatches := 0;
+  finally
+    fGlobalDispatchLock.Release;
+  end;
+end;
+
 function TmaxCron.NormalizeEventName(const aName: string): string;
 begin
   Result := Trim(aName);
@@ -4623,9 +5036,9 @@ end;
 
 function TmaxCron.HeapEntryLessThan(const aLeft, aRight: TCronHeapEntry): Boolean;
 begin
-  if aLeft.DueAt < aRight.DueAt then
+  if aLeft.DueAtUnits < aRight.DueAtUnits then
     Exit(True);
-  if aLeft.DueAt > aRight.DueAt then
+  if aLeft.DueAtUnits > aRight.DueAtUnits then
     Exit(False);
   Result := aLeft.EventId < aRight.EventId;
 end;
@@ -4686,6 +5099,7 @@ var
   lEntry: TCronHeapEntry;
 begin
   lEntry.DueAt := aDueAt;
+  lEntry.DueAtUnits := DateTimeToTickUnits(aDueAt);
   lEntry.EventId := aEventId;
   fHeapItems.Add(lEntry);
   HeapSiftUpLocked(fHeapItems.Count - 1);
@@ -4735,7 +5149,10 @@ begin
     if not TryGetCronEvent(fItems[lIndex], lEvent) then
       Continue;
     if lEvent.TryGetHeapScheduleSnapshot(lEntry.EventId, lEntry.DueAt) then
+    begin
+      lEntry.DueAtUnits := DateTimeToTickUnits(lEntry.DueAt);
       fHeapItems.Add(lEntry);
+    end;
   end;
 
   lCount := fHeapItems.Count;
@@ -4751,16 +5168,18 @@ end;
 procedure TmaxCron.CollectScanDueIdsLocked(const aNow: TDateTime; const aIds: TList<Int64>);
 var
   lIndex: Integer;
+  lNowUnits: Int64;
   lEvent: TmaxCronEvent;
   lId: Int64;
   lDueAt: TDateTime;
 begin
   aIds.Clear;
+  lNowUnits := DateTimeToTickUnits(aNow);
   for lIndex := 0 to fItems.Count - 1 do
   begin
     if not TryGetCronEvent(fItems[lIndex], lEvent) then
       Continue;
-    if lEvent.TryGetHeapScheduleSnapshot(lId, lDueAt) and (lDueAt <= aNow) then
+    if lEvent.TryGetHeapScheduleSnapshot(lId, lDueAt) and (DateTimeToTickUnits(lDueAt) <= lNowUnits) then
       aIds.Add(lId);
   end;
   aIds.Sort;
@@ -4769,15 +5188,17 @@ end;
 procedure TmaxCron.CollectHeapDueIdsLocked(const aNow: TDateTime; const aIds: TList<Int64>);
 var
   lIndex: Integer;
+  lNowUnits: Int64;
   lEntry: TCronHeapEntry;
   lEventItem: IMaxCronEvent;
   lEvent: TmaxCronEvent;
 begin
   aIds.Clear;
+  lNowUnits := DateTimeToTickUnits(aNow);
   for lIndex := 0 to fHeapItems.Count - 1 do
   begin
     lEntry := fHeapItems[lIndex];
-    if lEntry.DueAt > aNow then
+    if lEntry.DueAtUnits > lNowUnits then
       Continue;
     if not TryGetEventByIdLocked(lEntry.EventId, lEventItem) then
       Continue;
@@ -5054,6 +5475,8 @@ begin
   if Pointer(Self) = gMaxCronExecutingCron then
     raise Exception.Create('TmaxCron.Free cannot be called from one of its own callbacks');
 
+  TInterlocked.Exchange(fShutdownRequested, 1);
+
   if lSharedState <> nil then
   begin
     lSharedState.Detach;
@@ -5080,6 +5503,7 @@ begin
         lSharedState.Attach(Self);
         lDetachedSharedState := False;
       end;
+      TInterlocked.Exchange(fShutdownRequested, 0);
       raise;
     end;
   end;
@@ -5115,6 +5539,7 @@ begin
   fAutoSwitchHistory.Free;
   fAutoLock.Free;
   fWatchdogLock.Free;
+  fGlobalDispatchLock.Free;
   fPendingFree.Free;
   fItemsLock.Free;
   fDefaultsLock.Free;
@@ -5135,6 +5560,180 @@ begin
   finally
     fItemsLock.Release;
   end;
+end;
+
+function TmaxCron.SaveScheduleState: Integer;
+var
+  lStore: IMaxCronScheduleStore;
+  lSnapshot: TArray<IMaxCronEvent>;
+  lStates: TArray<TMaxCronPersistedEvent>;
+  lState: TMaxCronPersistedEvent;
+  lEvent: IMaxCronEvent;
+  lCronEvent: TmaxCronEvent;
+  lCount: Integer;
+  lIndex: Integer;
+begin
+  Result := 0;
+  lStore := GetScheduleStore;
+  if lStore = nil then
+    Exit;
+
+  lSnapshot := Snapshot;
+  SetLength(lStates, Length(lSnapshot));
+  lCount := 0;
+  for lIndex := 0 to Length(lSnapshot) - 1 do
+  begin
+    lEvent := lSnapshot[lIndex];
+    if lEvent = nil then
+      Continue;
+
+    lState := Default(TMaxCronPersistedEvent);
+    lState.Name := lEvent.Name;
+    lState.EventPlan := lEvent.EventPlan;
+    lState.Enabled := lEvent.Enabled;
+    lState.InvokeMode := lEvent.InvokeMode;
+    lState.OverlapMode := lEvent.OverlapMode;
+    lState.DayMatchMode := lEvent.DayMatchMode;
+    lState.Dialect := lEvent.Dialect;
+    lState.MisfirePolicy := lEvent.MisfirePolicy;
+    lState.TimeZoneId := lEvent.TimeZoneId;
+    lState.DstSpringPolicy := lEvent.DstSpringPolicy;
+    lState.DstFallPolicy := lEvent.DstFallPolicy;
+    lState.WeekdaysOnly := lEvent.WeekdaysOnly;
+    lState.ExcludedDatesCsv := lEvent.ExcludedDatesCsv;
+    lState.BlackoutStartTime := lEvent.BlackoutStartTime;
+    lState.BlackoutEndTime := lEvent.BlackoutEndTime;
+    lState.ValidFrom := lEvent.ValidFrom;
+    lState.ValidTo := lEvent.ValidTo;
+    lState.Tag := lEvent.Tag;
+    lState.NumOfExecutionsPerformed := lEvent.NumOfExecutionsPerformed;
+    lState.LastExecution := lEvent.LastExecution;
+    lState.NextSchedule := lEvent.NextSchedule;
+    lState.RetryMaxAttempts := lEvent.RetryMaxAttempts;
+    lState.RetryInitialDelayMs := lEvent.RetryInitialDelayMs;
+    lState.RetryBackoffMultiplier := lEvent.RetryBackoffMultiplier;
+    lState.RetryMaxDelayMs := lEvent.RetryMaxDelayMs;
+    if TryGetCronEvent(lEvent, lCronEvent) then
+    begin
+      lCronEvent.fLock.Acquire;
+      try
+        lState.NextScheduleNeedsResolve := lCronEvent.fNextScheduleNeedsResolve;
+      finally
+        lCronEvent.fLock.Release;
+      end;
+    end;
+
+    lStates[lCount] := lState;
+    Inc(lCount);
+  end;
+
+  SetLength(lStates, lCount);
+  lStore.Save(lStates);
+  Result := lCount;
+end;
+
+function TmaxCron.RestoreScheduleState(const aReplaceExisting: Boolean): Integer;
+var
+  lStore: IMaxCronScheduleStore;
+  lStates: TArray<TMaxCronPersistedEvent>;
+  lState: TMaxCronPersistedEvent;
+  lEvent: IMaxCronEvent;
+  lCronEvent: TmaxCronEvent;
+  lIndex: Integer;
+begin
+  Result := 0;
+  lStore := GetScheduleStore;
+  if lStore = nil then
+    Exit;
+  if not lStore.TryLoad(lStates) then
+    Exit;
+
+  if aReplaceExisting then
+    Clear;
+
+  for lIndex := 0 to Length(lStates) - 1 do
+  begin
+    lState := lStates[lIndex];
+    if Trim(lState.Name) = '' then
+      Continue;
+
+    lEvent := Add(lState.Name);
+    lEvent.InvokeMode := lState.InvokeMode;
+    lEvent.OverlapMode := lState.OverlapMode;
+    lEvent.DayMatchMode := lState.DayMatchMode;
+    lEvent.Dialect := lState.Dialect;
+    lEvent.MisfirePolicy := lState.MisfirePolicy;
+    lEvent.RetryMaxAttempts := lState.RetryMaxAttempts;
+    lEvent.RetryInitialDelayMs := lState.RetryInitialDelayMs;
+    lEvent.RetryBackoffMultiplier := lState.RetryBackoffMultiplier;
+    lEvent.RetryMaxDelayMs := lState.RetryMaxDelayMs;
+    lEvent.TimeZoneId := lState.TimeZoneId;
+    lEvent.DstSpringPolicy := lState.DstSpringPolicy;
+    lEvent.DstFallPolicy := lState.DstFallPolicy;
+    lEvent.WeekdaysOnly := lState.WeekdaysOnly;
+    lEvent.ExcludedDatesCsv := lState.ExcludedDatesCsv;
+    lEvent.BlackoutStartTime := lState.BlackoutStartTime;
+    lEvent.BlackoutEndTime := lState.BlackoutEndTime;
+    lEvent.ValidFrom := lState.ValidFrom;
+    lEvent.ValidTo := lState.ValidTo;
+    lEvent.Tag := lState.Tag;
+    if Trim(lState.EventPlan) <> '' then
+      lEvent.EventPlan := lState.EventPlan;
+
+    if lState.Enabled then
+    begin
+      lEvent.Run;
+      if TryGetCronEvent(lEvent, lCronEvent) then
+      begin
+        lCronEvent.fLock.Acquire;
+        try
+          lCronEvent.fNumOfExecutions := lState.NumOfExecutionsPerformed;
+          lCronEvent.fNumOfDue := lState.NumOfExecutionsPerformed;
+          lCronEvent.fLastExecutionTime := lState.LastExecution;
+          if lState.NextSchedule > 0 then
+            lCronEvent.fNextSchedule := lState.NextSchedule;
+          lCronEvent.fNextScheduleNeedsResolve := lState.NextScheduleNeedsResolve;
+        finally
+          lCronEvent.fLock.Release;
+        end;
+      end;
+    end else
+      lEvent.Stop;
+
+    Inc(Result);
+  end;
+end;
+
+function TmaxCron.Shutdown(const aTimeoutMs: Cardinal; const aPolicy: TmaxCronShutdownPolicy): Boolean;
+var
+  lSharedState: ICronSharedState;
+  lWait: TStopwatch;
+begin
+  TInterlocked.Exchange(fShutdownRequested, 1);
+  if fTimer <> nil then
+    fTimer.Stop;
+
+  if (aPolicy = TmaxCronShutdownPolicy.spCancel) or (aPolicy = TmaxCronShutdownPolicy.spForce) then
+    Clear;
+
+  if not Supports(fSharedState, ICronSharedState, lSharedState) then
+    Exit(True);
+
+  if aPolicy = TmaxCronShutdownPolicy.spForce then
+    Exit((lSharedState.GetInFlightCount = 0) and (lSharedState.GetCallbackDepth = 0));
+
+  lWait := TStopwatch.StartNew;
+  while (lSharedState.GetInFlightCount > 0) or (lSharedState.GetCallbackDepth > 0) do
+  begin
+    if lWait.ElapsedMilliseconds >= aTimeoutMs then
+      Exit(False);
+    if TThread.CurrentThread.ThreadID = MainThreadID then
+      CheckSynchronize(1)
+    else
+      TThread.Sleep(1);
+  end;
+
+  Result := True;
 end;
 
 function TmaxCron.TryGetAutoDiagnostics(out aDiagnostics: TMaxCronAutoDiagnostics): Boolean;
@@ -5253,6 +5852,8 @@ procedure TmaxCron.DoTick;
 var
   lNow: TDateTime;
 begin
+  if IsShutdownRequested then
+    Exit;
   lNow := Now;
   DoTickAt(lNow);
 end;
@@ -5267,6 +5868,9 @@ var
   lStartTicks: Int64;
   lWallNow: TDateTime;
 begin
+  if IsShutdownRequested then
+    Exit;
+
   lDueCount := 0;
   lElapsedMicroseconds := 0;
   lEventCount := 0;
@@ -5331,12 +5935,15 @@ var
   x: Integer;
   lSnapshot: TArray<IMaxCronEvent>;
   lDepthIncreased: Boolean;
+  lDueAtUnits: Int64;
   lEvent: TmaxCronEvent;
   lId: Int64;
   lDueAt: TDateTime;
+  lNowUnits: Int64;
 begin
   aDueCount := 0;
   lDepthIncreased := False;
+  lNowUnits := DateTimeToTickUnits(aNow);
   try
     fItemsLock.Acquire;
     try
@@ -5353,8 +5960,12 @@ begin
     for x := 0 to Length(lSnapshot) - 1 do
       if TryGetCronEvent(lSnapshot[x], lEvent) then
       begin
-        if lEvent.TryGetHeapScheduleSnapshot(lId, lDueAt) and (lDueAt <= aNow) then
-          Inc(aDueCount);
+        if lEvent.TryGetHeapScheduleSnapshot(lId, lDueAt) then
+        begin
+          lDueAtUnits := DateTimeToTickUnits(lDueAt);
+          if lDueAtUnits <= lNowUnits then
+            Inc(aDueCount);
+        end;
         lEvent.checkTimer(aNow);
       end;
   finally
@@ -5393,6 +6004,7 @@ var
   lId: Int64;
   lDueAt: TDateTime;
   lCurrentLength: Integer;
+  lNowUnits: Int64;
 
   procedure EnsureDueEventsCapacity;
   begin
@@ -5422,6 +6034,7 @@ begin
   lDepthIncreased := False;
   lDueEventCount := 0;
   lRescheduleCount := 0;
+  lNowUnits := DateTimeToTickUnits(aNow);
   try
     fItemsLock.Acquire;
     try
@@ -5430,7 +6043,7 @@ begin
       if TInterlocked.Exchange(fHeapDirty, 0) = 1 then
         RebuildHeapLocked;
 
-      while HeapPeekLocked(lEntry) and (lEntry.DueAt <= aNow) do
+      while HeapPeekLocked(lEntry) and (lEntry.DueAtUnits <= lNowUnits) do
       begin
         HeapPopLocked(lEntry);
         Inc(fTickEventsVisited);
@@ -5551,6 +6164,9 @@ procedure TmaxCron.QueueTick;
 var
   lSharedState: ICronSharedState;
 begin
+  if IsShutdownRequested then
+    Exit;
+
   if TInterlocked.CompareExchange(fTickQueued, 1, 0) <> 0 then
     Exit;
 
@@ -5579,6 +6195,9 @@ end;
 
 procedure TmaxCron.TimerTimer(Sender: TObject);
 begin
+  if IsShutdownRequested then
+    Exit;
+
   if fActiveTimerBackend = TmaxCronTimerBackend.ctPortable then
   begin
     DoTick;
@@ -5618,6 +6237,16 @@ begin
   fLock.Acquire;
   try
     FOnScheduleProc := Value;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.SetOnDeadLetterProc(const Value: TmaxCronDeadLetterProc);
+begin
+  fLock.Acquire;
+  try
+    FOnDeadLetterProc := Value;
   finally
     fLock.Release;
   end;
@@ -5694,6 +6323,56 @@ begin
   fLock.Acquire;
   try
     fMisfirePolicy := Value;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.SetRetryMaxAttempts(const Value: Integer);
+begin
+  fLock.Acquire;
+  try
+    if Value < 0 then
+      fRetryMaxAttempts := 0
+    else if Value > 1024 then
+      fRetryMaxAttempts := 1024
+    else
+      fRetryMaxAttempts := Value;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.SetRetryInitialDelayMs(const Value: Cardinal);
+begin
+  fLock.Acquire;
+  try
+    fRetryInitialDelayMs := Value;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.SetRetryBackoffMultiplier(const Value: Double);
+begin
+  fLock.Acquire;
+  try
+    if Value < 1.0 then
+      fRetryBackoffMultiplier := 1.0
+    else if Value > 16.0 then
+      fRetryBackoffMultiplier := 16.0
+    else
+      fRetryBackoffMultiplier := Value;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.SetRetryMaxDelayMs(const Value: Cardinal);
+begin
+  fLock.Acquire;
+  try
+    fRetryMaxDelayMs := Value;
   finally
     fLock.Release;
   end;
@@ -5907,6 +6586,10 @@ begin
     fTimeZoneId := lNormalized;
     fTimeZoneKind := lKind;
     fTimeZoneOffsetMinutes := lOffsetMinutes;
+    fTimeZoneOffsetDayFraction := lOffsetMinutes / (24 * 60);
+    fUtcToLocalCacheHourKey := Low(Int64);
+    fUtcToLocalCacheOffsetDays := 0;
+    fUtcToLocalCacheStable := False;
     fPendingDstSecondSchedule := 0;
     ClearAmbiguousSecondGate;
     if FEnabled then
@@ -6001,18 +6684,57 @@ begin
   end;
 end;
 
+function TmaxCronEvent.TryGetStableLocalOffsetForUtc(const aUtc: TDateTime; out aOffsetDays: Double): Boolean;
+var
+  lHourKey: Int64;
+  lHourStartUtc: TDateTime;
+  lHourEndUtc: TDateTime;
+  lStartOffsetDays: Double;
+  lEndOffsetDays: Double;
+begin
+  Result := False;
+  aOffsetDays := 0;
+  lHourKey := Trunc(aUtc * 24.0);
+
+  if fUtcToLocalCacheStable and (fUtcToLocalCacheHourKey = lHourKey) then
+  begin
+    aOffsetDays := fUtcToLocalCacheOffsetDays;
+    Exit(True);
+  end;
+
+  lHourStartUtc := lHourKey / 24.0;
+  lHourEndUtc := lHourStartUtc + OneHour - OneSecond;
+  lStartOffsetDays := TTimeZone.Local.ToLocalTime(lHourStartUtc) - lHourStartUtc;
+  lEndOffsetDays := TTimeZone.Local.ToLocalTime(lHourEndUtc) - lHourEndUtc;
+
+  fUtcToLocalCacheHourKey := lHourKey;
+  if Abs(lStartOffsetDays - lEndOffsetDays) <= (1 / cTickUnitsPerDay) then
+  begin
+    fUtcToLocalCacheOffsetDays := lStartOffsetDays;
+    fUtcToLocalCacheStable := True;
+    aOffsetDays := lStartOffsetDays;
+    Result := True;
+  end else begin
+    fUtcToLocalCacheStable := False;
+  end;
+end;
+
 function TmaxCronEvent.SystemLocalToEventLocal(const aSystemLocal: TDateTime): TDateTime;
 var
   lUtc: TDateTime;
 begin
-  lUtc := TTimeZone.Local.ToUniversalTime(aSystemLocal);
   case fTimeZoneKind of
+    TCronTimeZoneKind.ctzLocal:
+      Result := aSystemLocal;
     TCronTimeZoneKind.ctzUtc:
-      Result := lUtc;
+      Result := TTimeZone.Local.ToUniversalTime(aSystemLocal);
     TCronTimeZoneKind.ctzFixedOffset:
-      Result := lUtc + (fTimeZoneOffsetMinutes / (24 * 60));
+      begin
+        lUtc := TTimeZone.Local.ToUniversalTime(aSystemLocal);
+        Result := lUtc + fTimeZoneOffsetDayFraction;
+      end;
   else
-    Result := TTimeZone.Local.ToLocalTime(lUtc);
+    Result := aSystemLocal;
   end;
 end;
 
@@ -6020,6 +6742,7 @@ function TmaxCronEvent.EventLocalToSystemLocal(const aEventLocal: TDateTime; out
 var
   lUseLocal: TDateTime;
   lUtc: TDateTime;
+  lOffsetDays: Double;
 begin
   lUseLocal := aEventLocal;
   case fTimeZoneKind of
@@ -6054,13 +6777,20 @@ begin
       end;
     TCronTimeZoneKind.ctzUtc:
       begin
-        aSystemLocal := TTimeZone.Local.ToLocalTime(aEventLocal);
+        lUtc := aEventLocal;
+        if TryGetStableLocalOffsetForUtc(lUtc, lOffsetDays) then
+          aSystemLocal := lUtc + lOffsetDays
+        else
+          aSystemLocal := TTimeZone.Local.ToLocalTime(lUtc);
         Result := True;
       end;
   else
     begin
-      lUtc := aEventLocal - (fTimeZoneOffsetMinutes / (24 * 60));
-      aSystemLocal := TTimeZone.Local.ToLocalTime(lUtc);
+      lUtc := aEventLocal - fTimeZoneOffsetDayFraction;
+      if TryGetStableLocalOffsetForUtc(lUtc, lOffsetDays) then
+        aSystemLocal := lUtc + lOffsetDays
+      else
+        aSystemLocal := TTimeZone.Local.ToLocalTime(lUtc);
       Result := True;
     end;
   end;
@@ -6396,6 +7126,26 @@ begin
   end;
 end;
 
+function TmaxCronEvent.GetOnDeadLetterEvent: TmaxCronDeadLetterEvent;
+begin
+  fLock.Acquire;
+  try
+    Result := FOnDeadLetterEvent;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetOnDeadLetterProc: TmaxCronDeadLetterProc;
+begin
+  fLock.Acquire;
+  try
+    Result := FOnDeadLetterProc;
+  finally
+    fLock.Release;
+  end;
+end;
+
 function TmaxCronEvent.GetInvokeMode: TmaxCronInvokeMode;
 begin
   fLock.Acquire;
@@ -6411,6 +7161,46 @@ begin
   fLock.Acquire;
   try
     Result := fDialect;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetRetryMaxAttempts: Integer;
+begin
+  fLock.Acquire;
+  try
+    Result := fRetryMaxAttempts;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetRetryInitialDelayMs: Cardinal;
+begin
+  fLock.Acquire;
+  try
+    Result := fRetryInitialDelayMs;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetRetryBackoffMultiplier: Double;
+begin
+  fLock.Acquire;
+  try
+    Result := fRetryBackoffMultiplier;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetRetryMaxDelayMs: Cardinal;
+begin
+  fLock.Acquire;
+  try
+    Result := fRetryMaxDelayMs;
   finally
     fLock.Release;
   end;
@@ -6822,11 +7612,35 @@ procedure TmaxCronEvent.ExecuteOnce(const aInvokeMode: TmaxCronInvokeMode;
 var
   lToken: ICronEventToken;
   lEvent: TmaxCronEvent;
+  lRetryMaxAttempts: Integer;
+  lAttemptIndex: Integer;
+  lAttemptCount: Integer;
+  lCurrentDelayMs: Cardinal;
+  lMaxDelayMs: Cardinal;
+  lNextDelayMs: Cardinal;
+  lBackoffMultiplier: Double;
+  lErrorText: string;
+  lDeadLetterEvent: TmaxCronDeadLetterEvent;
+  lDeadLetterProc: TmaxCronDeadLetterProc;
+  lDispatchLimitsActive: Boolean;
+  lPermitAcquired: Boolean;
+  lInvocationSucceeded: Boolean;
   lOwnerPointer: Pointer;
   lPreviousCron: Pointer;
 begin
   try
     lEvent := nil;
+    lRetryMaxAttempts := 0;
+    lCurrentDelayMs := 0;
+    lMaxDelayMs := 0;
+    lBackoffMultiplier := 1.0;
+    lErrorText := '';
+    lAttemptCount := 0;
+    lDeadLetterEvent := nil;
+    lDeadLetterProc := nil;
+    lDispatchLimitsActive := False;
+    lInvocationSucceeded := False;
+    lPermitAcquired := True;
 
     if not Supports(fEventToken, ICronEventToken, lToken) then Exit;
     if not lToken.TryGetEvent(lEvent) then Exit;
@@ -6834,8 +7648,23 @@ begin
     fLock.Acquire;
     try
       Inc(fNumOfExecutions);
+      lRetryMaxAttempts := fRetryMaxAttempts;
+      lCurrentDelayMs := fRetryInitialDelayMs;
+      lMaxDelayMs := fRetryMaxDelayMs;
+      lBackoffMultiplier := fRetryBackoffMultiplier;
+      lDeadLetterEvent := FOnDeadLetterEvent;
+      lDeadLetterProc := FOnDeadLetterProc;
     finally
       fLock.Release;
+    end;
+
+    if fSharedState <> nil then
+      lDispatchLimitsActive := fSharedState.HasDispatchLimits;
+    if lDispatchLimitsActive then
+    begin
+      lPermitAcquired := fSharedState.AcquireDispatchPermit(High(Cardinal));
+      if not lPermitAcquired then
+        Exit;
     end;
 
     if fSharedState <> nil then
@@ -6848,14 +7677,57 @@ begin
     lPreviousCron := gMaxCronExecutingCron;
     gMaxCronExecutingCron := lOwnerPointer;
     try
-      if Assigned(aOnEvent) then
-        aOnEvent(lEvent);
-      if Assigned(aOnProc) then
-        aOnProc(lEvent);
+      for lAttemptIndex := 0 to lRetryMaxAttempts do
+      begin
+        Inc(lAttemptCount);
+        try
+          if Assigned(aOnEvent) then
+            aOnEvent(lEvent);
+          if Assigned(aOnProc) then
+            aOnProc(lEvent);
+          lInvocationSucceeded := True;
+          Break;
+        except
+          on E: Exception do
+          begin
+            lErrorText := E.ClassName + ': ' + E.Message;
+            if lAttemptIndex >= lRetryMaxAttempts then
+              Break;
+
+            if lCurrentDelayMs > 0 then
+              TThread.Sleep(lCurrentDelayMs);
+
+            if lBackoffMultiplier > 1.0 then
+              lNextDelayMs := Round(lCurrentDelayMs * lBackoffMultiplier)
+            else
+              lNextDelayMs := lCurrentDelayMs;
+
+            if lNextDelayMs < lCurrentDelayMs then
+              lNextDelayMs := High(Cardinal);
+            if (lMaxDelayMs > 0) and (lNextDelayMs > lMaxDelayMs) then
+              lNextDelayMs := lMaxDelayMs;
+            lCurrentDelayMs := lNextDelayMs;
+          end;
+        end;
+      end;
     finally
       gMaxCronExecutingCron := lPreviousCron;
       if fSharedState <> nil then
         fSharedState.DecrementCallbackDepth;
+      if lDispatchLimitsActive and lPermitAcquired and (fSharedState <> nil) then
+        fSharedState.ReleaseDispatchPermit;
+    end;
+
+    if (not lInvocationSucceeded) and (lAttemptCount > 0) then
+    begin
+      try
+        if Assigned(lDeadLetterEvent) then
+          lDeadLetterEvent(lEvent, lErrorText, lAttemptCount);
+        if Assigned(lDeadLetterProc) then
+          lDeadLetterProc(lEvent, lErrorText, lAttemptCount);
+      except
+        // dead-letter hook failures are intentionally isolated from scheduler execution flow
+      end;
     end;
   finally
     if (aOverlapMode = TmaxCronOverlapMode.omAllowOverlap) or (aOverlapMode = TmaxCronOverlapMode.omSkipIfRunning) then
@@ -6928,13 +7800,22 @@ begin
 
     TmaxCronInvokeMode.imThread:
       begin
-        lThread := TThread.CreateAnonymousThread(
-          procedure
-          begin
-            ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
-          end);
-        lThread.FreeOnTerminate := True;
-        lThread.Start;
+        if (fSharedState <> nil) and fSharedState.ShouldUsePooledThreadDispatch then
+        begin
+          TTask.Run(
+            procedure
+            begin
+              ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+            end);
+        end else begin
+          lThread := TThread.CreateAnonymousThread(
+            procedure
+            begin
+              ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode);
+            end);
+          lThread.FreeOnTerminate := True;
+          lThread.Start;
+        end;
       end;
 
     TmaxCronInvokeMode.imTTask:

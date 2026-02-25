@@ -2,8 +2,8 @@
 Next task ID: T-102
 
 ## Summary
-Open tasks: 7 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 7, Blocked: 0)
-Done tasks: 95
+Open tasks: 0 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 0, Blocked: 0)
+Done tasks: 102
 
 ## In Progress
 
@@ -13,48 +13,47 @@ Done tasks: 95
 
 ## Next – Later
 
-### T-093 [PERF] Add pooled worker dispatch mode for burst callbacks
-Outcome: Add a pooled execution path for callback dispatch to avoid per-fire `CreateAnonymousThread` overhead under bursty workloads while preserving overlap semantics and teardown safety.
-Proof: - Command: `./build-and-run-tests-stress.sh -cm:Quiet && ./build-and-run-benchmarks.sh --iterations=7 --warmup=1 --out-dir=benchmarks/results --quiet`; - Expect: no regressions in stress suites and measurable reduction in callback-dispatch overhead versus current thread-per-fire path.
-Touches: `maxCron.pas`, `tests/unit/TestInvokeModes.pas`, `tests/unit/TestHeavyStressMixed.pas`, `benchmarks/`, `README.md`, `TASKS.md`
-
-### T-094 [PERF] Add timezone conversion fast paths for non-local events
-Outcome: Optimize timezone conversion by short-circuiting repeated local-timezone calls for UTC/fixed-offset events and caching stable offset paths where DST ambiguity rules do not apply.
-Proof: - Command: `./build-and-run-tests.sh -cm:Quiet && tests/maxCronStressTests.exe --consolemode:quiet --run:TestCalendarTimeZone.TTestCalendarTimeZone.*`; - Expect: timezone suite stays green and benchmarked timezone-heavy scenario latency decreases.
-Touches: `maxCron.pas`, `tests/unit/TestCalendarTimeZone.pas`, `tests/unit/TestRobustCoverage.pas`, `TASKS.md`
-
-### T-095 [PERF] Reduce hot-path float-date overhead with cached integer time units
-Outcome: Introduce safe internal cached integer time comparisons in due-evaluation hot loops to reduce repeated `TDateTime` float operations without changing public API behavior.
-Proof: - Command: `./build-and-run-tests.sh -cm:Quiet && ./build-and-run-benchmarks.sh --iterations=7 --warmup=1 --out-dir=benchmarks/results --quiet`; - Expect: full suites pass and scan/auto scenarios show net elapsed-time improvement.
-Touches: `maxCron.pas`, `benchmarks/maxCronBenchmarks.dpr`, `tests/unit/TestHeavyStressMixed.pas`, `TASKS.md`
-
-### T-097 [API] Add pluggable persistent schedule store and recovery
-Outcome: Add persistent event state storage and restart recovery so scheduled events can be restored deterministically across process restarts with explicit consistency guarantees.
-Proof: - Command: `./build-delphi.sh tests/maxCronTests.dproj -config release && tests/maxCronTests.exe --consolemode:quiet --run:TestPersistenceRecovery.TTestPersistenceRecovery.Restart_RestoresEventsAndSchedules`; - Expect: integration tests confirm save/restart/load semantics and no schedule drift.
-Touches: `maxCron.pas`, `lib/`, `tests/unit/TestPersistenceRecovery.pas`, `README.md`, `TASKS.md`
-
-### T-098 [API] Add retry/backoff policy and dead-letter hooks
-Outcome: Add configurable retry/backoff behavior for failing callbacks plus dead-letter hook/callback after retry exhaustion, with deterministic overlap/misfire interaction rules.
-Proof: - Command: `./build-delphi.sh tests/maxCronTests.dproj -config release && tests/maxCronTests.exe --consolemode:quiet --run:TestRetryBackoff.TTestRetryBackoff.*`; - Expect: retry timing/count assertions pass and dead-letter path executes only after configured exhaustion.
-Touches: `maxCron.pas`, `tests/unit/TestRetryBackoff.pas`, `README.md`, `TASKS.md`
-
-### T-099 [API] Add scheduler-wide concurrency and rate limits
-Outcome: Add global scheduler-level concurrency and dispatch-rate controls that cap aggregate callback throughput while preserving per-event overlap semantics and fairness.
-Proof: - Command: `./build-delphi.sh tests/maxCronStressTests.dproj -config release && tests/maxCronStressTests.exe --consolemode:quiet --run:TestGlobalLimits.TTestGlobalLimits.*`; - Expect: tests prove active-callback and dispatch-rate caps are enforced under concurrent due bursts.
-Touches: `maxCron.pas`, `tests/unit/TestGlobalLimits.pas`, `README.md`, `TASKS.md`
-
-### T-101 [API] Add graceful drain/shutdown API with timeout policy
-Outcome: Add an explicit shutdown API that supports graceful callback draining with timeout and policy selection (wait/cancel/force), avoiding ad-hoc shutdown handling by callers.
-Proof: - Command: `./build-delphi.sh tests/maxCronTests.dproj -config release && tests/maxCronTests.exe --consolemode:quiet --run:TestGracefulShutdown.TTestGracefulShutdown.*`; - Expect: shutdown tests confirm deterministic drain behavior, timeout enforcement, and safe post-shutdown state.
-Touches: `maxCron.pas`, `tests/unit/TestGracefulShutdown.pas`, `README.md`, `TASKS.md`
-Deps: T-099
-
-
 ## Blocked / OnHold
 
 
 
 ## Done
+
+### T-101 [API] Add graceful drain/shutdown API with timeout policy
+Outcome: Added explicit scheduler shutdown with timeout policy selection (`spWait` / `spCancel` / `spForce`) so callers can drain or cut over deterministically without ad-hoc shutdown logic.
+Proof: `tests/maxCronTests.exe --consolemode:quiet --run:TestGracefulShutdown.TTestGracefulShutdown` passes (`Tests Found: 3`, `Passed: 3`, `Failed: 0`); full suite `./build-and-run-tests.sh -cm:Quiet` also passes (`Stress 18/18`, `Core 141/141`, `VCL 4/4`).
+Touches: `maxCron.pas`, `tests/unit/TestGracefulShutdown.pas`, `tests/maxCronTests.dpr`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+Deps: T-099
+
+### T-099 [API] Add scheduler-wide concurrency and rate limits
+Outcome: Added scheduler-wide throughput controls (`GlobalMaxConcurrentCallbacks`, `GlobalMaxDispatchPerSecond`) with lock-safe permit accounting that preserves existing per-event overlap behavior.
+Proof: `tests/maxCronStressTests.exe --consolemode:quiet --run:TestGlobalLimits.TTestGlobalLimits` passes (`Tests Found: 2`, `Passed: 2`, `Failed: 0`); full stress gate `./build-and-run-tests-stress.sh -cm:Quiet` passes (`Stress 18/18`, `Core 141/141`, `VCL 4/4`).
+Touches: `maxCron.pas`, `tests/unit/TestGlobalLimits.pas`, `tests/maxCronStressTests.dpr`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+
+### T-098 [API] Add retry/backoff policy and dead-letter hooks
+Outcome: Added per-event retry/backoff policy controls and dead-letter callbacks that trigger only after retry exhaustion, with deterministic retry counting.
+Proof: `tests/maxCronTests.exe --consolemode:quiet --run:TestRetryBackoff.TTestRetryBackoff` passes (`Tests Found: 2`, `Passed: 2`, `Failed: 0`); full gate `./build-and-run-tests.sh -cm:Quiet` passes (`Stress 18/18`, `Core 141/141`, `VCL 4/4`).
+Touches: `maxCron.pas`, `tests/unit/TestRetryBackoff.pas`, `tests/maxCronTests.dpr`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+
+### T-097 [API] Add pluggable persistent schedule store and recovery
+Outcome: Added pluggable schedule persistence/recovery API (`IMaxCronScheduleStore`) with deterministic restore of core schedule metadata across restart.
+Proof: `tests/maxCronTests.exe --consolemode:quiet --run:TestPersistenceRecovery.TTestPersistenceRecovery.Restart_RestoresEventsAndSchedules` passes (`Tests Found: 1`, `Passed: 1`, `Failed: 0`); full gate `./build-and-run-tests.sh -cm:Quiet` passes (`Stress 18/18`, `Core 141/141`, `VCL 4/4`).
+Touches: `maxCron.pas`, `tests/unit/TestPersistenceRecovery.pas`, `tests/maxCronTests.dpr`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+
+### T-095 [PERF] Reduce hot-path float-date overhead with cached integer time units
+Outcome: Reduced hot-path due-evaluation overhead by using cached integer tick units (`DueAtUnits`) in scan/heap comparisons and heap pop loops, while keeping public API behavior unchanged.
+Proof: `./build-and-run-benchmarks.sh --iterations=15 --warmup=2 --out-dir=benchmarks/results --quiet` succeeds (artifact `maxcron-benchmarks-20260225-232226.csv`) and `./scripts/check-benchmark-metrics.sh benchmarks/results/maxcron-benchmarks-20260225-232226.csv` passes all checks (`EXIT=0`); full tests `./build-and-run-tests.sh -cm:Quiet` pass (`Stress 18/18`, `Core 141/141`, `VCL 4/4`).
+Touches: `maxCron.pas`, `benchmarks/maxCronBenchmarks.dpr`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+
+### T-094 [PERF] Add timezone conversion fast paths for non-local events
+Outcome: Optimized UTC/fixed-offset timezone conversion by short-circuiting with cached stable local-offset windows when DST ambiguity is not active.
+Proof: `tests/maxCronTests.exe --consolemode:quiet --run:TestCalendarTimeZone.TTestCalendarTimeZone` passes (`Tests Found: 8`, `Passed: 8`, `Failed: 0`); full tests `./build-and-run-tests.sh -cm:Quiet` pass (`Stress 18/18`, `Core 141/141`, `VCL 4/4`).
+Touches: `maxCron.pas`, `tests/unit/TestCalendarTimeZone.pas`, `README.md`, `CHANGELOG.md`, `TASKS.md`
+
+### T-093 [PERF] Add pooled worker dispatch mode for burst callbacks
+Outcome: Added pooled worker dispatch mode for `imThread` callbacks (`MAXCRON_THREAD_DISPATCH_POOL`) to avoid per-fire anonymous thread creation under burst loads while keeping overlap semantics intact.
+Proof: `tests/maxCronTests.exe --consolemode:quiet --run:TestInvokeModes.TTestInvokeModes.Invoke_ThreadDispatchPool_ReusesWorkers` passes (`Tests Found: 1`, `Passed: 1`, `Failed: 0`); stress gate `./build-and-run-tests-stress.sh -cm:Quiet` passes (`Stress 18/18`, `Core 141/141`, `VCL 4/4`); benchmark gate `./build-and-run-benchmarks.sh --iterations=15 --warmup=2 --out-dir=benchmarks/results --quiet` + `./scripts/check-benchmark-metrics.sh benchmarks/results/maxcron-benchmarks-20260225-232226.csv` passes.
+Touches: `maxCron.pas`, `tests/unit/TestInvokeModes.pas`, `tests/maxCronTests.dpr`, `README.md`, `CHANGELOG.md`, `TASKS.md`
 
 ### T-096 [CI] Add p95/p99 benchmark regression gate
 Outcome: Extended benchmark gating to enforce elapsed tail-latency guardrails (`p95`/`p99`) in `scripts/check-benchmark-metrics.sh`, added `p99` summary output in `benchmarks/maxCronBenchmarks.dpr`, and documented new gate controls including latest-artifact default behavior (`MAXCRON_GATE_CHECK_ALL=0`).

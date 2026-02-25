@@ -5,6 +5,11 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Added pooled `imThread` dispatch mode (`MAXCRON_THREAD_DISPATCH_POOL`) to reduce per-fire anonymous-thread churn in burst callback workloads, with regression coverage in `TestInvokeModes.Invoke_ThreadDispatchPool_ReusesWorkers`. (T-093)
+- Added persistent schedule storage/recovery API (`IMaxCronScheduleStore`, `ScheduleStore`, `SaveScheduleState`, `RestoreScheduleState`) with restart round-trip regression coverage (`TestPersistenceRecovery`). (T-097)
+- Added per-event retry/backoff controls (`RetryMaxAttempts`, `RetryInitialDelayMs`, `RetryBackoffMultiplier`, `RetryMaxDelayMs`) and dead-letter hooks (`OnDeadLetterEvent`/`OnDeadLetterProc`) with deterministic retry-exhaustion and success-within-budget tests. (T-098)
+- Added scheduler-wide callback throughput controls (`GlobalMaxConcurrentCallbacks`, `GlobalMaxDispatchPerSecond`) with stress regressions proving concurrency/rate cap enforcement under burst dispatch. (T-099)
+- Added explicit scheduler shutdown API (`Shutdown(timeout, policy)`) with wait/cancel/force policy semantics and post-shutdown safety tests. (T-101)
 - Added `tests/run-long-soak.sh` and `TestLongSoak24h.EngineModes_LogicalSoak_NoMisses` for cross-mode (`scan`/`heap`/`auto`) logical 24h soak validation with report artifacts. (T-088)
 - Added deterministic cron fuzz-oracle regression coverage (`TestCronFuzzOracle`) that validates `GetNextOccurrences` against a bounded brute-force oracle across `cdStandard`/`cdMaxCron`/`cdQuartzSecondsFirst` and `dmDefault`/`dmAnd`/`dmOr`, with seed replay hints for failures. (T-089)
 - Added async-boundary chaos fault-injection regression coverage (`TestChaosFaultInjection`) for queued-acquire failures, dispatch-start launch failures, callback exception recovery, and delete-during-callback cancellation races with bounded teardown assertions. (T-090)
@@ -50,6 +55,8 @@ All notable user-visible changes to this project will be documented in this file
 - Added stress/robust tests for heap-mode execution, shadow parity churn coverage, and high-N scan-vs-heap benchmark assertions. (T-058, T-059)
 
 ### Changed
+- Optimized UTC/fixed-offset timezone conversion paths by caching stable local-offset windows for UTC->local mapping and by avoiding repeated local-time conversions when DST ambiguity rules are not in play. (T-094)
+- Reduced due-evaluation hot-path float-date overhead by caching integer tick units in scan/heap comparisons and heap entries, lowering repeated `TDateTime` conversion cost in tick loops. (T-095)
 - Updated canonical build/test scripts to support `MAXCRON_DEBUG_SAFETY=1`, switching builds to `Debug` configuration for safety/lifetime validation lanes. (T-091)
 - Reduced heap tick allocator overhead in `DoTickAtHeap` by replacing per-tick `TList` staging allocations with dynamic-array buffers; benchmark compare against `maxcron-benchmarks-20260224-112107.csv` showed elapsed improvements (`sparse_high_n_heap -31.24%`, `sparse_high_n_auto -4.20%`, `adversarial_auto_no_budget -1.28%`, `adversarial_auto_budget -1.02%`).
 - Reduced heap dense-tick reschedule overhead by reusing already-collected due-event references in `DoTickAtHeap` instead of repeating id->event dictionary/interface lookups before each heap push; benchmark compare against `maxcron-benchmarks-20260224-095249.csv` showed elapsed improvements (`sparse_high_n_heap -19.08%`, `sparse_high_n_auto -14.82%`, `adversarial_auto_no_budget -5.97%`, `adversarial_auto_budget -0.70%`). (T-087)

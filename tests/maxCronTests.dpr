@@ -24,7 +24,10 @@ uses
   TestMisfirePolicy in 'unit\TestMisfirePolicy.pas',
   TestMaxCron in 'unit\TestMaxCron.pas',
   TestMetricsSnapshot in 'unit\TestMetricsSnapshot.pas',
+  TestPersistenceRecovery in 'unit\TestPersistenceRecovery.pas',
+  TestRetryBackoff in 'unit\TestRetryBackoff.pas',
   TestRobustCoverage in 'unit\TestRobustCoverage.pas',
+  TestGracefulShutdown in 'unit\TestGracefulShutdown.pas',
   TestReviewFindings in 'unit\TestReviewFindings.pas',
   TestScheduleNext in 'unit\TestScheduleNext.pas',
   TestStress in 'unit\TestStress.pas',
@@ -51,7 +54,10 @@ begin
     TDUnitX.RegisterTestFixture(TTestMisfirePolicy);
     TDUnitX.RegisterTestFixture(TTestMaxCron);
     TDUnitX.RegisterTestFixture(TTestMetricsSnapshot);
+    TDUnitX.RegisterTestFixture(TTestPersistenceRecovery);
+    TDUnitX.RegisterTestFixture(TTestRetryBackoff);
     TDUnitX.RegisterTestFixture(TTestRobustCoverage);
+    TDUnitX.RegisterTestFixture(TTestGracefulShutdown);
     TDUnitX.RegisterTestFixture(TTestReviewFindings);
     TDUnitX.RegisterTestFixture(TTestScheduleNext);
     TDUnitX.RegisterTestFixture(TTestStress);

@@ -17,6 +17,11 @@ Homepage: https://maxlogic.eu/portfolio/maxcron-scheduler-for-delphi/
 - Deterministic hash/jitter syntax (`H`, `H/step`, `H(min-max)/step`)
 - Schedule previews and human-readable descriptions
 - Comments and flexible whitespace support
+- Pluggable schedule persistence + restore API (`ScheduleStore`, `SaveScheduleState`, `RestoreScheduleState`)
+- Per-event retry/backoff controls with dead-letter hooks
+- Scheduler-wide global concurrency and dispatch-rate caps
+- Explicit graceful shutdown API with timeout policies (wait/cancel/force)
+- Optional pooled `imThread` dispatch mode for burst-heavy workloads
 
 
 # Sample scheduler usage:
@@ -418,6 +423,85 @@ For those hosts we should use `imMaxAsync`, `imTTask`, or `imThread`.
 If dispatch startup fails (for example, task/thread launch raises, a queued main-thread callback fails before execution acquire, or a serialized-chain continuation launch fails), maxCron rolls back overlap state and execution reservations so future ticks continue normally and `ExecutionLimit` is not consumed by failed launches.
 Our dispatch-start rollback regressions also include repeated serialized retry runs to keep this recovery path stable under tight tick timing.
 
+### Pooled `imThread` dispatch (burst optimization)
+
+For `imThread`, maxCron can reuse runtime worker threads instead of creating one anonymous thread per fire:
+
+```bash
+export MAXCRON_THREAD_DISPATCH_POOL=1
+```
+
+```cmd
+set MAXCRON_THREAD_DISPATCH_POOL=1
+```
+
+Enabled values: `1` or `true` (case-insensitive). Any other value keeps the legacy thread-per-fire path.
+
+### Retry/backoff + dead-letter hooks
+
+Each event can retry callback failures and emit a dead-letter callback after retries are exhausted:
+
+```delphi
+NewSchedule.RetryMaxAttempts := 3;         // retries after the first attempt
+NewSchedule.RetryInitialDelayMs := 50;     // initial delay before first retry
+NewSchedule.RetryBackoffMultiplier := 2.0; // exponential factor
+NewSchedule.RetryMaxDelayMs := 2000;       // cap per-retry delay
+
+NewSchedule.OnDeadLetterProc :=
+  procedure(Sender: IMaxCronEvent; const aErrorText: string; const aAttemptCount: Integer)
+  begin
+    // log, alert, or enqueue for manual handling
+  end;
+```
+
+### Persistent schedule save/restore
+
+We can plug in persistent storage for scheduler state:
+
+```delphi
+type
+  TMyScheduleStore = class(TInterfacedObject, IMaxCronScheduleStore)
+  public
+    procedure Save(const aEvents: TArray<TMaxCronPersistedEvent>);
+    function TryLoad(out aEvents: TArray<TMaxCronPersistedEvent>): Boolean;
+  end;
+
+CronScheduler.ScheduleStore := TMyScheduleStore.Create;
+CronScheduler.SaveScheduleState;
+CronScheduler.RestoreScheduleState(True); // replace existing events
+```
+
+Persistence captures event configuration/state metadata (plan, policies, counters, next schedule). Callback handlers themselves are not serialized and should be rebound by the host after restore when needed.
+
+### Global dispatch caps
+
+We can cap aggregate callback throughput across all events:
+
+```delphi
+CronScheduler.GlobalMaxConcurrentCallbacks := 32; // 0 = disabled
+CronScheduler.GlobalMaxDispatchPerSecond := 200;  // 0 = disabled
+```
+
+Environment alternatives (read at scheduler creation):
+- `MAXCRON_GLOBAL_MAX_CONCURRENT`
+- `MAXCRON_GLOBAL_MAX_DISPATCH_PER_SECOND`
+
+### Graceful shutdown API
+
+`Shutdown` lets us stop new dispatch and optionally drain running callbacks:
+
+```delphi
+if not CronScheduler.Shutdown(5000, spWait) then
+  // timeout reached before full drain
+```
+
+Policies:
+- `spWait`: stop new work and wait for in-flight callbacks up to timeout.
+- `spCancel`: clear schedules first, then wait for in-flight callbacks up to timeout.
+- `spForce`: clear schedules and return immediately (reports whether work was still running).
+
+After shutdown starts, `Add(...)` raises and timer-driven ticks are ignored.
+
 Safety note: we must not call `TmaxCron.Free` from one of its own callbacks.
 That re-entrant shutdown path is now rejected with an exception to prevent deadlocks.
 Free the scheduler from outside callback context.
@@ -520,6 +604,8 @@ NewSchedule.DstFallPolicy := dfpRunOncePreferSecondInstance;
 `dfpRunTwice` executes both ambiguous fall-back instances at the same local wall-clock time.
 For `dfpRunTwice` and `dfpRunOncePreferSecondInstance`, maxCron now waits for the repeated wall-clock pass
 after fallback instead of dispatching the second-instance semantics immediately on the first pass.
+
+Performance note: UTC/fixed-offset events use a stable local-offset cache for UTC->local conversion when the target UTC hour is outside DST-transition ambiguity, which reduces repeated timezone API calls in hot paths.
 
 ## Business calendar exclusions
 

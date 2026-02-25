@@ -10,6 +10,7 @@ uses
   DUnitX.Loggers.Console,
   DUnitX.RunResults,
   maxCron in '..\maxCron.pas',
+  TestGlobalLimits in 'unit\TestGlobalLimits.pas',
   TestHeavyStress in 'unit\TestHeavyStress.pas',
   TestHeavyStressMixed in 'unit\TestHeavyStressMixed.pas',
   TestLongSoak24h in 'unit\TestLongSoak24h.pas',
@@ -22,6 +23,7 @@ begin
   ReportMemoryLeaksOnShutdown := True;
   try
     TDUnitX.CheckCommandLine;
+    TDUnitX.RegisterTestFixture(TTestGlobalLimits);
     TDUnitX.RegisterTestFixture(TTestHeavyStress);
     TDUnitX.RegisterTestFixture(TTestHeavyStressMixed);
     TDUnitX.RegisterTestFixture(TTestLongSoak24h);
