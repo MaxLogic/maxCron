@@ -197,6 +197,34 @@ Type
     TicksSinceSwitch: Integer;
   end;
 
+  TMaxCronWatchdogDiagnostics = record
+    TickLagMs: Cardinal;
+    QueueDepth: Integer;
+    InFlightCallbacks: Integer;
+    SwitchChurn: Integer;
+    LastTickElapsedUs: Int64;
+    MaxTickLagMs: Cardinal;
+    MaxQueueDepth: Integer;
+    MaxInFlightCallbacks: Integer;
+    MaxSwitchChurn: Integer;
+    TickLagBreached: Boolean;
+    QueueDepthBreached: Boolean;
+    InFlightCallbacksBreached: Boolean;
+    SwitchChurnBreached: Boolean;
+    AnyThresholdBreached: Boolean;
+  end;
+
+  TMaxCronMetricsSnapshot = record
+    CapturedAtUtc: TDateTime;
+    ConfiguredEngine: string;
+    EffectiveEngine: string;
+    AutoState: string;
+    AutoSwitchCount: UInt64;
+    TickEventsVisited: UInt64;
+    HeapRebuildCount: UInt64;
+    Watchdog: TMaxCronWatchdogDiagnostics;
+  end;
+
   TmaxCron = class(TObject)
   private
     type
@@ -276,6 +304,14 @@ Type
     fAutoConfig: TAutoControllerConfig;
     fTickEventsVisited: UInt64;
     fHeapRebuildCount: UInt64;
+    fWatchdogLock: TCriticalSection;
+    fWatchdogMaxTickLagMs: Cardinal;
+    fWatchdogMaxQueueDepth: Integer;
+    fWatchdogMaxInFlightCallbacks: Integer;
+    fWatchdogMaxSwitchChurn: Integer;
+    fWatchdogSwitchWindowTicks: Integer;
+    fWatchdogTickLagMs: Cardinal;
+    fWatchdogLastTickElapsedUs: Int64;
     fItemsLock: TCriticalSection;
     fPendingFree: TList<IMaxCronEvent>;
     fNextId: Int64;
@@ -293,6 +329,7 @@ Type
     procedure RemoveEventIndexLocked(const aEventItem: IMaxCronEvent);
     procedure ReindexFromLocked(const aStartIndex: Integer);
     procedure ConfigureSchedulerEngine;
+    procedure ConfigureWatchdogSettings;
     procedure ConfigureAutoControllerSettings;
     function ClampAutoInt(const aValue, aMin, aMax: Integer): Integer;
     function ClampAutoFloat(const aValue, aMin, aMax: Double): Double;
@@ -302,6 +339,8 @@ Type
     function SchedulerEngineToText(const aEngine: TSchedulerEngine): string;
     function AutoStateToText(const aState: TAutoSchedulerState): string;
     function UpdateEwma(const aCurrent, aSample, aAlpha: Double): Double;
+    function GetWatchdogSwitchChurn: Integer;
+    procedure UpdateWatchdogAfterTick(const aTickNow, aWallNow: TDateTime; const aElapsedMicroseconds: Int64);
     procedure PruneAutoSwitchHistoryLocked(const aCurrentTick: UInt64; const aWindowTicks: Integer);
     function IsAutoSwitchBudgetExceededLocked(const aCurrentTick: UInt64; const aWindowTicks,
       aMaxSwitches: Integer): Boolean;
@@ -355,6 +394,8 @@ Type
     function Delete(event: IMaxCronEvent): boolean; overload;
     function Snapshot: TArray<IMaxCronEvent>;
     function TryGetAutoDiagnostics(out aDiagnostics: TMaxCronAutoDiagnostics): Boolean;
+    function TryGetWatchdogDiagnostics(out aDiagnostics: TMaxCronWatchdogDiagnostics): Boolean;
+    function GetMetricsSnapshot: TMaxCronMetricsSnapshot;
 
     property RequestedTimerBackend: TmaxCronTimerBackend read fRequestedTimerBackend;
     property ActiveTimerBackend: TmaxCronTimerBackend read fActiveTimerBackend;
@@ -3570,6 +3611,7 @@ begin
   fHeapItems := TList<TCronHeapEntry>.Create;
   fAutoSwitchHistory := TQueue<UInt64>.Create;
   fAutoLock := TCriticalSection.Create;
+  fWatchdogLock := TCriticalSection.Create;
   fItemsLock := TCriticalSection.Create;
   fDefaultsLock := TCriticalSection.Create;
   fPendingFree := TList<IMaxCronEvent>.Create;
@@ -3612,6 +3654,14 @@ begin
   fAutoDiagLogTicksUntilEmit := 0;
   fTickEventsVisited := 0;
   fHeapRebuildCount := 0;
+  fWatchdogTickLagMs := 0;
+  fWatchdogLastTickElapsedUs := 0;
+  fWatchdogMaxTickLagMs := 2500;
+  fWatchdogMaxQueueDepth := 1;
+  fWatchdogMaxInFlightCallbacks := 128;
+  fWatchdogMaxSwitchChurn := 8;
+  fWatchdogSwitchWindowTicks := 256;
+  ConfigureWatchdogSettings;
   ConfigureSchedulerEngine;
   fSharedState := TCronSharedState.Create(Self);
   CreateTimer(aTimerBackend);
@@ -3798,6 +3848,34 @@ begin
     fAutoConfig.SwitchBudgetMaxSwitches := fAutoConfig.SwitchBudgetWindowTicks;
 end;
 
+procedure TmaxCron.ConfigureWatchdogSettings;
+const
+  cDefaultMaxTickLagMs = 2500;
+  cDefaultMaxQueueDepth = 1;
+  cDefaultMaxInFlightCallbacks = 128;
+  cDefaultMaxSwitchChurn = 8;
+  cDefaultSwitchWindowTicks = 256;
+var
+  lIntValue: Integer;
+begin
+  fWatchdogMaxTickLagMs := cDefaultMaxTickLagMs;
+  fWatchdogMaxQueueDepth := cDefaultMaxQueueDepth;
+  fWatchdogMaxInFlightCallbacks := cDefaultMaxInFlightCallbacks;
+  fWatchdogMaxSwitchChurn := cDefaultMaxSwitchChurn;
+  fWatchdogSwitchWindowTicks := cDefaultSwitchWindowTicks;
+
+  if TryReadAutoIntEnv('MAXCRON_WATCHDOG_MAX_TICK_LAG_MS', lIntValue) then
+    fWatchdogMaxTickLagMs := Cardinal(ClampAutoInt(lIntValue, 0, High(Integer)));
+  if TryReadAutoIntEnv('MAXCRON_WATCHDOG_MAX_QUEUE_DEPTH', lIntValue) then
+    fWatchdogMaxQueueDepth := ClampAutoInt(lIntValue, 0, High(Integer));
+  if TryReadAutoIntEnv('MAXCRON_WATCHDOG_MAX_INFLIGHT', lIntValue) then
+    fWatchdogMaxInFlightCallbacks := ClampAutoInt(lIntValue, 0, High(Integer));
+  if TryReadAutoIntEnv('MAXCRON_WATCHDOG_MAX_SWITCH_CHURN', lIntValue) then
+    fWatchdogMaxSwitchChurn := ClampAutoInt(lIntValue, 0, High(Integer));
+  if TryReadAutoIntEnv('MAXCRON_WATCHDOG_SWITCH_WINDOW', lIntValue) then
+    fWatchdogSwitchWindowTicks := ClampAutoInt(lIntValue, 1, High(Integer));
+end;
+
 procedure TmaxCron.ConfigureSchedulerEngine;
 var
   lValue: string;
@@ -3891,6 +3969,57 @@ begin
   if aCurrent <= 0 then
     Exit(aSample);
   Result := (aCurrent * (1.0 - aAlpha)) + (aSample * aAlpha);
+end;
+
+function TmaxCron.GetWatchdogSwitchChurn: Integer;
+var
+  lWindowTicks: Integer;
+begin
+  Result := 0;
+  if fSchedulerEngine <> TSchedulerEngine.seAuto then
+    Exit;
+
+  lWindowTicks := fWatchdogSwitchWindowTicks;
+  if lWindowTicks < 1 then
+    lWindowTicks := 1;
+
+  fAutoLock.Acquire;
+  try
+    PruneAutoSwitchHistoryLocked(fAutoControllerTick, lWindowTicks);
+    Result := fAutoSwitchHistory.Count;
+  finally
+    fAutoLock.Release;
+  end;
+end;
+
+procedure TmaxCron.UpdateWatchdogAfterTick(const aTickNow, aWallNow: TDateTime;
+  const aElapsedMicroseconds: Int64);
+var
+  lLagMs: Cardinal;
+  lLagMsFloat: Double;
+  lElapsedUs: Int64;
+begin
+  lLagMs := 0;
+  if aTickNow < aWallNow then
+  begin
+    lLagMsFloat := (aWallNow - aTickNow) * 24.0 * 60.0 * 60.0 * 1000.0;
+    if lLagMsFloat > High(Cardinal) then
+      lLagMs := High(Cardinal)
+    else if lLagMsFloat > 0 then
+      lLagMs := Round(lLagMsFloat);
+  end;
+
+  lElapsedUs := aElapsedMicroseconds;
+  if lElapsedUs < 0 then
+    lElapsedUs := 0;
+
+  fWatchdogLock.Acquire;
+  try
+    fWatchdogTickLagMs := lLagMs;
+    fWatchdogLastTickElapsedUs := lElapsedUs;
+  finally
+    fWatchdogLock.Release;
+  end;
 end;
 
 procedure TmaxCron.PruneAutoSwitchHistoryLocked(const aCurrentTick: UInt64; const aWindowTicks: Integer);
@@ -4985,6 +5114,7 @@ begin
   fHeapItems.Free;
   fAutoSwitchHistory.Free;
   fAutoLock.Free;
+  fWatchdogLock.Free;
   fPendingFree.Free;
   fItemsLock.Free;
   fDefaultsLock.Free;
@@ -5053,6 +5183,72 @@ begin
   aDiagnostics.AutoState := AutoStateToText(lAutoState);
 end;
 
+function TmaxCron.TryGetWatchdogDiagnostics(out aDiagnostics: TMaxCronWatchdogDiagnostics): Boolean;
+var
+  lSharedState: ICronSharedState;
+begin
+  aDiagnostics := Default(TMaxCronWatchdogDiagnostics);
+
+  fWatchdogLock.Acquire;
+  try
+    aDiagnostics.TickLagMs := fWatchdogTickLagMs;
+    aDiagnostics.LastTickElapsedUs := fWatchdogLastTickElapsedUs;
+    aDiagnostics.MaxTickLagMs := fWatchdogMaxTickLagMs;
+    aDiagnostics.MaxQueueDepth := fWatchdogMaxQueueDepth;
+    aDiagnostics.MaxInFlightCallbacks := fWatchdogMaxInFlightCallbacks;
+    aDiagnostics.MaxSwitchChurn := fWatchdogMaxSwitchChurn;
+  finally
+    fWatchdogLock.Release;
+  end;
+
+  aDiagnostics.QueueDepth := TInterlocked.CompareExchange(fTickQueued, 0, 0);
+  if Supports(fSharedState, ICronSharedState, lSharedState) then
+    aDiagnostics.InFlightCallbacks := lSharedState.GetCallbackDepth
+  else
+    aDiagnostics.InFlightCallbacks := 0;
+  aDiagnostics.SwitchChurn := GetWatchdogSwitchChurn;
+
+  aDiagnostics.TickLagBreached := aDiagnostics.TickLagMs > aDiagnostics.MaxTickLagMs;
+  aDiagnostics.QueueDepthBreached := aDiagnostics.QueueDepth > aDiagnostics.MaxQueueDepth;
+  aDiagnostics.InFlightCallbacksBreached := aDiagnostics.InFlightCallbacks > aDiagnostics.MaxInFlightCallbacks;
+  aDiagnostics.SwitchChurnBreached := aDiagnostics.SwitchChurn > aDiagnostics.MaxSwitchChurn;
+  aDiagnostics.AnyThresholdBreached :=
+    aDiagnostics.TickLagBreached or
+    aDiagnostics.QueueDepthBreached or
+    aDiagnostics.InFlightCallbacksBreached or
+    aDiagnostics.SwitchChurnBreached;
+
+  Result := True;
+end;
+
+function TmaxCron.GetMetricsSnapshot: TMaxCronMetricsSnapshot;
+var
+  lAutoDiagnostics: TMaxCronAutoDiagnostics;
+begin
+  Result := Default(TMaxCronMetricsSnapshot);
+  Result.CapturedAtUtc := TTimeZone.Local.ToUniversalTime(Now);
+  Result.ConfiguredEngine := SchedulerEngineToText(fSchedulerEngine);
+  Result.EffectiveEngine := Result.ConfiguredEngine;
+  Result.AutoState := AutoStateToText(TAutoSchedulerState.asDisabled);
+
+  if TryGetAutoDiagnostics(lAutoDiagnostics) then
+  begin
+    Result.EffectiveEngine := lAutoDiagnostics.EffectiveEngine;
+    Result.AutoState := lAutoDiagnostics.AutoState;
+    Result.AutoSwitchCount := lAutoDiagnostics.SwitchCount;
+  end;
+
+  fItemsLock.Acquire;
+  try
+    Result.TickEventsVisited := fTickEventsVisited;
+    Result.HeapRebuildCount := fHeapRebuildCount;
+  finally
+    fItemsLock.Release;
+  end;
+
+  TryGetWatchdogDiagnostics(Result.Watchdog);
+end;
+
 procedure TmaxCron.DoTick;
 var
   lNow: TDateTime;
@@ -5069,7 +5265,13 @@ var
   lEventCount: Integer;
   lDueCount: Integer;
   lStartTicks: Int64;
+  lWallNow: TDateTime;
 begin
+  lDueCount := 0;
+  lElapsedMicroseconds := 0;
+  lEventCount := 0;
+  lWallNow := Now;
+
   if fSchedulerEngine = TSchedulerEngine.seAuto then
   begin
     fAutoLock.Acquire;
@@ -5085,26 +5287,10 @@ begin
     finally
       fItemsLock.Release;
     end;
+  end else
+    lEngineUsed := fSchedulerEngine;
 
-    lStartTicks := TStopwatch.GetTimeStamp;
-    case lEngineUsed of
-      TSchedulerEngine.seHeap:
-        DoTickAtHeap(aNow, lDueCount);
-    else
-      DoTickAtScan(aNow, lDueCount);
-    end;
-
-    lElapsedTicks := TStopwatch.GetTimeStamp - lStartTicks;
-    if lElapsedTicks < 0 then
-      lElapsedTicks := 0;
-    if TStopwatch.Frequency > 0 then
-      lElapsedMicroseconds := (lElapsedTicks * 1000000) div TStopwatch.Frequency
-    else
-      lElapsedMicroseconds := 0;
-
-    EvaluateAutoController(lEngineUsed, lEventCount, lDueCount, lElapsedMicroseconds);
-    Exit;
-  end;
+  lStartTicks := TStopwatch.GetTimeStamp;
 
   case fSchedulerEngine of
     TSchedulerEngine.seHeap:
@@ -5113,12 +5299,31 @@ begin
       begin
         ValidateShadowParity(aNow);
         DoTickAtHeap(aNow, lDueCount);
+        lEngineUsed := TSchedulerEngine.seHeap;
       end;
     TSchedulerEngine.seAuto:
-      DoTickAtScan(aNow, lDueCount);
+      case lEngineUsed of
+        TSchedulerEngine.seHeap:
+          DoTickAtHeap(aNow, lDueCount);
+      else
+        DoTickAtScan(aNow, lDueCount);
+      end;
   else
     DoTickAtScan(aNow, lDueCount);
   end;
+
+  lElapsedTicks := TStopwatch.GetTimeStamp - lStartTicks;
+  if lElapsedTicks < 0 then
+    lElapsedTicks := 0;
+  if TStopwatch.Frequency > 0 then
+    lElapsedMicroseconds := (lElapsedTicks * 1000000) div TStopwatch.Frequency
+  else
+    lElapsedMicroseconds := 0;
+
+  UpdateWatchdogAfterTick(aNow, lWallNow, lElapsedMicroseconds);
+
+  if fSchedulerEngine = TSchedulerEngine.seAuto then
+    EvaluateAutoController(lEngineUsed, lEventCount, lDueCount, lElapsedMicroseconds);
 end;
 
 procedure TmaxCron.DoTickAtScan(const aNow: TDateTime; out aDueCount: Integer);

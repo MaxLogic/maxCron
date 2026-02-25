@@ -2,8 +2,8 @@
 Next task ID: T-102
 
 ## Summary
-Open tasks: 10 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 10, Blocked: 0)
-Done tasks: 92
+Open tasks: 7 (In Progress: 0, Next Today: 0, Next This Week: 0, Next Later: 7, Blocked: 0)
+Done tasks: 95
 
 ## In Progress
 
@@ -12,11 +12,6 @@ Done tasks: 92
 ## Next – This Week
 
 ## Next – Later
-
-### T-092 [OPS] Add runtime watchdog diagnostics and thresholds
-Outcome: Add scheduler watchdog counters (tick lag, queue depth, in-flight callbacks, switch churn) with threshold configuration and explicit breach signaling for operations monitoring.
-Proof: - Command: `./build-delphi.sh tests/maxCronStressTests.dproj -config release && tests/maxCronStressTests.exe --consolemode:quiet --run:TestWatchdogDiagnostics.TTestWatchdogDiagnostics.ThresholdBreaches_AreReported`; - Expect: diagnostic snapshot exposes counters and threshold breach flags correctly.
-Touches: `maxCron.pas`, `tests/unit/TestWatchdogDiagnostics.pas`, `README.md`, `TASKS.md`
 
 ### T-093 [PERF] Add pooled worker dispatch mode for burst callbacks
 Outcome: Add a pooled execution path for callback dispatch to avoid per-fire `CreateAnonymousThread` overhead under bursty workloads while preserving overlap semantics and teardown safety.
@@ -33,12 +28,6 @@ Outcome: Introduce safe internal cached integer time comparisons in due-evaluati
 Proof: - Command: `./build-and-run-tests.sh -cm:Quiet && ./build-and-run-benchmarks.sh --iterations=7 --warmup=1 --out-dir=benchmarks/results --quiet`; - Expect: full suites pass and scan/auto scenarios show net elapsed-time improvement.
 Touches: `maxCron.pas`, `benchmarks/maxCronBenchmarks.dpr`, `tests/unit/TestHeavyStressMixed.pas`, `TASKS.md`
 
-### T-096 [CI] Add p95/p99 benchmark regression gate
-Outcome: Extend benchmark gating to enforce percentile-based performance guardrails (`p95`/`p99`) in addition to mean/structural metrics, reducing risk of latency-tail regressions.
-Proof: - Command: `./scripts/check-benchmark-metrics.sh benchmarks/results/maxcron-benchmarks-*.csv`; - Expect: gate passes with normal thresholds and fails deterministically when strict percentile thresholds are intentionally configured.
-Touches: `scripts/check-benchmark-metrics.sh`, `benchmarks/maxCronBenchmarks.dpr`, `README.md`, `TASKS.md`
-Deps: T-083, T-084
-
 ### T-097 [API] Add pluggable persistent schedule store and recovery
 Outcome: Add persistent event state storage and restart recovery so scheduled events can be restored deterministically across process restarts with explicit consistency guarantees.
 Proof: - Command: `./build-delphi.sh tests/maxCronTests.dproj -config release && tests/maxCronTests.exe --consolemode:quiet --run:TestPersistenceRecovery.TTestPersistenceRecovery.Restart_RestoresEventsAndSchedules`; - Expect: integration tests confirm save/restart/load semantics and no schedule drift.
@@ -54,12 +43,6 @@ Outcome: Add global scheduler-level concurrency and dispatch-rate controls that 
 Proof: - Command: `./build-delphi.sh tests/maxCronStressTests.dproj -config release && tests/maxCronStressTests.exe --consolemode:quiet --run:TestGlobalLimits.TTestGlobalLimits.*`; - Expect: tests prove active-callback and dispatch-rate caps are enforced under concurrent due bursts.
 Touches: `maxCron.pas`, `tests/unit/TestGlobalLimits.pas`, `README.md`, `TASKS.md`
 
-### T-100 [OBS] Add structured metrics snapshot/endpoint API
-Outcome: Expose a structured scheduler metrics snapshot API suitable for export (including latency/counter/state fields needed by external monitoring pipelines).
-Proof: - Command: `./build-delphi.sh tests/maxCronTests.dproj -config release && tests/maxCronTests.exe --consolemode:quiet --run:TestMetricsSnapshot.TTestMetricsSnapshot.ExposesExpectedFields`; - Expect: metrics contract tests pass and snapshot payload includes documented fields.
-Touches: `maxCron.pas`, `tests/unit/TestMetricsSnapshot.pas`, `README.md`, `TASKS.md`
-Deps: T-092
-
 ### T-101 [API] Add graceful drain/shutdown API with timeout policy
 Outcome: Add an explicit shutdown API that supports graceful callback draining with timeout and policy selection (wait/cancel/force), avoiding ad-hoc shutdown handling by callers.
 Proof: - Command: `./build-delphi.sh tests/maxCronTests.dproj -config release && tests/maxCronTests.exe --consolemode:quiet --run:TestGracefulShutdown.TTestGracefulShutdown.*`; - Expect: shutdown tests confirm deterministic drain behavior, timeout enforcement, and safe post-shutdown state.
@@ -72,6 +55,23 @@ Deps: T-099
 
 
 ## Done
+
+### T-096 [CI] Add p95/p99 benchmark regression gate
+Outcome: Extended benchmark gating to enforce elapsed tail-latency guardrails (`p95`/`p99`) in `scripts/check-benchmark-metrics.sh`, added `p99` summary output in `benchmarks/maxCronBenchmarks.dpr`, and documented new gate controls including latest-artifact default behavior (`MAXCRON_GATE_CHECK_ALL=0`).
+Proof: `./scripts/check-benchmark-metrics.sh benchmarks/results/maxcron-benchmarks-*.csv` passes on the latest artifact (`maxcron-benchmarks-20260225-172100.csv`); strict run `MAXCRON_GATE_SPARSE_HEAP_ELAPSED_P95_RATIO=0.001 ./scripts/check-benchmark-metrics.sh benchmarks/results/maxcron-benchmarks-*.csv` fails deterministically (`EXIT=1`) with `FAIL sparse_high_n heap/scan elapsed p95 ... threshold<=0.001`.
+Touches: `scripts/check-benchmark-metrics.sh`, `benchmarks/maxCronBenchmarks.dpr`, `README.md`, `TASKS.md`
+Deps: T-083, T-084
+
+### T-100 [OBS] Add structured metrics snapshot/endpoint API
+Outcome: Added `GetMetricsSnapshot` as a structured export-friendly scheduler snapshot containing capture timestamp, configured/effective engine state, auto-switch counter, cumulative tick/rebuild counters, and embedded watchdog diagnostics fields.
+Proof: `./build-delphi.sh tests/maxCronTests.dproj -config release && tests/maxCronTests.exe --consolemode:quiet --run:TestMetricsSnapshot.TTestMetricsSnapshot.ExposesExpectedFields` passes (`Tests Found: 1`, `Passed: 1`, `Failed: 0`).
+Touches: `maxCron.pas`, `tests/unit/TestMetricsSnapshot.pas`, `tests/maxCronTests.dpr`, `README.md`, `TASKS.md`
+Deps: T-092
+
+### T-092 [OPS] Add runtime watchdog diagnostics and thresholds
+Outcome: Added watchdog diagnostics snapshot support via `TryGetWatchdogDiagnostics`, including tick-lag, queue-depth, in-flight-callback, and switch-churn counters with env-configurable thresholds and explicit per-threshold + aggregate breach flags.
+Proof: `./build-delphi.sh tests/maxCronStressTests.dproj -config release && tests/maxCronStressTests.exe --consolemode:quiet --run:TestWatchdogDiagnostics.TTestWatchdogDiagnostics.ThresholdBreaches_AreReported` passes (`Tests Found: 1`, `Passed: 1`, `Failed: 0`).
+Touches: `maxCron.pas`, `tests/unit/TestWatchdogDiagnostics.pas`, `tests/maxCronStressTests.dpr`, `README.md`, `TASKS.md`
 
 ### T-090 [TEST] Add async-boundary chaos fault-injection suite
 Outcome: Added a dedicated chaos fixture (`TestChaosFaultInjection`) covering queued-acquire injection with delayed synchronize pumping, dispatch-start launch failures, callback exception recovery, and delete-during-callback cancellation races, with bounded teardown assertions to guard against shutdown hangs.

@@ -50,6 +50,7 @@ type
     MeanElapsedUs: Double;
     MedianElapsedUs: Double;
     P95ElapsedUs: Double;
+    P99ElapsedUs: Double;
     StdDevElapsedUs: Double;
     MinElapsedUs: Int64;
     MaxElapsedUs: Int64;
@@ -466,6 +467,7 @@ begin
   Result.MeanElapsedUs := lElapsedUsTotal / Result.Iterations;
   Result.MedianElapsedUs := CalculateMedianFromSorted(lElapsedUsSamples);
   Result.P95ElapsedUs := CalculateNearestRankPercentile(lElapsedUsSamples, 95.0);
+  Result.P99ElapsedUs := CalculateNearestRankPercentile(lElapsedUsSamples, 99.0);
   Result.StdDevElapsedUs := CalculateStdDev(lElapsedUsSamples, Result.MeanElapsedUs);
   Result.MeanVisited := lVisitedTotal / Result.Iterations;
   Result.MeanRebuilds := lRebuildTotal / Result.Iterations;
@@ -762,6 +764,7 @@ begin
     ' | ' + ToInvariantFloat(aSummary.MeanElapsedUs / 1000.0) + ' | ' +
     ToInvariantFloat(aSummary.MedianElapsedUs / 1000.0) + ' | ' +
     ToInvariantFloat(aSummary.P95ElapsedUs / 1000.0) + ' | ' +
+    ToInvariantFloat(aSummary.P99ElapsedUs / 1000.0) + ' | ' +
     ToInvariantFloat(aSummary.StdDevElapsedUs / 1000.0) + ' | ' +
     ToInvariantFloat(ElapsedUsToMs(aSummary.MinElapsedUs)) + ' | ' +
     ToInvariantFloat(ElapsedUsToMs(aSummary.MaxElapsedUs)) + ' | ' + ToInvariantFloat(aSummary.MeanVisited) +
@@ -797,10 +800,10 @@ begin
 
     lLines.Add('## Scenario summary (means over measured iterations)');
     lLines.Add('');
-    lLines.Add('| Scenario | Engine | Iterations | Elapsed ms mean | Elapsed ms median | Elapsed ms p95 | ' +
+    lLines.Add('| Scenario | Engine | Iterations | Elapsed ms mean | Elapsed ms median | Elapsed ms p95 | Elapsed ms p99 | ' +
       'Elapsed ms stddev | Elapsed ms min | Elapsed ms max | Visited mean | Visited min | Visited max | ' +
       'Rebuilds mean | Switches mean | Budget hits mean |');
-    lLines.Add('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+    lLines.Add('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
     for lIndex := 0 to High(aSummaries) do
       AppendSummaryRow(lLines, aSummaries[lIndex]);
     lLines.Add('');

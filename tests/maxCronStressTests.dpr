@@ -12,7 +12,8 @@ uses
   maxCron in '..\maxCron.pas',
   TestHeavyStress in 'unit\TestHeavyStress.pas',
   TestHeavyStressMixed in 'unit\TestHeavyStressMixed.pas',
-  TestLongSoak24h in 'unit\TestLongSoak24h.pas';
+  TestLongSoak24h in 'unit\TestLongSoak24h.pas',
+  TestWatchdogDiagnostics in 'unit\TestWatchdogDiagnostics.pas';
 
 var
   Runner: ITestRunner;
@@ -24,6 +25,7 @@ begin
     TDUnitX.RegisterTestFixture(TTestHeavyStress);
     TDUnitX.RegisterTestFixture(TTestHeavyStressMixed);
     TDUnitX.RegisterTestFixture(TTestLongSoak24h);
+    TDUnitX.RegisterTestFixture(TTestWatchdogDiagnostics);
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));

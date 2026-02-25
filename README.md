@@ -200,6 +200,41 @@ end;
 `TryGetAutoDiagnostics` returns `True` only when `MAXCRON_ENGINE=auto`; otherwise it returns `False`.
 The snapshot includes EWMAs, sample counters, cooldown/backoff state (including trial-failure and switch-budget counters), and last switch reason for tuning/operations visibility.
 
+### Watchdog diagnostics + metrics snapshot API
+
+We can query scheduler watchdog counters and threshold breaches at runtime:
+
+```delphi
+var
+  Watchdog: TMaxCronWatchdogDiagnostics;
+begin
+  if CronScheduler.TryGetWatchdogDiagnostics(Watchdog) then
+    Memo1.Lines.Add(Format('lagMs=%d inFlight=%d breach=%s',
+      [Watchdog.TickLagMs, Watchdog.InFlightCallbacks, BoolToStr(Watchdog.AnyThresholdBreached, True)]));
+end;
+```
+
+Watchdog thresholds are configured when we create the scheduler:
+- `MAXCRON_WATCHDOG_MAX_TICK_LAG_MS` (default `2500`)
+- `MAXCRON_WATCHDOG_MAX_QUEUE_DEPTH` (default `1`)
+- `MAXCRON_WATCHDOG_MAX_INFLIGHT` (default `128`)
+- `MAXCRON_WATCHDOG_MAX_SWITCH_CHURN` (default `8`)
+- `MAXCRON_WATCHDOG_SWITCH_WINDOW` (default `256` ticks)
+
+We can also fetch a structured export-friendly snapshot:
+
+```delphi
+var
+  Snapshot: TMaxCronMetricsSnapshot;
+begin
+  Snapshot := CronScheduler.GetMetricsSnapshot;
+  Memo1.Lines.Add(Format('engine=%s effective=%s visited=%d',
+    [Snapshot.ConfiguredEngine, Snapshot.EffectiveEngine, Int64(Snapshot.TickEventsVisited)]));
+end;
+```
+
+`GetMetricsSnapshot` includes capture timestamp, configured/effective engine state, auto switch count, cumulative tick/rebuild counters, and embedded watchdog fields.
+
 ### Auto diagnostics periodic logging (opt-in)
 
 For production/canary operations, we can emit periodic diagnostics without code changes:
@@ -288,6 +323,9 @@ The script checks:
 - sparse high-N `heap/scan` visited ratio
 - sparse high-N `auto/scan` visited ratio
 - adversarial `budget/no-budget` switch/rebuild/visited ratios
+- sparse high-N `heap/scan` elapsed `p95` and `p99` ratios
+- sparse high-N `auto/scan` elapsed `p95` and `p99` ratios
+- adversarial `budget/no-budget` elapsed `p95` and `p99` ratios
 
 Thresholds are configurable by env vars:
 
@@ -296,6 +334,12 @@ Thresholds are configurable by env vars:
 - `MAXCRON_GATE_BUDGET_SWITCH_RATIO` (default `1.05`)
 - `MAXCRON_GATE_BUDGET_REBUILD_RATIO` (default `1.05`)
 - `MAXCRON_GATE_BUDGET_VISITED_RATIO` (default `1.05`)
+- `MAXCRON_GATE_SPARSE_HEAP_ELAPSED_P95_RATIO` (default `1.15`)
+- `MAXCRON_GATE_SPARSE_HEAP_ELAPSED_P99_RATIO` (default `1.20`)
+- `MAXCRON_GATE_SPARSE_AUTO_ELAPSED_P95_RATIO` (default `1.15`)
+- `MAXCRON_GATE_SPARSE_AUTO_ELAPSED_P99_RATIO` (default `1.20`)
+- `MAXCRON_GATE_BUDGET_ELAPSED_P95_RATIO` (default `1.10`)
+- `MAXCRON_GATE_BUDGET_ELAPSED_P99_RATIO` (default `1.15`)
 
 ### One-command local perf gate
 

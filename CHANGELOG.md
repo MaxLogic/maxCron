@@ -8,6 +8,9 @@ All notable user-visible changes to this project will be documented in this file
 - Added `tests/run-long-soak.sh` and `TestLongSoak24h.EngineModes_LogicalSoak_NoMisses` for cross-mode (`scan`/`heap`/`auto`) logical 24h soak validation with report artifacts. (T-088)
 - Added deterministic cron fuzz-oracle regression coverage (`TestCronFuzzOracle`) that validates `GetNextOccurrences` against a bounded brute-force oracle across `cdStandard`/`cdMaxCron`/`cdQuartzSecondsFirst` and `dmDefault`/`dmAnd`/`dmOr`, with seed replay hints for failures. (T-089)
 - Added async-boundary chaos fault-injection regression coverage (`TestChaosFaultInjection`) for queued-acquire failures, dispatch-start launch failures, callback exception recovery, and delete-during-callback cancellation races with bounded teardown assertions. (T-090)
+- Added watchdog diagnostics and threshold-breach signaling (`TryGetWatchdogDiagnostics`) with counters for tick lag, queue depth, in-flight callbacks, and switch churn. (T-092)
+- Added structured scheduler metrics snapshot export API (`GetMetricsSnapshot`) with engine state, counters, and embedded watchdog fields. (T-100)
+- Added percentile-aware benchmark gate checks (`p95`/`p99` elapsed ratios) alongside structural ratios in `scripts/check-benchmark-metrics.sh`. (T-096)
 - Added regression tests for VCL cross-thread free rejection and failed-free shared-state recovery (`TestVclBackend.FreeCtVcl_OnWorkerThread_Raises`, `TestReviewFindings.FailedFree_ShouldNotDetachSharedStateDefaults`).
 - Added `scripts/perf-gate-local.sh` for one-command local performance verification (build benchmark runner, execute benchmark, optional baseline compare, structural gate check). (T-085)
 - Added `scripts/generate-benchmark-trend-report.sh` to generate markdown trend reports from benchmark CSV history with per-scenario means and run-to-run deltas. (T-086)
