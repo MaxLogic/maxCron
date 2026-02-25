@@ -538,6 +538,53 @@ Negative corpus (expected to fail parse) is stored in `tests/data/cron-invalid.t
 Optional runners:
 - `tests/maxCronVclTests.dpr` (GUI/VCL message pump; tests `ctVcl` / `ctAuto` behavior)
 - `tests/maxCronStressTests.dpr` (heavier concurrency stress tests; ~30s)
+- `tests/run-long-soak.sh` (cross-mode logical soak harness with report artifact output)
+
+### Oracle fuzz and chaos fixtures
+
+We can run the deterministic cron fuzz-oracle fixture (dialect/day-match combinations with brute-force oracle comparison):
+
+```bash
+tests/maxCronTests.exe --consolemode:quiet --run:TestCronFuzzOracle.TTestCronFuzzOracle.NextOccurrences_MatchBruteForceOracle
+```
+
+Replay knobs:
+- `MAXCRON_FUZZ_SEED` (default `137031`)
+- `MAXCRON_FUZZ_CASES` (default `36` per dialect/day-match combination)
+- `MAXCRON_FUZZ_OCCURRENCES` (default `6`)
+- `MAXCRON_FUZZ_SCAN_SECONDS` (default `604800`)
+
+We can run async-boundary chaos coverage (queue-acquire injection, dispatch-start failure, callback exceptions, cancellation races):
+
+```bash
+tests/maxCronTests.exe --consolemode:quiet --run:TestChaosFaultInjection.TTestChaosFaultInjection
+```
+
+### Long soak harness (24h logical window)
+
+The long-soak harness drives a mixed workload across `scan`, `heap`, and `auto` and writes a report artifact under `tests/__recovery/soak-reports/`.
+
+```bash
+MAXCRON_LONG_SOAK_HOURS=24 ./tests/run-long-soak.sh --modes=scan,heap,auto --cm:Quiet
+```
+
+Useful options:
+- `--modes=scan,heap,auto` to select engines.
+- `--hours=N` to override the logical soak window (defaults to `MAXCRON_LONG_SOAK_HOURS` or `24`).
+
+The harness executes `TestLongSoak24h.EngineModes_LogicalSoak_NoMisses`, which validates:
+- no callback loss/duplication envelope violations per mode,
+- auto-mode switch envelope bounds,
+- report artifact generation with full console output and exit code.
+
+### Debug-safety lane
+
+Use `MAXCRON_DEBUG_SAFETY=1` to run the canonical test scripts in `Debug` configuration (range/overflow/assert checks and leak diagnostics enabled by our test runners):
+
+```bash
+MAXCRON_DEBUG_SAFETY=1 ./build-and-run-tests.sh -cm:Quiet
+MAXCRON_DEBUG_SAFETY=1 ./build-and-run-tests-stress.sh -cm:Quiet
+```
 
 `Add(name, plan, callback)` overloads are atomic: if `plan` is invalid, no partial event is kept in the scheduler.
 Queued main-thread pre-acquire failure regressions use `SetMaxCronBeforeQueuedAcquireHook`; injected failures roll back state and exit the queued path without rethrowing through `CheckSynchronize`.

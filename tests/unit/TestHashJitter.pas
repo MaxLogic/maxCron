@@ -29,12 +29,14 @@ function TTestHashJitter.Hash32(const aValue: string): Cardinal;
 var
   lIndex: Integer;
   lHash: Cardinal;
+  lWork: UInt64;
 begin
   lHash := 2166136261;
   for lIndex := 1 to Length(aValue) do
   begin
-    lHash := lHash xor Ord(aValue[lIndex]);
-    lHash := lHash * 16777619;
+    lWork := UInt64(lHash xor Cardinal(Ord(aValue[lIndex])));
+    lWork := (lWork * UInt64(16777619)) and UInt64($FFFFFFFF);
+    lHash := Cardinal(lWork);
   end;
   Result := lHash;
 end;

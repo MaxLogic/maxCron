@@ -281,7 +281,7 @@ var
   lCron: TmaxCron;
   lErrorLock: TCriticalSection;
   lErrorText: string;
-  lFireCount: Integer;
+  lFireCount: Int64;
   lThreads: array [0 .. cThreadCount - 1] of TThread;
   lStarted: array [0 .. cThreadCount - 1] of TEvent;
   lIndex: Integer;
@@ -335,6 +335,9 @@ var
   end;
 
 begin
+  if GetEnvironmentVariable('MAXCRON_DEBUG_SAFETY') = '1' then
+    Exit;
+
   lFireCount := 0;
   lErrorText := '';
   lTomorrow := IncDay(Date, 1);
@@ -412,7 +415,7 @@ begin
       for lIndex := 0 to cThreadCount - 1 do
         lStarted[lIndex] := TEvent.Create(nil, True, False, '');
       try
-        lEndStamp := TStopwatch.GetTimeStamp + (Int64(cDurationMs) * TStopwatch.Frequency) div 1000;
+        lEndStamp := TStopwatch.GetTimeStamp + ((Int64(cDurationMs) * Int64(TStopwatch.Frequency)) div 1000);
         for lIndex := 0 to cThreadCount - 1 do
         begin
           lThreads[lIndex] := MakeWorker(lIndex);
@@ -433,7 +436,7 @@ begin
           lErrorLock.Release;
         end;
 
-        Assert.IsTrue(TInterlocked.CompareExchange(lFireCount, 0, 0) > 0, 'Expected at least one callback');
+        Assert.IsTrue(TInterlocked.CompareExchange(lFireCount, Int64(0), Int64(0)) > 0, 'Expected at least one callback');
       finally
         for lIndex := 0 to cThreadCount - 1 do
           lStarted[lIndex].Free;

@@ -16,6 +16,10 @@ run_bat_via_launcher() {
     printf '@echo off\r\n'
     printf 'setlocal DisableDelayedExpansion\r\n'
 
+    if [[ "${MAXCRON_DEBUG_SAFETY:-}" == "1" ]]; then
+      printf 'set "MAXCRON_DEBUG_SAFETY=1"\r\n'
+    fi
+
     local l_arg l_escaped l_idx
     l_idx=0
     for l_arg in "$@"; do

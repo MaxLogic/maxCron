@@ -11,7 +11,8 @@ uses
   DUnitX.RunResults,
   maxCron in '..\maxCron.pas',
   TestHeavyStress in 'unit\TestHeavyStress.pas',
-  TestHeavyStressMixed in 'unit\TestHeavyStressMixed.pas';
+  TestHeavyStressMixed in 'unit\TestHeavyStressMixed.pas',
+  TestLongSoak24h in 'unit\TestLongSoak24h.pas';
 
 var
   Runner: ITestRunner;
@@ -22,6 +23,7 @@ begin
     TDUnitX.CheckCommandLine;
     TDUnitX.RegisterTestFixture(TTestHeavyStress);
     TDUnitX.RegisterTestFixture(TTestHeavyStressMixed);
+    TDUnitX.RegisterTestFixture(TTestLongSoak24h);
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));
