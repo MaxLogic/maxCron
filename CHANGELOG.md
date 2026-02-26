@@ -5,6 +5,17 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- None yet.
+
+### Changed
+- None yet.
+
+### Fixed
+- None yet.
+
+## [2.3.0] - 2026-02-26
+
+### Added
 - Added pooled `imThread` dispatch mode (`MAXCRON_THREAD_DISPATCH_POOL`) to reduce per-fire anonymous-thread churn in burst callback workloads, with regression coverage in `TestInvokeModes.Invoke_ThreadDispatchPool_ReusesWorkers`. (T-093)
 - Added persistent schedule storage/recovery API (`IMaxCronScheduleStore`, `ScheduleStore`, `SaveScheduleState`, `RestoreScheduleState`) with restart round-trip regression coverage (`TestPersistenceRecovery`). (T-097)
 - Added per-event retry/backoff controls (`RetryMaxAttempts`, `RetryInitialDelayMs`, `RetryBackoffMultiplier`, `RetryMaxDelayMs`) and dead-letter hooks (`OnDeadLetterEvent`/`OnDeadLetterProc`) with deterministic retry-exhaustion and success-within-budget tests. (T-098)
