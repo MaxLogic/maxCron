@@ -47,6 +47,9 @@ type
     procedure Next_Dom_NearestWeekday;
 
     [Test]
+    procedure Next_Dom_NearestWeekday_OnSunday;
+
+    [Test]
     procedure Next_Dom_NearestWeekday_AfterMonth;
 
     [Test]
@@ -332,6 +335,16 @@ begin
   lBase := EncodeDateTime(2025, 3, 1, 0, 0, 0, 0);
   lExpected := EncodeDateTime(2025, 3, 14, 0, 0, 0, 0);
   AssertNext('0 0 15W 3 *', lBase, lExpected);
+end;
+
+procedure TTestScheduleNext.Next_Dom_NearestWeekday_OnSunday;
+var
+  lBase: TDateTime;
+  lExpected: TDateTime;
+begin
+  lBase := EncodeDateTime(2025, 6, 1, 0, 0, 0, 0);
+  lExpected := EncodeDateTime(2025, 6, 16, 0, 0, 0, 0);
+  AssertNext('0 0 15W 6 *', lBase, lExpected);
 end;
 
 procedure TTestScheduleNext.Next_Dom_NearestWeekday_AfterMonth;
