@@ -157,12 +157,14 @@ Begin
   // create a new TmaxCron  that will hold all the events
   ChronScheduler := TmaxCron.Create;
 
-  lNewSchedule := ChronScheduler.Add('Event1', '1 * * * * *', OnScheduleTrigger).Run;
+  // Use explicit 8-field maxCron plans here so the demo fires quickly without
+  // implying that 6-field plans are seconds-based in the default minute-first dialect.
+  lNewSchedule := ChronScheduler.Add('Event1', '* * * * * * * 0', OnScheduleTrigger).Run;
   log(lNewSchedule.name + ' next scheduled date is ' + showDate(lNewSchedule.NextSchedule));
 
   // you can use anonymous methods as well
   lNewSchedule := ChronScheduler.Add('Event2Worker');
-  lNewSchedule.EventPlan := '*/2 * * * * *';
+  lNewSchedule.EventPlan := '* * * * * * */2 0';
   lNewSchedule.OnScheduleproc := Procedure(aEvent: IMaxCronEvent)
     Begin
       OnScheduleTrigger(aEvent);
@@ -171,7 +173,7 @@ Begin
   log(lNewSchedule.name + ' next scheduled date is ' + showDate(lNewSchedule.NextSchedule));
 
   // using a shorter adding syntax
-  lNewSchedule := ChronScheduler.Add('Event4', '1 * * * * *',
+  lNewSchedule := ChronScheduler.Add('Event4', '* * * * * * 15,45 0',
     Procedure(aEvent: IMaxCronEvent)
     Begin
       OnScheduleTrigger(aEvent);

@@ -8,7 +8,8 @@ All notable user-visible changes to this project will be documented in this file
 - None yet.
 
 ### Changed
-- None yet.
+- Updated the demo startup schedules to use explicit current `cdMaxCron` semantics for second-level showcase events, so the sample no longer implies that 6-field default-dialect plans are seconds-based. (T-103)
+- Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
 
 ### Fixed
 - None yet.
