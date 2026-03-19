@@ -24,43 +24,43 @@ Homepage: https://maxlogic.eu/portfolio/maxcron-scheduler-for-delphi/
 - Optional pooled `imThread` dispatch mode for burst-heavy workloads
 
 
-# Sample scheduler usage:
+# Recommended scheduler usage
 ```delphi
 procedure TForm1.FormCreate(Sender: TObject);
 var
-  NewSchedule: IMaxCronEvent ;
-begin 
-  
-  // create new TCronScheduler that will hold events
+  lEvent: IMaxCronEvent;
+begin
+  // create a new TmaxCron scheduler that will hold our events
   CronScheduler := TmaxCron.Create;
-  
-  // first event
-  NewSchedule := CronScheduler.Add('Event1', '1 * * * * *', OnScheduleEvent1).Run;
-  
-  // second event
-  NewSchedule := CronScheduler.Add('Event2', '1 * * * * *', OnScheduleEvent2).Run;
-  
-  // third event
-  NewSchedule := CronScheduler.Add('Event3', '1 * * * * *', OnScheduleEvent3).Run; 
 
-  // you can use anonymous methods as well
-  NewSchedule := CronScheduler.Add('Event2Worker');
-  NewSchedule.EventPlan := '*/2 * * * * *';
-  NewSchedule.OnScheduleproc := procedure(aEvent: IMaxCronEvent)
+  // 5-field plans are minute/hour/day/month/day-of-week in the default cdMaxCron dialect.
+  lEvent := CronScheduler.Add('Event1', '*/1 * * * *', OnScheduleEvent1).Run;
+  lEvent := CronScheduler.Add('Event2', '*/5 * * * *', OnScheduleEvent2).Run;
+
+  // we can also build the event in steps
+  lEvent := CronScheduler.Add('EventWorker');
+  lEvent.EventPlan := '0 9 * * 1-5'; // weekdays at 09:00
+  lEvent.OnScheduleProc :=
+    procedure(aEvent: IMaxCronEvent)
     begin
       OnScheduleTrigger(aEvent);
     end;
-  NewSchedule.Run;
+  lEvent.Run;
 
-  
-  // using a shorter adding syntax
-  NewSchedule := CronScheduler.Add('Event4', '1 * * * * *',
+  // using the shorter overload with an anonymous method
+  lEvent := CronScheduler.Add('Event4', '0 12 * * 1-5',
     procedure(aEvent: IMaxCronEvent)
     begin
       OnScheduleTrigger(aEvent);
     end).Run;
 end;
 ```
+
+Important usage notes:
+
+- `Add(...)` registers an event but does not start it. Call `Run` when the event is fully configured.
+- In the default `cdMaxCron` dialect, 5 fields mean `Minute Hour DayOfMonth Month DayOfWeek`.
+- If we want a seconds-first Quartz expression, set `Dialect := cdQuartzSecondsFirst` (or `DefaultDialect`) before assigning the plan.
 
 ## Timer backend selection
 
@@ -510,6 +510,7 @@ Free the scheduler from outside callback context.
 
 For safe production use we should follow these lifecycle rules:
 
+- `Add(...)` only registers the event. New events start disabled; call `Run` (preferred) or set `Enabled := True` after configuration.
 - `IMaxCronEvent` is an interface handle. Event registration lifetime is managed by `TmaxCron`.
 - Every event has an immutable `Id` assigned by `TmaxCron` when we call `Add(...)`.
 - Event names are optional. If provided, they are case-insensitive unique and immutable after `Add(...)`.
@@ -850,6 +851,13 @@ NewSchedule := CronScheduler.Add('QuartzStyle');
 NewSchedule.Dialect := cdQuartzSecondsFirst;
 NewSchedule.EventPlan := '0 15 10 ? * 2#3';
 ```
+
+For `cdMaxCron`, prefer either:
+
+- 5-field plans for minute-level schedules, or
+- full 8-field plans when we want to be explicit about `Year`, `Second`, and `ExecutionLimit`.
+
+That keeps examples readable and avoids confusing minute-first maxCron plans with Quartz seconds-first syntax.
 
 Any field may contain a list of values separated by commas, (e.g. 1,3,7) or a range of values (two integers separated by a hyphen, e.g. 1-5).
 
