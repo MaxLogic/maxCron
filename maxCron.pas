@@ -926,7 +926,6 @@ type
     procedure SetUserData(const Value: Pointer);
     procedure SetEventPlan(const Value: string);
     procedure SetEnabled(const Value: Boolean);
-    procedure SetNumOfExecutions(const Value: UInt64);
     procedure SetValidFrom(const Value: TDateTime);
     procedure SetValidTo(const Value: TDateTime);
     procedure SetUserDataInterface(const Value: IInterface);
@@ -952,7 +951,6 @@ type
     function GetNextSchedule: TDateTime;
     function GetLastExecution: TDateTime;
     function GetNumOfExecutionsPerformed: UInt64;
-    function GetEffectiveInvokeMode: TmaxCronInvokeMode;
     function GetOverlapMode: TmaxCronOverlapMode;
     function GetDayMatchMode: TmaxCronDayMatchMode;
     function GetMisfirePolicy: TmaxCronMisfirePolicy;
@@ -980,7 +978,6 @@ type
     procedure MarkPendingDestroy;
     function CanFreeNow: Boolean;
     function IsTimeInBlackout(const aEventLocalDateTime: TDateTime): Boolean;
-    function IsOccurrenceExcluded(const aEventLocalDateTime: TDateTime): Boolean;
     function FindNextScheduleWithPolicies(const aBaseSystemLocal: TDateTime; out aNextSystemLocal: TDateTime): TFindNextScheduleResult;
     function SystemLocalToEventLocal(const aSystemLocal: TDateTime): TDateTime;
     function EventLocalToSystemLocal(const aEventLocal: TDateTime; out aSystemLocal: TDateTime): Boolean;
@@ -1359,10 +1356,7 @@ function TCronSchedulePlan.FindNextScheduleDate(const aBaseDate: TDateTime;
   const aValidFrom,
   aValidTo: TDateTime): boolean;
 var
-  dc: word;
-  v: word;
   StartDate: TDateTime;
-  pk: TPartKind;
   h, m, s, ms: word;
   lMode: TmaxCronDayMatchMode;
 
@@ -1707,7 +1701,6 @@ var
   lDomCandidate: TDateTime;
   lDowCandidate: TDateTime;
 begin
-  Result := True;
 
   lMode := fDayMatchMode;
   if lMode = TmaxCronDayMatchMode.dmDefault then
@@ -2088,7 +2081,6 @@ var
   lSeed: string;
   lHasExplicitRange: Boolean;
 begin
-  Result := False;
   lText := Trim(aValue);
   if lText = '' then
     Exit(False);
@@ -2173,7 +2165,6 @@ function TCronPart.TryParseSpecialToken(const aToken: string): Boolean;
 var
   s: string;
 begin
-  Result := False;
   if not (fPartKind in [ckDayOfTheMonth, ckDayOfTheWeek]) then
     Exit(False);
 
@@ -2201,7 +2192,6 @@ var
   s: string;
   lNum: Integer;
 begin
-  Result := False;
   s := UpperCase(Trim(aToken));
 
   if (Pos('L', s) = 0) and (Pos('W', s) = 0) then
@@ -2611,7 +2601,6 @@ var
   iR: integer;
   RangeTo: Integer;
   RangeFrom: Integer;
-  i: Integer;
   s: string;
   Repeater: integer;
   iSlash: Integer;
@@ -3099,7 +3088,6 @@ procedure TmaxCronEvent.SetEnabled(const Value: boolean);
 var
   lChanged: Boolean;
 begin
-  lChanged := False;
   fLock.Acquire;
   try
     if FEnabled = Value then Exit;
@@ -3166,23 +3154,6 @@ begin
   fLock.Acquire;
   try
     FOnDeadLetterEvent := Value;
-  finally
-    fLock.Release;
-  end;
-end;
-
-procedure TmaxCronEvent.SetNumOfExecutions(const Value: uint64);
-begin
-  fLock.Acquire;
-  try
-    fNumOfExecutions := Value;
-    fNumOfDue := Value;
-    if fScheduler.ExecutionLimit <> 0 then
-      if fNumOfDue >= fScheduler.ExecutionLimit then
-      begin
-        FEnabled := False;
-        TInterlocked.Exchange(fPendingRuns, 0);
-      end;
   finally
     fLock.Release;
   end;
@@ -3415,7 +3386,6 @@ function TCronSharedState.TryGetDefaultInvokeMode(out aInvokeMode: TmaxCronInvok
 var
   lOwner: TmaxCron;
 begin
-  Result := False;
   aInvokeMode := TmaxCronInvokeMode.imMainThread;
   if not TryAcquireOwner(lOwner) then
     Exit(False);
@@ -3436,7 +3406,6 @@ function TCronSharedState.TryGetDefaultDayMatchMode(out aDayMatchMode: TmaxCronD
 var
   lOwner: TmaxCron;
 begin
-  Result := False;
   aDayMatchMode := TmaxCronDayMatchMode.dmAnd;
   if not TryAcquireOwner(lOwner) then
     Exit(False);
@@ -3458,7 +3427,6 @@ function TCronSharedState.TryGetMisfireDefaults(out aMisfirePolicy: TmaxCronMisf
 var
   lOwner: TmaxCron;
 begin
-  Result := False;
   aMisfirePolicy := TmaxCronMisfirePolicy.mpCatchUpAll;
   aCatchUpLimit := 1;
   if not TryAcquireOwner(lOwner) then
@@ -3481,7 +3449,6 @@ function TCronSharedState.TryGetOwnerPointer(out aOwnerPointer: Pointer): Boolea
 var
   lOwner: TmaxCron;
 begin
-  Result := False;
   aOwnerPointer := nil;
   if not TryAcquireOwner(lOwner) then
     Exit(False);
@@ -5381,7 +5348,6 @@ var
   lIndex: Integer;
   lEvent: IMaxCronEvent;
 begin
-  lIndex := -1;
   fItemsLock.Acquire;
   try
     lIndex := FindIndexByIdLocked(aId);
@@ -5430,7 +5396,6 @@ begin
   if event = nil then
     Exit(False);
 
-  lIndex := -1;
   fItemsLock.Acquire;
   try
     if TryGetCronEvent(event, lCronEvent) then
@@ -5464,7 +5429,6 @@ var
   lDetachedSharedState: Boolean;
   lWait: TStopwatch;
 begin
-  lDetachedSharedState := False;
   lSharedState := nil;
   Supports(fSharedState, ICronSharedState, lSharedState);
 
@@ -5501,7 +5465,6 @@ begin
       if lDetachedSharedState then
       begin
         lSharedState.Attach(Self);
-        lDetachedSharedState := False;
       end;
       TInterlocked.Exchange(fShutdownRequested, 0);
       raise;
@@ -5872,7 +5835,6 @@ begin
     Exit;
 
   lDueCount := 0;
-  lElapsedMicroseconds := 0;
   lEventCount := 0;
   lWallNow := Now;
 
@@ -6220,7 +6182,6 @@ function MakePreview(const SchedulePlan: string; const Dialect: TmaxCronDialect;
 var
   scheduler: TCronSchedulePlan;
 begin
-  Result := False;
   scheduler := TCronSchedulePlan.Create;
   try
     scheduler.Dialect := Dialect;
@@ -6494,7 +6455,6 @@ var
   lMinutes: Integer;
   lIndex: Integer;
 begin
-  Result := False;
   lText := UpperCase(Trim(aValue));
   if (lText = '') or (lText = 'LOCAL') then
   begin
@@ -6810,37 +6770,6 @@ begin
   Result := (lTimeOnly >= fBlackoutStartTime) or (lTimeOnly < fBlackoutEndTime);
 end;
 
-function TmaxCronEvent.IsOccurrenceExcluded(const aEventLocalDateTime: TDateTime): Boolean;
-var
-  lDow: Integer;
-  lDateSerial: Integer;
-  lLow: Integer;
-  lHigh: Integer;
-  lMid: Integer;
-begin
-  if fWeekdaysOnly then
-  begin
-    lDow := DayOfTheWeek(aEventLocalDateTime);
-    if (lDow = 1) or (lDow = 7) then
-      Exit(True);
-  end;
-
-  lDateSerial := Trunc(aEventLocalDateTime);
-  lLow := 0;
-  lHigh := Length(fExcludedDateSerials) - 1;
-  while lLow <= lHigh do
-  begin
-    lMid := (lLow + lHigh) shr 1;
-    if fExcludedDateSerials[lMid] < lDateSerial then
-      lLow := lMid + 1
-    else if fExcludedDateSerials[lMid] > lDateSerial then
-      lHigh := lMid - 1
-    else
-      Exit(True);
-  end;
-
-  Result := IsTimeInBlackout(aEventLocalDateTime);
-end;
 
 function TmaxCronEvent.FindNextScheduleWithPolicies(const aBaseSystemLocal: TDateTime; out aNextSystemLocal: TDateTime): TFindNextScheduleResult;
 const
@@ -6865,7 +6794,6 @@ var
   lTimeOnly: TDateTime;
   lBlackoutEnd: TDateTime;
 begin
-  Result := TFindNextScheduleResult.fnsNotFound;
   if fPendingDstSecondSchedule > 0 then
   begin
     aNextSystemLocal := fPendingDstSecondSchedule;
@@ -7326,16 +7254,6 @@ begin
   end;
 end;
 
-function TmaxCronEvent.GetEffectiveInvokeMode: TmaxCronInvokeMode;
-begin
-  Result := fInvokeMode;
-  if Result <> TmaxCronInvokeMode.imDefault then
-    Exit;
-  if (fSharedState <> nil) and fSharedState.TryGetDefaultInvokeMode(Result) then
-    Exit;
-  Result := TmaxCronInvokeMode.imMainThread;
-end;
-
 function TmaxCronEvent.GetOverlapMode: TmaxCronOverlapMode;
 begin
   fLock.Acquire;
@@ -7541,7 +7459,6 @@ begin
     TmaxCronOverlapMode.omSerialize,
     TmaxCronOverlapMode.omSerializeCoalesce:
       begin
-        lPendingDestroy := False;
         fLock.Acquire;
         try
           lPendingDestroy := fPendingDestroy;
@@ -7630,10 +7547,6 @@ var
 begin
   try
     lEvent := nil;
-    lRetryMaxAttempts := 0;
-    lCurrentDelayMs := 0;
-    lMaxDelayMs := 0;
-    lBackoffMultiplier := 1.0;
     lErrorText := '';
     lAttemptCount := 0;
     lDeadLetterEvent := nil;
@@ -8014,10 +7927,8 @@ begin
   lOnEvent := nil;
   lOnProc := nil;
   lInvokeMode := TmaxCronInvokeMode.imMainThread;
-  lOverlap := TmaxCronOverlapMode.omAllowOverlap;
   lMisfire := TmaxCronMisfirePolicy.mpDefault;
   lCatchUpLimit := 1;
-  lFindResult := TFindNextScheduleResult.fnsNotFound;
 
   fLock.Acquire;
   try
