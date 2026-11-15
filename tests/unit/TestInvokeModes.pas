@@ -318,11 +318,13 @@ var
   lCron: TmaxCron;
   lDone: TEvent;
   lLock: TCriticalSection;
-  lThreadIds: TDictionary<TThreadID, Byte>;
+  lThreadIds: TDictionary<TThreadID, Integer>;
   lEvent: IMaxCronEvent;
   lTickAt: TDateTime;
   lCompleted: Integer;
   lUniqueCount: Integer;
+  lWorkerCount: Integer;
+  lHasReusedWorker: Boolean;
   lIndex: Integer;
   lPreviousValue: string;
   lHadPrevious: Boolean;
@@ -334,7 +336,7 @@ begin
     lCron := TmaxCron.Create(ctPortable);
     lDone := TEvent.Create(nil, True, False, '');
     lLock := TCriticalSection.Create;
-    lThreadIds := TDictionary<TThreadID, Byte>.Create;
+    lThreadIds := TDictionary<TThreadID, Integer>.Create;
     try
       for lIndex := 0 to cEventCount - 1 do
       begin
@@ -343,11 +345,16 @@ begin
         lEvent.InvokeMode := imThread;
         lEvent.OnScheduleProc :=
           procedure(aSender: IMaxCronEvent)
+          var
+            lCallbackCount: Integer;
+            lThreadId: TThreadID;
           begin
+            lThreadId := TThread.CurrentThread.ThreadID;
             lLock.Acquire;
             try
-              if not lThreadIds.ContainsKey(TThread.CurrentThread.ThreadID) then
-                lThreadIds.Add(TThread.CurrentThread.ThreadID, 0);
+              if not lThreadIds.TryGetValue(lThreadId, lCallbackCount) then
+                lCallbackCount := 0;
+              lThreadIds.AddOrSetValue(lThreadId, lCallbackCount + 1);
             finally
               lLock.Release;
             end;
@@ -368,11 +375,23 @@ begin
       lLock.Acquire;
       try
         lUniqueCount := lThreadIds.Count;
+        lHasReusedWorker := False;
+        for lWorkerCount in lThreadIds.Values do
+        begin
+          if lWorkerCount >= 2 then
+          begin
+            lHasReusedWorker := True;
+            Break;
+          end;
+        end;
       finally
         lLock.Release;
       end;
-      Assert.IsTrue(lUniqueCount <= 64,
-        Format('Expected pooled dispatch to reuse worker threads (unique workers=%d)', [lUniqueCount]));
+      Assert.IsTrue(lHasReusedWorker,
+        'Expected at least one pooled worker thread to execute multiple callbacks');
+      Assert.IsTrue(lUniqueCount < cEventCount,
+        Format('Expected fewer worker threads than callbacks (unique workers=%d, callbacks=%d)',
+          [lUniqueCount, cEventCount]));
     finally
       lThreadIds.Free;
       lLock.Free;
