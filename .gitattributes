@@ -1,5 +1,6 @@
 # Delphi / Windows text files
 *.pas      text eol=crlf
+*.inc      text eol=crlf
 *.dpr      text eol=crlf
 *.dpk      text eol=crlf
 *.dfm      text eol=crlf

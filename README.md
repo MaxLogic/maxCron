@@ -5,6 +5,18 @@ Homepage: https://maxlogic.eu/portfolio/maxcron-scheduler-for-delphi/
 
 
 
+## Installation
+
+Add `maxCron.pas`, `maxCron.Plan.pas`, `maxCron.Internal.Platform.pas` and
+`maxCron.Internal.TimeZone.pas` to your project, or add their folder to the unit
+search path. Keep `maxCron.inc` beside these units. The scheduler still requires
+the MaxLogicFoundation submodule. Existing code can continue to use `uses maxCron`.
+Calculation-only consumers can use `maxCron.Plan`, which depends only on the RTL.
+
+Moved calculation types retain their type identity and short RTTI names. Their
+unit-qualified RTTI names now use `maxCron.Plan` (for example,
+`TCronSchedulePlan.UnitName`); update reflection that looks up the old qualified names.
+
 ## Main features:
 
 - Compatible with most of what CRON is offering

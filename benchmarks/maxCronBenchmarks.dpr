@@ -8,6 +8,9 @@ uses
   System.StrUtils, System.SyncObjs, System.SysUtils,
   Winapi.Windows,
   AutoFree,
+  maxCron.Internal.Platform in '..\maxCron.Internal.Platform.pas',
+  maxCron.Internal.TimeZone in '..\maxCron.Internal.TimeZone.pas',
+  maxCron.Plan in '..\maxCron.Plan.pas',
   maxCron in '..\maxCron.pas';
 
 type

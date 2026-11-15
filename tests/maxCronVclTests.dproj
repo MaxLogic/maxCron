@@ -154,6 +154,9 @@
         <DelphiCompile Include="$(MainSource)">
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
+        <DCCReference Include="..\maxCron.Internal.Platform.pas"/>
+        <DCCReference Include="..\maxCron.Internal.TimeZone.pas"/>
+        <DCCReference Include="..\maxCron.Plan.pas"/>
         <DCCReference Include="..\maxCron.pas"/>
         <DCCReference Include="unit\TestVclBackend.pas"/>
         <BuildConfiguration Include="Base">

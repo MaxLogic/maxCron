@@ -9,7 +9,11 @@ uses
   DUnitX.TestFramework,
   DUnitX.Loggers.Console,
   DUnitX.RunResults,
+  maxCron.Internal.Platform in '..\maxCron.Internal.Platform.pas',
+  maxCron.Internal.TimeZone in '..\maxCron.Internal.TimeZone.pas',
+  maxCron.Plan in '..\maxCron.Plan.pas',
   maxCron in '..\maxCron.pas',
+  TestPublicApiCompat in 'unit\TestPublicApiCompat.pas',
   TestCronInvalidCorpus in 'unit\TestCronInvalidCorpus.pas',
   TestCronParsing in 'unit\TestCronParsing.pas',
   TestCronUtilsCorpus in 'unit\TestCronUtilsCorpus.pas',
@@ -40,6 +44,7 @@ begin
   ReportMemoryLeaksOnShutdown := True;
   try
     TDUnitX.CheckCommandLine;
+    TDUnitX.RegisterTestFixture(TTestPublicApiCompat);
     TDUnitX.RegisterTestFixture(TTestCronInvalidCorpus);
     TDUnitX.RegisterTestFixture(TTestCronParsing);
     TDUnitX.RegisterTestFixture(TTestCronUtilsCorpus);

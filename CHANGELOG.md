@@ -8,6 +8,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
 
 ### Changed
+- Split calculation code into the RTL-only `maxCron.Plan.pas` and isolated timer, async, debug, environment and timezone calls behind internal seams, preserving scheduler behavior and the `uses maxCron` API. Add `maxCron.Plan.pas`, `maxCron.Internal.Platform.pas` and `maxCron.Internal.TimeZone.pas` to consumer projects (or add their folder to the search path), keeping `maxCron.inc` beside them. Unit-qualified RTTI names of moved types now use `maxCron.Plan`; short names are unchanged.
 - Updated the demo startup schedules to use explicit current `cdMaxCron` semantics for second-level showcase events, so the sample no longer implies that 6-field default-dialect plans are seconds-based. (T-103)
 - Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
 

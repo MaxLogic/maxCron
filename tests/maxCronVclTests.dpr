@@ -8,6 +8,9 @@ uses
   DUnitX.TestFramework,
   DUnitX.Loggers.Console,
   DUnitX.RunResults,
+  maxCron.Internal.Platform in '..\maxCron.Internal.Platform.pas',
+  maxCron.Internal.TimeZone in '..\maxCron.Internal.TimeZone.pas',
+  maxCron.Plan in '..\maxCron.Plan.pas',
   maxCron in '..\maxCron.pas',
   TestVclBackend in 'unit\TestVclBackend.pas';
 

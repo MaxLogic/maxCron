@@ -197,6 +197,10 @@
         <DelphiCompile Include="$(MainSource)">
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
+        <DCCReference Include="..\maxCron.Internal.Platform.pas"/>
+        <DCCReference Include="..\maxCron.Internal.TimeZone.pas"/>
+        <DCCReference Include="..\maxCron.Plan.pas"/>
+        <DCCReference Include="unit\TestPublicApiCompat.pas"/>
         <DCCReference Include="..\maxCron.pas"/>
         <DCCReference Include="unit\TestCronInvalidCorpus.pas"/>
         <DCCReference Include="unit\TestCronParsing.pas"/>
