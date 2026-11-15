@@ -12,9 +12,14 @@ type
   TTestCalendarTimeZone = class
   private
     function FindNextDayOfWeek(const aStart: TDateTime; const aDow: Integer): TDateTime;
-    function TryFindInvalidLocalTime(out aDateTime: TDateTime): Boolean;
-    function TryFindAmbiguousLocalTime(out aDateTime: TDateTime): Boolean;
+    function TryFindInvalidLocalTime(out aDateTime: TDateTime): Boolean; overload;
+    function TryFindInvalidLocalTime(const aNow: TDateTime; out aDateTime: TDateTime): Boolean; overload;
+    function TryFindAmbiguousLocalTime(out aDateTime: TDateTime): Boolean; overload;
+    function TryFindAmbiguousLocalTime(const aNow: TDateTime; out aDateTime: TDateTime): Boolean; overload;
   public
+    [Test]
+    procedure TransitionSelection_PreservesSchedulingMargin;
+
     [Test]
     procedure Exclusion_WeekdaysOnly_SkipsWeekend;
 
@@ -42,6 +47,33 @@ type
 
 implementation
 
+procedure TTestCalendarTimeZone.TransitionSelection_PreservesSchedulingMargin;
+var
+  lTransition, lNow, lSelected: TDateTime;
+begin
+  if TryFindInvalidLocalTime(EncodeDate(2027, 1, 1), lTransition) then
+  begin
+    lNow := IncMilliSecond(lTransition, -1);
+    Assert.IsTrue(TryFindInvalidLocalTime(lNow, lSelected));
+    Assert.IsTrue(lSelected >= IncHour(lNow), 'Transition needs at least one hour of scheduling margin');
+    lNow := EncodeDateTime(2027, 12, 31, 23, 59, 59, 999);
+    Assert.IsTrue(TryFindInvalidLocalTime(lNow, lSelected));
+    Assert.IsTrue(lSelected >= IncHour(lNow), 'Year rollover must preserve the scheduling margin');
+    Assert.IsTrue(YearOf(lSelected) >= 2028);
+  end;
+  if TryFindAmbiguousLocalTime(EncodeDate(2027, 1, 1), lTransition) then
+  begin
+    lNow := IncMilliSecond(lTransition, -1);
+    Assert.IsTrue(TryFindAmbiguousLocalTime(lNow, lSelected));
+    Assert.IsTrue(lSelected >= IncHour(lNow), 'Transition needs at least one hour of scheduling margin');
+    lNow := EncodeDateTime(2027, 12, 31, 23, 59, 59, 999);
+    Assert.IsTrue(TryFindAmbiguousLocalTime(lNow, lSelected));
+    Assert.IsTrue(lSelected >= IncHour(lNow), 'Year rollover must preserve the scheduling margin');
+    Assert.IsTrue(YearOf(lSelected) >= 2028);
+  end;
+end;
+
+
 function TTestCalendarTimeZone.FindNextDayOfWeek(const aStart: TDateTime; const aDow: Integer): TDateTime;
 var
   lDate: TDateTime;
@@ -53,13 +85,19 @@ begin
 end;
 
 function TTestCalendarTimeZone.TryFindInvalidLocalTime(out aDateTime: TDateTime): Boolean;
+begin
+  Result := TryFindInvalidLocalTime(Now, aDateTime);
+end;
+
+function TTestCalendarTimeZone.TryFindInvalidLocalTime(const aNow: TDateTime; out aDateTime: TDateTime): Boolean;
 var
   lStart: TDateTime;
   lCursor: TDateTime;
   lLimit: TDateTime;
 begin
-  lStart := EncodeDate(YearOf(Now), 1, 1);
-  lLimit := IncYear(lStart, 1);
+  // Leave at least one hour before Run, then round upward to a whole cron minute.
+  lStart := RecodeSecond(RecodeMilliSecond(IncMinute(IncHour(aNow)), 0), 0);
+  lLimit := IncYear(lStart, 2);
   lCursor := lStart;
   while lCursor < lLimit do
   begin
@@ -74,13 +112,19 @@ begin
 end;
 
 function TTestCalendarTimeZone.TryFindAmbiguousLocalTime(out aDateTime: TDateTime): Boolean;
+begin
+  Result := TryFindAmbiguousLocalTime(Now, aDateTime);
+end;
+
+function TTestCalendarTimeZone.TryFindAmbiguousLocalTime(const aNow: TDateTime; out aDateTime: TDateTime): Boolean;
 var
   lStart: TDateTime;
   lCursor: TDateTime;
   lLimit: TDateTime;
 begin
-  lStart := EncodeDate(YearOf(Now), 1, 1);
-  lLimit := IncYear(lStart, 1);
+  // Leave at least one hour before Run, then round upward to a whole cron minute.
+  lStart := RecodeSecond(RecodeMilliSecond(IncMinute(IncHour(aNow)), 0), 0);
+  lLimit := IncYear(lStart, 2);
   lCursor := lStart;
   while lCursor < lLimit do
   begin

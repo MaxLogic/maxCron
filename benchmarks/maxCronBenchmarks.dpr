@@ -5,8 +5,9 @@ program maxCronBenchmarks;
 
 uses
   System.Classes, System.DateUtils, System.Diagnostics, System.Generics.Collections, System.IOUtils, System.Math,
-  System.StrUtils, System.SysUtils,
+  System.StrUtils, System.SyncObjs, System.SysUtils,
   Winapi.Windows,
+  AutoFree,
   maxCron in '..\maxCron.pas';
 
 type
@@ -76,6 +77,10 @@ type
     MdPath: string;
     CompareCsvPath: string;
     Quiet: Boolean;
+    Mode: string;
+    EventCount: Integer;
+    Seconds: Integer;
+    Fires: Integer;
   end;
 
 const
@@ -149,11 +154,23 @@ begin
   aOptions.MdPath := '';
   aOptions.CompareCsvPath := '';
   aOptions.Quiet := False;
+  aOptions.Mode := 'ticks';
+  aOptions.EventCount := 1000;
+  aOptions.Seconds := 60;
+  aOptions.Fires := 60;
 
   for lIndex := 1 to ParamCount do
   begin
     lArg := ParamStr(lIndex);
-    if SameText(lArg, '--quiet') then
+    if StartsText('--mode=', lArg) then
+      aOptions.Mode := LowerCase(Copy(lArg, 8, MaxInt))
+    else if StartsText('--events=', lArg) then
+      aOptions.EventCount := ParseIntOption('events', Copy(lArg, 10, MaxInt), 1)
+    else if StartsText('--seconds=', lArg) then
+      aOptions.Seconds := ParseIntOption('seconds', Copy(lArg, 11, MaxInt), 1)
+    else if StartsText('--fires=', lArg) then
+      aOptions.Fires := ParseIntOption('fires', Copy(lArg, 9, MaxInt), 1)
+    else if SameText(lArg, '--quiet') then
       aOptions.Quiet := True
     else if StartsText('--iterations=', lArg) then
       aOptions.Iterations := ParseIntOption('iterations', Copy(lArg, Length('--iterations=') + 1, MaxInt), 1)
@@ -170,10 +187,16 @@ begin
     else if SameText(lArg, '--help') or SameText(lArg, '-h') or SameText(lArg, '/?') then
       raise Exception.Create(
         'Usage: maxCronBenchmarks.exe [--iterations=N] [--warmup=N] [--out-dir=PATH] [--csv=FILE] [--md=FILE] ' +
-        '[--compare=FILE] [--quiet]')
+        '[--compare=FILE] [--quiet] [--mode=ticks|idle|latency] [--events=N] [--seconds=N] [--fires=N]')
     else
       raise Exception.CreateFmt('Unknown option: %s', [lArg]);
   end;
+  if not MatchText(aOptions.Mode, ['ticks', 'idle', 'latency']) then
+    raise Exception.Create('mode must be ticks, idle or latency');
+  if (aOptions.Seconds > 86400) or (aOptions.Fires > 86400) then
+    raise Exception.Create('seconds and fires must be <= 86400');
+  if (aOptions.Mode <> 'ticks') and (aOptions.CompareCsvPath <> '') then
+    raise Exception.Create('--compare is supported only by ticks mode');
 end;
 
 function BuildScenarios: TArray<TBenchmarkScenario>;
@@ -1015,12 +1038,215 @@ begin
   end;
 end;
 
+
+type
+  TLatencyRecorder = class
+  private
+    fLock: TCriticalSection;
+    fDone: TEvent;
+    fTarget: Integer;
+    fSamples: TList<Int64>;
+    fRows: TStringList;
+  public
+    constructor Create(const aTarget: Integer);
+    destructor Destroy; override;
+    procedure Capture(const aDue, aNow: TDateTime);
+  end;
+
+constructor TLatencyRecorder.Create(const aTarget: Integer);
+begin
+  inherited Create;
+  fTarget := aTarget;
+  fLock := TCriticalSection.Create;
+  fDone := TEvent.Create(nil, True, False, '');
+  fSamples := TList<Int64>.Create;
+  fRows := TStringList.Create;
+  fRows.Add('fire,due_local,callback_local,latency_ms');
+end;
+
+destructor TLatencyRecorder.Destroy;
+begin
+  fRows.Free;
+  fSamples.Free;
+  fDone.Free;
+  fLock.Free;
+  inherited;
+end;
+
+procedure TLatencyRecorder.Capture(const aDue, aNow: TDateTime);
+var
+  lLatency: Double;
+begin
+  fLock.Acquire;
+  try
+    if fSamples.Count >= fTarget then
+      Exit;
+    // The callback owns its immutable due time, independent of worker arrival order.
+    lLatency := (aNow - aDue) * MSecsPerDay;
+    fSamples.Add(Round(lLatency * 1000));
+    fRows.Add(Format('%d,%s,%s,%s', [fSamples.Count,
+      FormatDateTime('yyyy-mm-dd"T"hh:nn:ss.zzz', aDue),
+      FormatDateTime('yyyy-mm-dd"T"hh:nn:ss.zzz', aNow), ToInvariantFloat(lLatency)]));
+    if fSamples.Count = fTarget then
+      fDone.SetEvent;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure AddLatencyOccurrence(const aCron: TmaxCron; const aRecorder: TLatencyRecorder;
+  const aDue: TDateTime);
+var
+  lEvent: IMaxCronEvent;
+begin
+  // Each invocation of this helper creates a distinct closure and one-shot plan.
+  lEvent := aCron.Add('Latency' + FormatDateTime('hhnnss', aDue),
+    Format('%d %d %d %d * %d %d 0', [MinuteOf(aDue), HourOf(aDue),
+      DayOf(aDue), MonthOf(aDue), YearOf(aDue), SecondOf(aDue)]),
+    procedure(aSender: IMaxCronEvent)
+    begin
+      aRecorder.Capture(aDue, Now);
+    end);
+  lEvent.Run;
+  if Abs(lEvent.NextSchedule - aDue) * MSecsPerDay > 0.5 then
+    raise Exception.Create('Latency occurrence expired during setup');
+end;
+
+function ProcessCpuMs: Double;
+var
+  lCreated, lExited, lKernel, lUser: TFileTime;
+begin
+  if not GetProcessTimes(GetCurrentProcess, lCreated, lExited, lKernel, lUser) then
+    RaiseLastOSError;
+  Result := ((UInt64(lKernel.dwHighDateTime) shl 32) + lKernel.dwLowDateTime +
+    (UInt64(lUser.dwHighDateTime) shl 32) + lUser.dwLowDateTime) / 10000.0;
+end;
+
+procedure RunRealtimeBenchmark(const aOptions: TBenchmarkOptions);
+var
+  g, lCronGarbo, lRecorderGarbo: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lRecorder: TLatencyRecorder;
+  lOptions: TBenchmarkOptions;
+  lStamp: string;
+  lLines, lReport: TStringList;
+  lClock: TStopwatch;
+  lCpuStart, lCpuMs, lElapsedMs: Double;
+  lValues: TArray<Int64>;
+  lMetrics: TMaxCronMetricsSnapshot;
+  lIteration, i: Integer;
+  lUnexpectedFires: Integer;
+  lFirstDue: TDateTime;
+begin
+  lOptions := aOptions;
+  // Separate filenames and schemas from the historical simulated-tick reports.
+  if lOptions.OutDir = '' then
+    lOptions.OutDir := TPath.Combine(ExtractFilePath(ParamStr(0)), 'results');
+  if lOptions.CsvPath = '' then
+    lOptions.CsvPath := TPath.Combine(lOptions.OutDir, 'maxcron-' + lOptions.Mode + '-' +
+      FormatDateTime('yyyymmdd-hhnnss', Now) + '.csv');
+  if lOptions.MdPath = '' then
+    lOptions.MdPath := ChangeFileExt(lOptions.CsvPath, '.md');
+  EnsureOutputPaths(lOptions, lStamp);
+  GC(lLines, TStringList.Create, g);
+  GC(lReport, TStringList.Create, g);
+  try
+    lReport.Add('# maxCron ' + lOptions.Mode + ' benchmark');
+    lReport.Add('');
+    lReport.Add('UTC: ' + lStamp + '; machine: ' + GetEnvironmentVariable('COMPUTERNAME'));
+    lReport.Add('Portable timer; imThread; engine selected by MAXCRON_ENGINE; warmup 2 seconds.');
+    if lOptions.Mode = 'idle' then
+      lLines.Add('iteration,events,configured_engine,effective_engine,elapsed_ms,cpu_ms,cpu_one_core_pct')
+    else
+      lLines.Add('iteration,fires,configured_engine,effective_engine,median_ms,p95_ms,max_ms');
+    for lIteration := 1 to lOptions.Iterations do
+    begin
+      GC(lCron, TmaxCron.Create(TmaxCronTimerBackend.ctPortable), lCronGarbo);
+      lRecorder := nil;
+      lUnexpectedFires := 0;
+      try
+        lCron.DefaultInvokeMode := TmaxCronInvokeMode.imThread;
+        if lOptions.Mode = 'idle' then
+        begin
+          lCron.StartTimerForTests(1000);
+          for i := 1 to lOptions.EventCount do
+          begin
+            lEvent := lCron.Add('Idle' + IntToStr(i), '0 0 1 1 * 2099 0 0',
+              procedure(aSender: IMaxCronEvent)
+              begin
+                // The far-future schedule must not fire in the measurement window.
+                TInterlocked.Increment(lUnexpectedFires);
+              end);
+            lEvent.Run;
+          end;
+          Sleep(2000);
+          lCpuStart := ProcessCpuMs;
+          lClock := TStopwatch.StartNew;
+          Sleep(Cardinal(lOptions.Seconds) * 1000);
+          lElapsedMs := lClock.Elapsed.TotalMilliseconds;
+          lCpuMs := ProcessCpuMs - lCpuStart;
+          if TInterlocked.CompareExchange(lUnexpectedFires, 0, 0) <> 0 then
+            raise Exception.Create('Far-future event fired during the idle window');
+          lMetrics := lCron.GetMetricsSnapshot;
+          lLines.Add(Format('%d,%d,%s,%s,%s,%s,%s', [lIteration, lOptions.EventCount,
+            lMetrics.ConfiguredEngine, lMetrics.EffectiveEngine, ToInvariantFloat(lElapsedMs),
+            ToInvariantFloat(lCpuMs), ToInvariantFloat(lCpuMs / lElapsedMs * 100)]));
+        end else begin
+          GC(lRecorder, TLatencyRecorder.Create(lOptions.Fires), lRecorderGarbo);
+          Sleep(2000);
+          // MAXCRON_TESTS keeps the timer stopped until every due time is captured.
+          lFirstDue := RecodeMilliSecond(IncSecond(Now, 2), 0);
+          for i := 0 to lOptions.Fires - 1 do
+            AddLatencyOccurrence(lCron, lRecorder, IncSecond(lFirstDue, i));
+          // Setup must finish before the earliest due time, or the stopped timer would count as lateness.
+          if Now >= lFirstDue then
+            raise Exception.Create('Latency setup outlived the first due time');
+          lCron.StartTimerForTests(1000);
+          if lRecorder.fDone.WaitFor(Cardinal(lOptions.Fires + 15) * 2000) <> wrSignaled then
+            raise Exception.Create('Latency benchmark did not receive all callbacks');
+          if not lCron.Shutdown(10000) then
+            raise Exception.Create('Latency benchmark shutdown timed out');
+          lValues := lRecorder.fSamples.ToArray;
+          SortInt64Array(lValues);
+          lMetrics := lCron.GetMetricsSnapshot;
+          lLines.Add(Format('%d,%d,%s,%s,%s,%s,%s', [lIteration, Length(lValues),
+            lMetrics.ConfiguredEngine, lMetrics.EffectiveEngine,
+            ToInvariantFloat(CalculateMedianFromSorted(lValues) / 1000.0), ToInvariantFloat(CalculateNearestRankPercentile(lValues, 95.0) / 1000.0),
+            ToInvariantFloat(lValues[High(lValues)] / 1000.0)]));
+          lRecorder.fRows.SaveToFile(ChangeFileExt(lOptions.CsvPath, '') + '-fires-' +
+            IntToStr(lIteration) + '.csv', TEncoding.UTF8);
+        end;
+        Writeln(lLines[lLines.Count - 1]);
+      finally
+        lEvent := nil;
+        lCronGarbo.Clear;
+        lRecorderGarbo.Clear;
+      end;
+    end;
+    lLines.SaveToFile(lOptions.CsvPath, TEncoding.UTF8);
+    lReport.Add('');
+    lReport.Add('```csv');
+    lReport.AddStrings(lLines);
+    lReport.Add('```');
+    lReport.Add('CPU percent is relative to one logical CPU, not the whole machine.');
+    lReport.Add('Latency median averages the middle pair; p95 uses nearest rank; raw due/callback times are retained.');
+    lReport.SaveToFile(lOptions.MdPath, TEncoding.UTF8);
+    Writeln('CSV report: ' + lOptions.CsvPath);
+  finally
+    g.Clear;
+  end;
+end;
+
 var
   lOptions: TBenchmarkOptions;
 begin
   try
     ParseOptions(lOptions);
-    RunBenchmarks(lOptions);
+    if lOptions.Mode = 'ticks' then
+      RunBenchmarks(lOptions)
+    else
+      RunRealtimeBenchmark(lOptions);
     ExitCode := 0;
   except
     on E: Exception do

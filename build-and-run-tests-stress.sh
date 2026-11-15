@@ -40,7 +40,7 @@ run_bat_via_launcher() {
     done
     printf '\r\n'
     printf 'set "EXITCODE=%%ERRORLEVEL%%"\r\n'
-    printf 'endlocal ^& exit /b %%EXITCODE%%\r\n'
+    printf 'endlocal & exit /b %%EXITCODE%%\r\n'
   } >"$launcher_path"
 
   local l_rc

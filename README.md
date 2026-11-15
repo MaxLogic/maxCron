@@ -315,6 +315,87 @@ Interpretation rules:
 - Timing summaries include mean/median/p95/stddev to expose both central tendency and jitter.
 - Elapsed time is environment-sensitive; use it with the structural work metrics (`visited`, `rebuilds`, `switches`) for robust conclusions.
 
+### Real-time idle CPU and firing latency
+
+The additive `idle` and `latency` modes exercise the portable timer in a console
+process with `imThread` callbacks. The default `ticks` mode and its reports retain
+their existing format. Select the engine with `MAXCRON_ENGINE`; leave adaptive
+settings unset to measure the default controller. Run each configuration in a
+fresh process, outside a debugger, while other CPU work is low.
+
+For a Delphi 12 Win64 Release build with outputs outside the checkout:
+
+```powershell
+$buildDir = 'F:\dev-artifacts\builds\maxCron-main\benchmarks'
+New-Item -ItemType Directory -Force "$buildDir\dcc64" | Out-Null
+& 'C:\Program Files (x86)\Embarcadero\Studio\23.0\bin\dcc64.exe' -B -Q `
+  '-DRELEASE;MAXCRON_TESTS' '-NSSystem;Winapi;System.Win;Vcl' `
+  '-Ulib\MaxLogicFoundation;C:\Program Files (x86)\Embarcadero\Studio\23.0\lib\win64\release' `
+  '-Ilib\MaxLogicFoundation' "-E$buildDir" "-N0$buildDir\dcc64" `
+  benchmarks\maxCronBenchmarks.dpr
+$env:MAXCRON_ENGINE = 'scan' # repeat with heap and auto
+& "$buildDir\maxCronBenchmarks.exe" --mode=idle --events=1000 --seconds=30 `
+  --iterations=3 --csv=F:\dev-artifacts\runs\maxCron\idle-1000-scan.csv
+# Repeat with --events=10000, and each engine.
+& "$buildDir\maxCronBenchmarks.exe" --mode=latency --fires=60 `
+  --iterations=3 --csv=F:\dev-artifacts\runs\maxCron\latency-scan.csv
+```
+
+Adjust the compiler path to the installed Delphi version. The existing benchmark
+build wrapper also supports these options. Real-time modes explicitly start the
+portable timer because `MAXCRON_TESTS` disables automatic timer startup in this
+project. Both modes warm up for two seconds; `--warmup` applies to `ticks` only.
+`--seconds` defaults to 60, `--events` to 1000 and `--fires` to 60. `--iterations`
+still defaults to 9. `--compare` accepts only the historical `ticks` CSV format.
+
+Idle timing excludes event creation and shutdown, measures process user+kernel
+CPU over a monotonic elapsed window, and keeps all events enabled with a due date
+of 2099-01-01. `cpu_one_core_pct` is relative to one logical CPU. Divide by the
+machine's logical CPU count for its share of whole-machine CPU. A zero means no
+increment resolved by the counter during that window.
+
+Latency schedules explicitly dated one-shot events, one per due second. Each
+callback captures its own immutable due time before the portable timer starts,
+so worker arrival order and schedule advancement cannot change attribution.
+Delays above one second stay unfolded. Raw `*-fires-N.csv` files retain each due
+and callback local timestamp. Median averages the middle pair and p95 uses
+nearest rank. The mode fails if setup expires an occurrence or it cannot collect
+the requested callbacks. Avoid DST transitions or clock changes during measurement.
+This measures scheduler and dispatch latency together. Each run has `--fires`
+one-shot events rather than one recurring event.
+
+Baseline on THREADRIPPER, 2026-11-15, Delphi 12 Win64 Release, base `024b89b`:
+AMD Ryzen Threadripper PRO 3975WX, 32 cores / 64 logical CPUs, Windows 11.
+Three fresh runs per row, 30-second idle windows. CPU columns show median and
+min-max across runs. Background jobs were active; the retained run records include
+pre-run and during-run CPU load. These figures are a shared-machine reference.
+
+| Events | Engine | CPU ms median (min-max), 30 s | One-core CPU % median | Effective engine |
+| --- | --- | --- | --- | --- |
+| 1000 | scan | 0.000 (0.000-0.000) | 0.000000 | scan |
+| 1000 | heap | 0.000 (0.000-0.000) | 0.000000 | heap |
+| 1000 | auto | 0.000 (0.000-0.000) | 0.000000 | heap |
+| 10000 | scan | 62.500 (31.250-93.750) | 0.208314 | scan |
+| 10000 | heap | 0.000 (0.000-0.000) | 0.000000 | heap |
+| 10000 | auto | 15.625 (15.625-46.875) | 0.052081 | heap |
+
+Once-per-second latency, scan engine, three fresh runs of 60 one-shot events
+and callbacks. Revised occurrence attribution supersedes the initial baseline:
+
+| Run | Fires | Median ms | p95 ms | Max ms |
+| --- | --- | --- | --- | --- |
+| 1 | 60 | 279.500 | 977.000 | 1002.999 |
+| 2 | 60 | 290.500 | 976.999 | 1009.001 |
+| 3 | 60 | 321.000 | 561.000 | 578.000 |
+
+The one-second timer is not aligned to the wall-clock second. Each fresh process
+can therefore have a different latency phase. Its fixed-delay cadence can also
+accumulate delay beyond one second. Use raw distributions and repeated
+runs when evaluating a timer change. Pooled median/p95/max: 295.500/963.000/1009.001 ms;
+2/180 callbacks exceeded one second. During these latency runs, whole-host
+CPU min/median/max was 5.952/12.518/33.716 percent.
+These measurements do not set a latency SLA.
+
 ### Structural perf gate (stable local signal)
 
 Use structural ratios from benchmark CSVs to gate regressions without relying on wall-clock timing:
@@ -663,6 +744,17 @@ When we change `DayMatchMode` on an enabled event, or change scheduler `DefaultD
 ## Unit tests
 
 DUnitX tests live under `tests/` (runner: `tests/maxCronTests.dpr`).
+
+The `build-and-run-tests.bat` and `build-and-run-tests-stress.bat` gates (and
+their WSL `.sh` wrappers) require Delphi 12 (23.0) and DelphiAIKit. They build
+the demo and all three test runners for Win32, then run the tests, forwarding
+arguments and returning nonzero on a missing tool, build error, or test failure.
+Set `DAK_EXE` to the absolute Windows path of `DelphiAIKit.exe` for the process
+running the gate; otherwise the scripts search `PATH`, then
+`..\..\DelphiAiKit\bin\DelphiAIKit.exe` relative to the scripts. An invalid
+explicit override fails immediately. No persistent environment setting is needed.
+For an override exported inside WSL, also export `WSLENV=DAK_EXE/w` so it reaches Windows. Build output paths stay as configured in the projects. Release is the default;
+`MAXCRON_DEBUG_SAFETY=1` selects Debug.
 Our upstream-derived cron corpus used by tests is stored in `tests/data/cron-utils-unix-5field.txt`.
 Negative corpus (expected to fail parse) is stored in `tests/data/cron-invalid.txt`.
 

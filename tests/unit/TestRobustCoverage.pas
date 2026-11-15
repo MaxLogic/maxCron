@@ -19,8 +19,12 @@ type
     function BuildOneShotPlan(const aDateTime: TDateTime): string;
     function FindNextForPlan(const aPlan: string; const aBase: TDateTime;
       const aDayMatchMode: TmaxCronDayMatchMode): TDateTime;
-    function TryFindAmbiguousLocalTime(out aDateTime: TDateTime): Boolean;
+    function TryFindAmbiguousLocalTime(out aDateTime: TDateTime): Boolean; overload;
+    function TryFindAmbiguousLocalTime(const aNow: TDateTime; out aDateTime: TDateTime): Boolean; overload;
   public
+    [Test]
+    procedure TransitionSelection_PreservesSchedulingMargin;
+
     [Test]
     procedure DstFallPolicy_RunOnceVariants;
 
@@ -90,6 +94,23 @@ type
 
 implementation
 
+procedure TTestRobustCoverage.TransitionSelection_PreservesSchedulingMargin;
+var
+  lTransition, lNow, lSelected: TDateTime;
+begin
+  if TryFindAmbiguousLocalTime(EncodeDate(2027, 1, 1), lTransition) then
+  begin
+    lNow := IncMilliSecond(lTransition, -1);
+    Assert.IsTrue(TryFindAmbiguousLocalTime(lNow, lSelected));
+    Assert.IsTrue(lSelected >= IncHour(lNow), 'Transition needs at least one hour of scheduling margin');
+    lNow := EncodeDateTime(2027, 12, 31, 23, 59, 59, 999);
+    Assert.IsTrue(TryFindAmbiguousLocalTime(lNow, lSelected));
+    Assert.IsTrue(lSelected >= IncHour(lNow), 'Year rollover must preserve the scheduling margin');
+    Assert.IsTrue(YearOf(lSelected) >= 2028);
+  end;
+end;
+
+
 procedure TTestRobustCoverage.AssertRaises(const aProc: TProc; const aMessage: string);
 var
   lRaised: Boolean;
@@ -148,13 +169,19 @@ begin
 end;
 
 function TTestRobustCoverage.TryFindAmbiguousLocalTime(out aDateTime: TDateTime): Boolean;
+begin
+  Result := TryFindAmbiguousLocalTime(Now, aDateTime);
+end;
+
+function TTestRobustCoverage.TryFindAmbiguousLocalTime(const aNow: TDateTime; out aDateTime: TDateTime): Boolean;
 var
   lStart: TDateTime;
   lCursor: TDateTime;
   lLimit: TDateTime;
 begin
-  lStart := EncodeDate(YearOf(Now), 1, 1);
-  lLimit := IncYear(lStart, 1);
+  // Leave at least one hour before Run, then round upward to a whole cron minute.
+  lStart := RecodeSecond(RecodeMilliSecond(IncMinute(IncHour(aNow)), 0), 0);
+  lLimit := IncYear(lStart, 2);
   lCursor := lStart;
   while lCursor < lLimit do
   begin

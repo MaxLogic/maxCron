@@ -5,14 +5,15 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
-- None yet.
+- Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
 
 ### Changed
 - Updated the demo startup schedules to use explicit current `cdMaxCron` semantics for second-level showcase events, so the sample no longer implies that 6-field default-dialect plans are seconds-based. (T-103)
 - Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
 
 ### Fixed
-- None yet.
+- Fixed DST policy tests to search the next two years for future transitions with at least one hour of scheduling margin, including transition-minute and year-boundary checks, instead of using elapsed transitions from the current year.
+- Migrated test gates to DelphiAIKit and corrected WSL exit propagation so missing tools, build errors, and test failures return nonzero.
 
 ## [2.3.0] - 2026-02-26
 

@@ -288,7 +288,7 @@ begin
     lCron.TickAt(lProbeEvent.NextSchedule);
     lWaitRes := lProbeFired.WaitFor(2000);
     Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes, 'Probe callback did not run');
-    Assert.IsTrue(TInterlocked.CompareExchange(lProbeThreadId, 0, 0) <> MainThreadID,
+    Assert.IsTrue(Cardinal(TInterlocked.CompareExchange(lProbeThreadId, 0, 0)) <> MainThreadID,
       'Failed free should not detach shared state defaults');
   finally
     lBlockGate.SetEvent;
