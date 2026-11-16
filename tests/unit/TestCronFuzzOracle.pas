@@ -29,11 +29,16 @@ type
       const aFromDate: TDateTime; const aCount, aMaxScanSeconds: Integer): TDates;
     function BuildCaseHint(const aSeed, aCaseIndex: Integer; const aDialect: TmaxCronDialect;
       const aDayMatchMode: TmaxCronDayMatchMode; const aPlan: string; const aFromDate: TDateTime): string;
+    procedure RunQueryOracle(const aKind: Integer);
     procedure CheckNextOracle(const aText, aDom, aDow: string;
       const aDialect: TmaxCronDialect; const aMode: TmaxCronDayMatchMode;
       const aSeed: string; const aBase: TDateTime; var aFailures: string; var aChecked: Integer);
   public
     [Test] procedure NextDate_MonotonicAndFirstOccurrence;
+    [Test] procedure PreviousOccurrences_MatchBruteForceOracle;
+    [Test] procedure ModifierPlans_NextAndPrevious_MatchBruteForceOracle;
+    [Test] procedure Between_MatchBruteForceOracle;
+    [Test] procedure Properties_NextPreviousRelations;
     [Test]
     procedure NextOccurrences_MatchBruteForceOracle;
   end;
@@ -372,6 +377,378 @@ begin
   end;
 end;
 
+type
+  // Descriptor belongs to the generator, independently of the parser's modifier state.
+  TQueryOracleSpec = record
+    DomKind, DomValue, DowKind, DowValue, DowNth: Integer;
+  end;
+
+function OracleSerial(const aDate: TDateTime): Int64;
+var
+  lStamp: TTimeStamp;
+begin
+  lStamp := DateTimeToTimeStamp(aDate);
+  Result := Int64(lStamp.Date) * 86400 + lStamp.Time div 1000;
+end;
+
+function OracleDayMatches(const aPlan: TCronSchedulePlan; const aSpec: TQueryOracleSpec;
+  const aDate: TDateTime): Boolean;
+var
+  y, mo, d, lLast, lTarget, lDow: Word;
+  lDomMatch, lDowMatch: Boolean;
+begin
+  DecodeDate(aDate, y, mo, d);
+  if (aPlan.Year.NextVal(y) <> y) or (aPlan.Month.NextVal(mo) <> mo) then
+    Exit(False);
+  lLast := DaysInAMonth(y, mo);
+  lDow := DayOfTheWeek(aDate) mod 7;
+  case aSpec.DomKind of
+    1: lDomMatch := d = lLast;
+    2:
+      begin
+        lTarget := lLast;
+        while (DayOfTheWeek(EncodeDate(y, mo, lTarget)) mod 7) in [0, 6] do
+        begin
+          Dec(lTarget);
+        end;
+        lDomMatch := d = lTarget;
+      end;
+    3:
+      begin
+        lTarget := aSpec.DomValue;
+        if lTarget > lLast then
+          lDomMatch := False
+        else
+        begin
+          case DayOfTheWeek(EncodeDate(y, mo, lTarget)) mod 7 of
+            6:
+              if lTarget = 1 then
+                Inc(lTarget, 2)
+              else
+                Dec(lTarget);
+            0:
+              if lTarget = lLast then
+                Dec(lTarget, 2)
+              else
+                Inc(lTarget);
+          end;
+          lDomMatch := d = lTarget;
+        end;
+      end;
+  else
+    lDomMatch := aPlan.Day_of_the_Month.NextVal(d) = d;
+  end;
+  case aSpec.DowKind of
+    1: lDowMatch := (lDow = aSpec.DowValue) and (d + 7 > lLast);
+    2: lDowMatch := (lDow = aSpec.DowValue) and ((d - 1) div 7 + 1 = aSpec.DowNth);
+  else
+    lDowMatch := aPlan.Day_of_the_Week.NextVal(lDow) = lDow;
+  end;
+  if (aPlan.DayMatchMode <> dmOr) or aPlan.Day_of_the_Month.IsAny or aPlan.Day_of_the_Week.IsAny then
+    Result := lDomMatch and lDowMatch
+  else
+    Result := lDomMatch or lDowMatch;
+end;
+
+function QueryOracleDates(const aPlan: TCronSchedulePlan; const aSpec: TQueryOracleSpec;
+  const aBase, aEnd: TDateTime; const aCount, aScanDays: Integer; const aBackward: Boolean; const aHint: string): TDates;
+var
+  lDay, lFloor, lCeiling: TDateTime;
+  lStamp: TTimeStamp;
+  lBound, lStop, lSerial: Int64;
+  lHours, lMinutes, lSeconds, lYears: TWordArray;
+  lScan, lFound, h, mi, s, hi, mj, sk, lDirection: Integer;
+
+  procedure Values(const aPart: TCronPart; const aMaximum: Integer; out aValues: TWordArray);
+  var
+    i, n: Integer;
+  begin
+    SetLength(aValues, aMaximum + 1);
+    n := 0;
+    for i := 0 to aMaximum do
+    begin
+      if aPart.NextVal(i) = i then
+      begin
+        aValues[n] := i;
+        Inc(n);
+      end;
+    end;
+    SetLength(aValues, n);
+  end;
+
+begin
+  Result := nil;
+  if aCount <= 0 then
+    Exit;
+  SetLength(Result, aCount);
+  Values(aPlan.Hour, 23, lHours);
+  Values(aPlan.Minute, 59, lMinutes);
+  Values(aPlan.Second, 59, lSeconds);
+  lFloor := EncodeDate(1900, 1, 1);
+  lCeiling := EncodeDate(3000, 12, 31);
+  if aPlan.Year.GetValues(lYears) and (Length(lYears) > 0) then
+  begin
+    lFloor := EncodeDate(lYears[0], 1, 1);
+    lCeiling := EncodeDate(lYears[High(lYears)], 12, 31);
+  end;
+  lStamp := DateTimeToTimeStamp(aBase);
+  lBound := OracleSerial(aBase);
+  if aBackward then
+  begin
+    if lStamp.Time mod 1000 = 0 then
+      Dec(lBound);
+    lDirection := -1;
+    lDay := Trunc(aBase);
+    if lDay > lCeiling then
+      lDay := lCeiling;
+  end else begin
+    // Forward oracle agrees with Next's drop-milliseconds then add-one-second rule.
+    Inc(lBound);
+    lDirection := 1;
+    lDay := Trunc(aBase);
+    if lDay < lFloor then
+      lDay := lFloor;
+  end;
+  lStop := OracleSerial(aEnd);
+  lFound := 0;
+  lScan := 0;
+  while (lDay >= lFloor) and (lDay <= lCeiling) and (lScan < aScanDays) do
+  begin
+    if (not aBackward) and (lDay >= aEnd) then
+      Break;
+    if OracleDayMatches(aPlan, aSpec, lDay) then
+    begin
+      for hi := 0 to High(lHours) do
+      begin
+        if aBackward then h := lHours[High(lHours) - hi] else h := lHours[hi];
+        for mj := 0 to High(lMinutes) do
+        begin
+          if aBackward then mi := lMinutes[High(lMinutes) - mj] else mi := lMinutes[mj];
+          for sk := 0 to High(lSeconds) do
+          begin
+            if aBackward then s := lSeconds[High(lSeconds) - sk] else s := lSeconds[sk];
+            lSerial := OracleSerial(lDay) + h * 3600 + mi * 60 + s;
+            if (aBackward and (lSerial <= lBound)) or
+              (not aBackward and (lSerial >= lBound) and (lSerial < lStop)) then
+            begin
+              Result[lFound] := lDay + EncodeTime(h, mi, s, 0);
+              Inc(lFound);
+              if lFound = aCount then
+                Exit;
+            end;
+          end;
+        end;
+      end;
+    end;
+    lDay := IncDay(lDay, lDirection);
+    Inc(lScan);
+  end;
+  Assert.IsTrue((lScan < aScanDays) or (lDay < lFloor) or (lDay > lCeiling) or
+    ((not aBackward) and (lDay >= aEnd)), 'Oracle incomplete: raise MAXCRON_FUZZ_SCAN_DAYS ' + aHint);
+  SetLength(Result, lFound);
+end;
+
+procedure TTestCronFuzzOracle.RunQueryOracle(const aKind: Integer);
+const
+  cWidths: array[0..5] of Integer = (0, 1, 59, 3600, 86400, 259200);
+var
+  lPlan: TCronSchedulePlan;
+  lSpec: TQueryOracleSpec;
+  lDialect: TmaxCronDialect;
+  lMode: TmaxCronDayMatchMode;
+  lSeed, lCases, lCount, lScanDays, lCaseIndex, lDomPick, lDowPick, lDowNumber, lRelations, i, n: Integer;
+  lText, lDom, lDow, lMinute, lSecond, lMonth, lYear, lHint: string;
+  lBase, lEnd, lCursor, lNext, lPrevious, lOracleBase: TDateTime;
+  lExpected, lActual, lReverse: TDates;
+  lFound: Boolean;
+
+  procedure EqualDates(const aExpected, aActual: TDates);
+  var
+    j: Integer;
+  begin
+    Assert.AreEqual(Integer(Length(aExpected)), Integer(Length(aActual)), lHint);
+    for j := 0 to High(aExpected) do
+    begin
+      Assert.AreEqual(OracleSerial(aExpected[j]), OracleSerial(aActual[j]), lHint);
+    end;
+  end;
+
+begin
+  lSeed := ReadEnvInt('MAXCRON_FUZZ_SEED', 137031, 1, High(Integer) - 4);
+  RandSeed := lSeed + aKind;
+  lRelations := 0;
+  lCases := ReadEnvInt('MAXCRON_FUZZ_CASES', 36, 1, 250);
+  lCount := ReadEnvInt('MAXCRON_FUZZ_OCCURRENCES', 6, 1, 48);
+  lScanDays := ReadEnvInt('MAXCRON_FUZZ_SCAN_DAYS', 3700, 1, 402200);
+  for lDialect := Low(TmaxCronDialect) to High(TmaxCronDialect) do
+  begin
+    for lMode := Low(TmaxCronDayMatchMode) to High(TmaxCronDayMatchMode) do
+    begin
+      for lCaseIndex := 0 to lCases - 1 do
+      begin
+        lSpec := Default(TQueryOracleSpec);
+        lPlan := TCronSchedulePlan.Create;
+        try
+          lPlan.Dialect := lDialect;
+          lPlan.DayMatchMode := lMode;
+          if Random(2) = 1 then lPlan.HashSeed := 'job-a';
+          if (aKind = 1) or ((aKind <> 2) and (lCaseIndex mod 2 = 0)) then
+            lText := BuildPlanText(lDialect, lMode)
+          else
+          begin
+            lDomPick := Random(5);
+            lDowPick := Random(3);
+            // AND cases constrain one side at a time; OR cases exercise both restrictions.
+            if lMode <> dmOr then
+            begin
+              if Random(2) = 0 then lDomPick := 0 else lDowPick := 0;
+            end;
+            lDom := '*';
+            case lDomPick of
+              1: begin lDom := 'L'; lSpec.DomKind := 1; end;
+              2: begin lDom := 'LW'; lSpec.DomKind := 2; end;
+              3:
+                begin
+                  lSpec.DomKind := 3;
+                  lSpec.DomValue := 1 + Random(31);
+                  lDom := IntToStr(lSpec.DomValue) + 'W';
+                end;
+              4: lDom := '1,15';
+            end;
+            lSpec.DowValue := Random(7);
+            lDowNumber := lSpec.DowValue;
+            if lDialect = cdQuartzSecondsFirst then Inc(lDowNumber);
+            lDow := '*';
+            case lDowPick of
+              1:
+                begin
+                  lSpec.DowKind := 1;
+                  lDow := IntToStr(lDowNumber) + 'L';
+                end;
+              2:
+                begin
+                  lSpec.DowKind := 2;
+                  lSpec.DowNth := 1 + Random(5);
+                  lDow := IntToStr(lDowNumber) + '#' + IntToStr(lSpec.DowNth);
+                end;
+            end;
+            lMinute := PickToken(['0', 'H', 'H/15', 'H(0-29)/10']);
+            lSecond := PickToken(['0', 'H', 'H/15', 'H(0-29)/10']);
+            lMonth := PickToken(['*', '2', '2,4,6-12', '*/3']);
+            // February fifth weekdays can be decades apart, beyond the default oracle scan.
+            if (lMonth = '2') and (lSpec.DowKind = 2) and (lSpec.DowNth = 5) then
+              lMonth := '2,4,6-12';
+            lYear := PickToken(['*', '2024-2027', '2025,2028', '*/4']);
+            case lDialect of
+              cdStandard: lText := lMinute + ' * ' + lDom + ' ' + lMonth + ' ' + lDow;
+              cdQuartzSecondsFirst:
+                lText := lSecond + ' ' + lMinute + ' * ' + lDom + ' ' + lMonth + ' ' + lDow + ' ' + lYear;
+            else
+              lText := lMinute + ' * ' + lDom + ' ' + lMonth + ' ' + lDow + ' ' + lYear + ' ' + lSecond;
+            end;
+          end;
+          lPlan.Parse(lText);
+          lBase := EncodeDateTime(2023 + Random(7), 1 + Random(12), 1, Random(24), Random(60),
+            Random(60), 500 * Random(2));
+          if lCaseIndex mod 4 = 0 then
+            lBase := IncDay(EncodeDate(2028, 3, 1), -(lCaseIndex mod 3));
+          if aKind = 1 then
+            lBase := EncodeDateTime(2026, 1 + Random(12), 1 + Random(20), Random(24), Random(60),
+              Random(60), 500 * Random(2));
+          lHint := BuildCaseHint(lSeed + aKind, lCaseIndex, lDialect, lMode, lText, lBase);
+          if aKind in [1, 2] then
+          begin
+            lExpected := QueryOracleDates(lPlan, lSpec, lBase, EncodeDate(3001, 1, 1), lCount, lScanDays, True, lHint);
+            n := lPlan.GetPreviousOccurrences(lCount, lBase, lActual);
+            Assert.AreEqual(Integer(Length(lExpected)), n, lHint);
+            EqualDates(lExpected, lActual);
+            lFound := lPlan.FindPreviousScheduleDate(lBase, lPrevious);
+            Assert.AreEqual(Length(lExpected) > 0, lFound, lHint);
+            if lFound then Assert.AreEqual(OracleSerial(lExpected[0]), OracleSerial(lPrevious), lHint);
+            if aKind = 2 then
+            begin
+              lExpected := QueryOracleDates(lPlan, lSpec, lBase, EncodeDate(3001, 1, 1), lCount, lScanDays, False, lHint);
+              lPlan.GetNextOccurrences(lCount, lBase, lActual);
+              EqualDates(lExpected, lActual);
+            end;
+          end else if aKind = 3 then
+          begin
+            lEnd := IncSecond(lBase, cWidths[lCaseIndex mod 6]);
+            lOracleBase := RecodeMilliSecond(lBase, 0);
+            if DateTimeToTimeStamp(lBase).Time mod 1000 = 0 then
+              lOracleBase := IncSecond(lOracleBase, -1);
+            // Include lower bound, but exclude upper bound after RTL millisecond rounding.
+            lExpected := QueryOracleDates(lPlan, lSpec, lOracleBase,
+              IncSecond(RecodeMilliSecond(lEnd, 0), Ord(DateTimeToTimeStamp(lEnd).Time mod 1000 > 0)),
+              500, lScanDays, False, lHint);
+            lPlan.GetOccurrencesBetween(lBase, lEnd, lActual, 500);
+            EqualDates(lExpected, lActual);
+            Assert.AreEqual(Integer(Length(lExpected)), lPlan.CountBetween(lBase, lEnd, 500), lHint);
+            Assert.AreEqual(Length(lExpected) > 0, lPlan.HasOccurrenceBetween(lBase, lEnd), lHint);
+          end else begin
+            if lPlan.FindPreviousScheduleDate(lBase, lPrevious) then
+            begin
+              Inc(lRelations);
+              Assert.IsTrue(OracleSerial(lPrevious) <= OracleSerial(lBase), lHint);
+              if lPlan.FindNextScheduleDate(lPrevious, lNext) then
+              begin
+                Assert.IsTrue(OracleSerial(lNext) >= OracleSerial(lBase), lHint);
+                Assert.IsTrue(lPlan.FindPreviousScheduleDate(lNext, lCursor), lHint);
+                Assert.AreEqual(OracleSerial(lPrevious), OracleSerial(lCursor), lHint);
+              end;
+            end;
+            if lPlan.FindNextScheduleDate(lBase, lNext) then
+            begin
+              if lPlan.FindPreviousScheduleDate(lNext, lPrevious) then
+              begin
+                Assert.IsTrue(OracleSerial(lPrevious) <= OracleSerial(lBase), lHint);
+                Assert.IsTrue(lPlan.FindNextScheduleDate(lPrevious, lCursor), lHint);
+                Assert.AreEqual(OracleSerial(lNext), OracleSerial(lCursor), lHint);
+              end;
+            end;
+            lEnd := IncDay(lBase, 3);
+            n := lPlan.GetOccurrencesBetween(lBase, lEnd, lActual, 500);
+            Assert.AreEqual(n, lPlan.CountBetween(lBase, lEnd, 500), lHint);
+            Assert.AreEqual(n > 0, lPlan.HasOccurrenceBetween(lBase, lEnd), lHint);
+            if n > 0 then
+            begin
+              lPlan.GetPreviousOccurrences(n, IncSecond(lActual[n-1], 1), lReverse);
+              Assert.AreEqual(n, Integer(Length(lReverse)), lHint);
+              for i := 0 to n - 1 do
+              begin
+                Assert.AreEqual(OracleSerial(lActual[i]), OracleSerial(lReverse[n-1-i]), lHint);
+              end;
+            end;
+          end;
+        finally
+          lPlan.Free;
+        end;
+      end;
+    end;
+  end;
+  if aKind = 4 then
+    Assert.IsTrue(lRelations > 0, 'Property suite must exercise a previous occurrence');
+end;
+
+procedure TTestCronFuzzOracle.PreviousOccurrences_MatchBruteForceOracle;
+begin
+  RunQueryOracle(1);
+end;
+
+procedure TTestCronFuzzOracle.ModifierPlans_NextAndPrevious_MatchBruteForceOracle;
+begin
+  RunQueryOracle(2);
+end;
+
+procedure TTestCronFuzzOracle.Between_MatchBruteForceOracle;
+begin
+  RunQueryOracle(3);
+end;
+
+procedure TTestCronFuzzOracle.Properties_NextPreviousRelations;
+begin
+  RunQueryOracle(4);
+end;
 
 type
   TNextRegression = record

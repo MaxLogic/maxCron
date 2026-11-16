@@ -27,7 +27,7 @@ unit-qualified RTTI names now use `maxCron.Plan` (for example,
 - Per-event timezone + DST handling policies
 - Business calendar controls (weekdays-only, holiday list, blackout windows)
 - Deterministic hash/jitter syntax (`H`, `H/step`, `H(min-max)/step`)
-- Schedule previews and human-readable descriptions
+- Schedule previews, previous-occurrence and range queries, and human-readable descriptions
 - Comments and flexible whitespace support
 - Pluggable schedule persistence + restore API (`ScheduleStore`, `SaveScheduleState`, `RestoreScheduleState`)
 - Per-event retry/backoff controls with dead-letter hooks
@@ -787,7 +787,15 @@ Replay knobs:
 - `MAXCRON_FUZZ_SEED` (default `137031`)
 - `MAXCRON_FUZZ_CASES` (default `36` per dialect/day-match combination)
 - `MAXCRON_FUZZ_OCCURRENCES` (default `6`)
-- `MAXCRON_FUZZ_SCAN_SECONDS` (default `604800`)
+- `MAXCRON_FUZZ_SCAN_SECONDS` (default `604800`, existing forward oracle)
+- `MAXCRON_FUZZ_SCAN_DAYS` (default `3700`, day-pruned query oracle)
+
+The fixture also runs `PreviousOccurrences_MatchBruteForceOracle`,
+`ModifierPlans_NextAndPrevious_MatchBruteForceOracle`,
+`Between_MatchBruteForceOracle` and `Properties_NextPreviousRelations`.
+These cover previous/range queries, independent DOM/DOW modifier rules,
+hashed fields and restricted years. Each uses its own seed offset (1 through 4),
+leaving the existing forward oracle's random stream unchanged.
 
 We can run async-boundary chaos coverage (queue-acquire injection, dispatch-start failure, callback exceptions, cancellation races):
 
@@ -857,6 +865,58 @@ begin
   end;
 end;
 ```
+
+## Previous occurrences and range queries
+
+`TCronSchedulePlan` also searches backwards and queries a time window:
+
+```delphi
+var
+  lPlan: TCronSchedulePlan;
+  lDates: TDates;
+  lPrevious, lStart, lEnd: TDateTime;
+  lCount: Integer;
+begin
+  lPlan := TCronSchedulePlan.Create;
+  try
+    lPlan.Parse('*/15 * * * *');
+    lStart := EncodeDateTime(2026, 11, 15, 10, 0, 0, 0);
+    lEnd := IncHour(lStart, 1);
+    if lPlan.FindPreviousScheduleDate(IncMinute(lStart, 7), lPrevious) then
+      Writeln(DateTimeToStr(lPrevious)); // 10:00
+    lCount := lPlan.GetPreviousOccurrences(3, IncMinute(lStart, 7), lDates);
+    // Newest first: 10:00, 09:45, 09:30.
+    lCount := lPlan.GetOccurrencesBetween(lStart, lEnd, lDates, 2);
+    // Oldest first: 10:00, 10:15. Fetch the next page after the last result.
+    if lCount > 0 then
+      lCount := lPlan.GetOccurrencesBetween(IncSecond(lDates[lCount - 1], 1), lEnd, lDates, 2);
+    lCount := lPlan.CountBetween(lStart, lEnd); // 4
+    if lPlan.HasOccurrenceBetween(lStart, lEnd) then
+      Writeln(lCount);
+  finally
+    lPlan.Free;
+  end;
+end;
+```
+
+The example uses `System.DateUtils` and `System.SysUtils`, plus either `maxCron`
+or the RTL-only `maxCron.Plan` unit. Previous searches are strictly before the
+base time. Ranges include the start and exclude the end: `[start, end)`.
+Comparisons use RTL millisecond rounding and occurrences are whole seconds:
+previous at `10:15:00.000` excludes that occurrence, while `10:15:00.001`
+includes it. A range starting at `10:00:00.001` begins with `10:15`.
+
+Queries stay within 1900-01-01 through 3000-12-31. A failed previous search sets
+its output to zero. Nonpositive counts or limits return empty results; empty
+or reversed windows return zero and `HasOccurrenceBetween` returns False.
+`GetOccurrencesBetween` and `CountBetween` default to `cCronQueryDefaultLimit`
+(10,000). Lists truncate at the limit; counts saturate there. Pass a larger
+limit, up to `High(Integer)`, to count more, with one next-search per occurrence.
+
+Plan queries ignore `ExecutionLimit` and use naive wall-clock time. Event
+timezone, DST policy, weekdays-only rules, excluded dates, blackout and event
+validity windows are not applied.
+
 
 ## Human-readable descriptions
 

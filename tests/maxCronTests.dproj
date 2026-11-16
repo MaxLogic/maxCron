@@ -1,4 +1,4 @@
-﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     <PropertyGroup>
         <ProjectGuid>{DE7DC5FA-D997-4A60-BFDF-913F79FBBCB9}</ProjectGuid>
         <MainSource>maxCronTests.dpr</MainSource>
@@ -201,6 +201,7 @@
         <DCCReference Include="..\maxCron.Internal.TimeZone.pas"/>
         <DCCReference Include="..\maxCron.Plan.pas"/>
         <DCCReference Include="unit\TestPublicApiCompat.pas"/>
+        <DCCReference Include="unit\TestCronQuery.pas"/>
         <DCCReference Include="..\maxCron.pas"/>
         <DCCReference Include="unit\TestCronInvalidCorpus.pas"/>
         <DCCReference Include="unit\TestCronParsing.pas"/>

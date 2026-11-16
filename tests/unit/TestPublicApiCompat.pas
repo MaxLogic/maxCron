@@ -16,6 +16,7 @@ type
     [Test] procedure TypeIdentityAndRtti;
     [Test] procedure CalculationAndPreview;
     [Test] procedure ExecutionLimitBoundary;
+    [Test] procedure QueryApiAlias;
   end;
 
 implementation
@@ -187,6 +188,23 @@ begin
     Assert.AreEqual(UInt64(4294967295), UInt64(lPlan.ExecutionLimit));
     Reject('* * * * * * * 4294967296', 'Cron value out of range');
     Reject('* * * * * * * x', 'Invalid cron token');
+  finally
+    lPlan.Free;
+  end;
+end;
+
+procedure TTestPublicApiCompat.QueryApiAlias;
+var
+  lPlan: TCronSchedulePlan;
+  lDates: TDates;
+begin
+  Assert.AreEqual(10000, cCronQueryDefaultLimit);
+  lPlan := TCronSchedulePlan.Create;
+  try
+    lPlan.Parse('* * * * * * *');
+    Assert.AreEqual(10000, lPlan.GetOccurrencesBetween(EncodeDate(2026, 1, 1),
+      EncodeDate(2026, 1, 2), lDates));
+    Assert.AreEqual(10000, Integer(Length(lDates)));
   finally
     lPlan.Free;
   end;

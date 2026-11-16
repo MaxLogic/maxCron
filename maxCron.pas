@@ -32,6 +32,7 @@ const
   cdStandard = maxCron.Plan.cdStandard;
   cdMaxCron = maxCron.Plan.cdMaxCron;
   cdQuartzSecondsFirst = maxCron.Plan.cdQuartzSecondsFirst;
+  cCronQueryDefaultLimit = maxCron.Plan.cCronQueryDefaultLimit;
   ckMinute = maxCron.Plan.ckMinute;
   ckHour = maxCron.Plan.ckHour;
   ckDayOfTheMonth = maxCron.Plan.ckDayOfTheMonth;

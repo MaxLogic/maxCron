@@ -6,6 +6,10 @@ interface
 uses
   System.SysUtils;
 
+const
+  /// Default result limit for plan range queries.
+  cCronQueryDefaultLimit = 10000;
+
 type
   TCronSchedulePlan = class;
 
@@ -109,6 +113,7 @@ type
     function ReplaceDaynames(const Value: string): string;
     Procedure Add2Range(Value: word);
     function FindInRange(Value: word; out index: integer): boolean;
+    function TryPrevVal(const aValue: Word; out aResult: Word): Boolean;
     function HasSpecial: Boolean;
     function TryParseSpecialToken(const aToken: string): Boolean;
     function TryParseDomSpecial(const aToken: string): Boolean;
@@ -192,6 +197,9 @@ type
     function HasPossibleDayOfMonth: Boolean;
     function FindNextFromCandidate(const aCandidate, aValidTo: TDateTime;
       out aNextDateTime: TDateTime): Boolean;
+    function TryFindLastMatchingDay(const aYear, aMonth, aMaxDay: Word; out aDay: Word): Boolean;
+    function CollectBetween(const aStart, aEnd: TDateTime; const aLimit: Integer;
+      const aStore: Boolean; out aDates: TDates): Integer;
   public
     Constructor Create;
     Destructor Destroy; override;
@@ -206,6 +214,19 @@ type
     function GetNextOccurrences(const aCount: Integer; const aFromDate: TDateTime;
       out aDates: TDates; const aValidFrom: TDateTime = 0;
       const aValidTo: TDateTime = 0): Integer;
+    /// Last occurrence strictly before aBaseDate; False sets the output to zero.
+    function FindPreviousScheduleDate(const aBaseDate: TDateTime;
+      out aPreviousDateTime: TDateTime): Boolean;
+    /// Up to aCount occurrences, newest first. Nonpositive counts return an empty array.
+    function GetPreviousOccurrences(const aCount: Integer; const aFromDate: TDateTime;
+      out aDates: TDates): Integer;
+    /// Occurrences in [aStart, aEnd), oldest first, truncated at aLimit.
+    function GetOccurrencesBetween(const aStart, aEnd: TDateTime; out aDates: TDates;
+      const aLimit: Integer = cCronQueryDefaultLimit): Integer;
+    /// Count in [aStart, aEnd), saturating at aLimit. Queries ignore ExecutionLimit.
+    function CountBetween(const aStart, aEnd: TDateTime;
+      const aLimit: Integer = cCronQueryDefaultLimit): Integer;
+    function HasOccurrenceBetween(const aStart, aEnd: TDateTime): Boolean;
     function Describe: string;
 
     property Second: TCronPart read FSecond write SetSecond;
@@ -618,6 +639,359 @@ begin
     lStartDate := lStartDate + EncodeTime(h, m, s, 0) + OneSecond;
 
   Result := FindNextFromCandidate(lStartDate, aValidTo, aNextDateTime);
+end;
+
+function QuerySerial(const aDate: TDateTime): Int64;
+var
+  lStamp: TTimeStamp;
+begin
+  lStamp := DateTimeToTimeStamp(aDate);
+  Result := Int64(lStamp.Date) * 86400 + lStamp.Time div 1000;
+end;
+
+function TCronPart.TryPrevVal(const aValue: Word; out aResult: Word): Boolean;
+var
+  i: Integer;
+begin
+  aResult := aValue;
+  if Fullrange or FindInRange(aValue, i) then
+    Exit(True);
+  Result := i > 0;
+  if Result then
+    aResult := fRange[i - 1];
+end;
+
+function TCronSchedulePlan.TryFindLastMatchingDay(const aYear, aMonth, aMaxDay: Word;
+  out aDay: Word): Boolean;
+var
+  lDomTarget, lDowTarget, lFirstDow, lDow: Word;
+  lDomSpecial, lDowSpecial, lDomMatch, lDowMatch, lUseAnd: Boolean;
+  d: Integer;
+begin
+  if FDayOfTheMonth.Fullrange and FDayOfTheWeek.Fullrange then
+  begin
+    aDay := aMaxDay;
+    Exit(True);
+  end;
+  lUseAnd := (fDayMatchMode <> dmOr) or FDayOfTheMonth.Fullrange or FDayOfTheWeek.Fullrange;
+  lDomSpecial := FDayOfTheMonth.HasSpecial;
+  lDowSpecial := FDayOfTheWeek.HasSpecial;
+  lDomTarget := 0;
+  lDowTarget := 0;
+  if lDomSpecial then
+  begin
+    if not FDayOfTheMonth.TryGetDomSpecialDay(aYear, aMonth, lDomTarget) then
+      lDomTarget := 0;
+  end;
+  if lDowSpecial then
+  begin
+    if not FDayOfTheWeek.TryGetDowSpecialDay(aYear, aMonth, lDowTarget) then
+      lDowTarget := 0;
+  end;
+  lFirstDow := DayOfTheWeek(EncodeDate(aYear, aMonth, 1)) mod 7;
+  for d := aMaxDay downto 1 do
+  begin
+    if lDomSpecial then
+      lDomMatch := d = lDomTarget
+    else
+      lDomMatch := FDayOfTheMonth.NextVal(d) = d;
+    lDow := (lFirstDow + d - 1) mod 7;
+    if lDowSpecial then
+      lDowMatch := d = lDowTarget
+    else
+      lDowMatch := FDayOfTheWeek.NextVal(lDow) = lDow;
+    if (lUseAnd and lDomMatch and lDowMatch) or (not lUseAnd and (lDomMatch or lDowMatch)) then
+    begin
+      aDay := d;
+      Exit(True);
+    end;
+  end;
+  Result := False;
+end;
+
+function TCronSchedulePlan.FindPreviousScheduleDate(const aBaseDate: TDateTime;
+  out aPreviousDateTime: TDateTime): Boolean;
+var
+  y, mo, d, h, mi, s: Integer;
+  lStamp: TTimeStamp;
+  lYear, lMonth, lDay, lHour, lMinute, lSecond, lMilli, v: Word;
+
+  procedure EndOfPreviousYear;
+  begin
+    Dec(y);
+    mo := 12;
+    d := 31;
+    h := 23;
+    mi := 59;
+    s := 59;
+  end;
+
+  procedure EndOfPreviousMonth;
+  begin
+    if mo = 1 then
+      EndOfPreviousYear
+    else
+    begin
+      Dec(mo);
+      d := 31;
+      h := 23;
+      mi := 59;
+      s := 59;
+    end;
+  end;
+
+  procedure EndOfPreviousDay;
+  begin
+    if d = 1 then
+      EndOfPreviousMonth
+    else
+    begin
+      Dec(d);
+      h := 23;
+      mi := 59;
+      s := 59;
+    end;
+  end;
+
+  procedure EndOfPreviousHour;
+  begin
+    if h = 0 then
+      EndOfPreviousDay
+    else
+    begin
+      Dec(h);
+      mi := 59;
+      s := 59;
+    end;
+  end;
+
+  procedure EndOfPreviousMinute;
+  begin
+    if mi = 0 then
+      EndOfPreviousHour
+    else
+    begin
+      Dec(mi);
+      s := 59;
+    end;
+  end;
+
+begin
+  aPreviousDateTime := 0;
+  if not HasPossibleDayOfMonth then
+    Exit(False);
+  if aBaseDate <= EncodeDate(1900, 1, 1) then
+    Exit(False);
+  if aBaseDate >= EncodeDate(3001, 1, 1) then
+  begin
+    y := 3000;
+    mo := 12;
+    d := 31;
+    h := 23;
+    mi := 59;
+    s := 59;
+  end else begin
+    lStamp := DateTimeToTimeStamp(aBaseDate);
+    DecodeDate(lStamp.Date - DateDelta, lYear, lMonth, lDay);
+    DecodeSearchClock(lStamp, lHour, lMinute, lSecond, lMilli);
+    y := lYear;
+    mo := lMonth;
+    d := lDay;
+    h := lHour;
+    mi := lMinute;
+    s := lSecond;
+    if lMilli = 0 then
+    begin
+      if s = 0 then
+        EndOfPreviousMinute
+      else
+        Dec(s);
+    end;
+  end;
+  while y >= 1900 do
+  begin
+    if not FYear.TryPrevVal(y, v) then
+      Exit(False);
+    if v < y then
+    begin
+      y := v;
+      mo := 12;
+      d := 31;
+      h := 23;
+      mi := 59;
+      s := 59;
+    end;
+    if not FMonth.TryPrevVal(mo, v) then
+    begin
+      EndOfPreviousYear;
+      Continue;
+    end;
+    if v < mo then
+    begin
+      mo := v;
+      d := 31;
+      h := 23;
+      mi := 59;
+      s := 59;
+    end;
+    d := Min(d, DaysInAMonth(y, mo));
+    if not TryFindLastMatchingDay(y, mo, d, v) then
+    begin
+      EndOfPreviousMonth;
+      Continue;
+    end;
+    if v < d then
+    begin
+      d := v;
+      h := 23;
+      mi := 59;
+      s := 59;
+    end;
+    if not FHour.TryPrevVal(h, v) then
+    begin
+      EndOfPreviousDay;
+      Continue;
+    end;
+    if v < h then
+    begin
+      h := v;
+      mi := 59;
+      s := 59;
+    end;
+    if not FMinute.TryPrevVal(mi, v) then
+    begin
+      EndOfPreviousHour;
+      Continue;
+    end;
+    if v < mi then
+    begin
+      mi := v;
+      s := 59;
+    end;
+    if not FSecond.TryPrevVal(s, v) then
+    begin
+      EndOfPreviousMinute;
+      Continue;
+    end;
+    aPreviousDateTime := EncodeDateTime(y, mo, d, h, mi, v, 0);
+    Exit(True);
+  end;
+  Result := False;
+end;
+
+function TCronSchedulePlan.GetPreviousOccurrences(const aCount: Integer; const aFromDate: TDateTime;
+  out aDates: TDates): Integer;
+var
+  lCursor, lPrevious: TDateTime;
+begin
+  Result := 0;
+  aDates := nil;
+  if aCount <= 0 then
+    Exit;
+  SetLength(aDates, aCount);
+  lCursor := aFromDate;
+  while Result < aCount do
+  begin
+    if not FindPreviousScheduleDate(lCursor, lPrevious) then
+      Break;
+    if (Result > 0) and (QuerySerial(lPrevious) >= QuerySerial(lCursor)) then
+      Break;
+    aDates[Result] := lPrevious;
+    Inc(Result);
+    lCursor := lPrevious;
+  end;
+  SetLength(aDates, Result);
+end;
+
+function TCronSchedulePlan.CollectBetween(const aStart, aEnd: TDateTime; const aLimit: Integer;
+  const aStore: Boolean; out aDates: TDates): Integer;
+var
+  lStart, lEnd, lCandidate, lNext, lPrevious: TDateTime;
+  lStamp: TTimeStamp;
+  lLast, lLower, lSerial: Int64;
+  lCapacity: Integer;
+begin
+  Result := 0;
+  aDates := nil;
+  if aLimit <= 0 then
+    Exit;
+  lStart := Max(aStart, EncodeDate(1900, 1, 1));
+  lEnd := Min(aEnd, EncodeDate(3001, 1, 1));
+  // Clamp before converting timestamps, so out-of-domain values never reach the decoder.
+  if (lStart >= EncodeDate(3001, 1, 1)) or (lEnd <= EncodeDate(1900, 1, 1)) then
+    Exit;
+  lStamp := DateTimeToTimeStamp(lStart);
+  lLower := QuerySerial(lStart);
+  lCandidate := RecodeMilliSecond(lStart, 0);
+  if lStamp.Time mod 1000 > 0 then
+  begin
+    Inc(lLower);
+    lCandidate := IncSecond(lCandidate, 1);
+  end;
+  lStamp := DateTimeToTimeStamp(lEnd);
+  lLast := QuerySerial(lEnd);
+  if lStamp.Time mod 1000 = 0 then
+    Dec(lLast);
+  if lLast < lLower then
+    Exit;
+  if not FindNextFromCandidate(lCandidate, lEnd, lNext) then
+    Exit;
+  lCapacity := 0;
+  while Result < aLimit do
+  begin
+    lSerial := QuerySerial(lNext);
+    // Fail closed if a future search regression violates the inclusive lower bound.
+    // Assertions expose the broken invariant in checked builds; release builds stop
+    // with the valid prefix already collected, as required for non-progress below.
+    Assert(lSerial >= lLower, 'Range search returned an occurrence before its lower bound');
+    if (lSerial < lLower) or (lSerial > lLast) then
+      Break;
+    if aStore then
+    begin
+      if Result = lCapacity then
+      begin
+        if lCapacity = 0 then
+          lCapacity := Min(aLimit, 64)
+        else if lCapacity > aLimit div 2 then
+          lCapacity := aLimit
+        else
+          lCapacity := lCapacity * 2;
+        SetLength(aDates, lCapacity);
+      end;
+      aDates[Result] := lNext;
+    end;
+    Inc(Result);
+    if Result = aLimit then
+      Break;
+    lPrevious := lNext;
+    if not FindNextScheduleDate(lPrevious, lNext, 0, lEnd) then
+      Break;
+    Assert(QuerySerial(lNext) > lSerial, 'Range search did not advance');
+    if QuerySerial(lNext) <= lSerial then
+      Break;
+  end;
+  if aStore then
+    SetLength(aDates, Result);
+end;
+
+function TCronSchedulePlan.GetOccurrencesBetween(const aStart, aEnd: TDateTime; out aDates: TDates;
+  const aLimit: Integer): Integer;
+begin
+  Result := CollectBetween(aStart, aEnd, aLimit, True, aDates);
+end;
+
+function TCronSchedulePlan.CountBetween(const aStart, aEnd: TDateTime; const aLimit: Integer): Integer;
+var
+  lUnused: TDates;
+begin
+  Result := CollectBetween(aStart, aEnd, aLimit, False, lUnused);
+end;
+
+function TCronSchedulePlan.HasOccurrenceBetween(const aStart, aEnd: TDateTime): Boolean;
+var
+  lUnused: TDates;
+begin
+  Result := CollectBetween(aStart, aEnd, 1, False, lUnused) > 0;
 end;
 
 function FormatTwo(const aValue: Word): string;

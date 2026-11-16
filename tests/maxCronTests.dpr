@@ -20,6 +20,7 @@ uses
   TestCalendarTimeZone in 'unit\TestCalendarTimeZone.pas',
   TestChaosFaultInjection in 'unit\TestChaosFaultInjection.pas',
   TestCronFuzzOracle in 'unit\TestCronFuzzOracle.pas',
+  TestCronQuery in 'unit\TestCronQuery.pas',
   TestDispatchStartFailures in 'unit\TestDispatchStartFailures.pas',
   TestExecutionLimit in 'unit\TestExecutionLimit.pas',
   TestHashJitter in 'unit\TestHashJitter.pas',
@@ -51,6 +52,7 @@ begin
     TDUnitX.RegisterTestFixture(TTestCalendarTimeZone);
     TDUnitX.RegisterTestFixture(TTestChaosFaultInjection);
     TDUnitX.RegisterTestFixture(TTestCronFuzzOracle);
+    TDUnitX.RegisterTestFixture(TTestCronQuery);
     TDUnitX.RegisterTestFixture(TTestDispatchStartFailures);
     TDUnitX.RegisterTestFixture(TTestExecutionLimit);
     TDUnitX.RegisterTestFixture(TTestHashJitter);

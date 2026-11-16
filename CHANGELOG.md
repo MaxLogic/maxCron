@@ -5,6 +5,7 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Added previous-occurrence and range queries to `TCronSchedulePlan`: `FindPreviousScheduleDate`, `GetPreviousOccurrences`, `GetOccurrencesBetween`, `CountBetween` and `HasOccurrenceBetween` over `[start, end)` with a result limit (`cCronQueryDefaultLimit`, 10,000). Queries use the plan's wall-clock time and ignore the execution limit. Fuzz-oracle coverage now checks previous and range results, and DOM/DOW modifier plans in both directions, against brute force.
 - Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
 
 ### Changed
