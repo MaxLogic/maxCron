@@ -13,6 +13,7 @@ All notable user-visible changes to this project will be documented in this file
 - Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
 
 ### Fixed
+- Fixed `FindNextScheduleDate` returning an occurrence before its base when second-field rollover rounded midnight into the previous day.
 - Corrected the pooled-dispatch regression test to verify worker reuse instead of assuming a fixed maximum pool size.
 - Fixed DST policy tests to search the next two years for future transitions with at least one hour of scheduling margin, including transition-minute and year-boundary checks, instead of using elapsed transitions from the current year.
 - Migrated test gates to DelphiAIKit and corrected WSL exit propagation so missing tools, build errors, and test failures return nonzero.

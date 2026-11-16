@@ -29,7 +29,11 @@ type
       const aFromDate: TDateTime; const aCount, aMaxScanSeconds: Integer): TDates;
     function BuildCaseHint(const aSeed, aCaseIndex: Integer; const aDialect: TmaxCronDialect;
       const aDayMatchMode: TmaxCronDayMatchMode; const aPlan: string; const aFromDate: TDateTime): string;
+    procedure CheckNextOracle(const aText, aDom, aDow: string;
+      const aDialect: TmaxCronDialect; const aMode: TmaxCronDayMatchMode;
+      const aSeed: string; const aBase: TDateTime; var aFailures: string; var aChecked: Integer);
   public
+    [Test] procedure NextDate_MonotonicAndFirstOccurrence;
     [Test]
     procedure NextOccurrences_MatchBruteForceOracle;
   end;
@@ -366,6 +370,336 @@ begin
       end;
     end;
   end;
+end;
+
+
+type
+  TNextRegression = record
+    Text: string;
+    Dialect, Mode, Seed, H, M, S: Integer;
+  end;
+
+function NextOracleSerial(const aDate: TDateTime): Int64;
+var
+  lStamp: TTimeStamp;
+begin
+  lStamp := DateTimeToTimeStamp(aDate);
+  Result := Int64(lStamp.Date) * 86400 + lStamp.Time div 1000;
+end;
+
+function NextOracleDayMatches(const aPlan: TCronSchedulePlan; const aDom, aDow: string;
+  const aDate: TDateTime): Boolean;
+var
+  y, mo, d, lLast, lTarget, lDow: Word;
+  lDomMatch, lDowMatch: Boolean;
+  lPos, lWeekday: Integer;
+begin
+  DecodeDate(aDate, y, mo, d);
+  if (aPlan.Year.NextVal(y) <> y) or (aPlan.Month.NextVal(mo) <> mo) then
+    Exit(False);
+  lLast := DaysInAMonth(y, mo);
+  lDow := DayOfTheWeek(aDate) mod 7;
+  if (aDom = 'L') or (aDom = 'LW') then
+  begin
+    lTarget := lLast;
+    if aDom = 'LW' then
+      while DayOfTheWeek(EncodeDate(y, mo, lTarget)) in [6, 7] do
+        Dec(lTarget);
+    lDomMatch := d = lTarget;
+  end else if (Length(aDom) > 1) and (aDom[Length(aDom)] = 'W') then
+  begin
+    lTarget := StrToInt(Copy(aDom, 1, Length(aDom) - 1));
+    lDomMatch := False;
+    if lTarget <= lLast then
+    begin
+      case DayOfTheWeek(EncodeDate(y, mo, lTarget)) of
+        6: if lTarget = 1 then Inc(lTarget, 2) else Dec(lTarget);
+        7: if lTarget = lLast then Dec(lTarget, 2) else Inc(lTarget);
+      end;
+      lDomMatch := d = lTarget;
+    end;
+  end else begin
+    lDomMatch := aPlan.Day_of_the_Month.NextVal(d) = d;
+  end;
+  lPos := Pos('#', aDow);
+  if (lPos > 0) or ((Length(aDow) > 1) and (aDow[Length(aDow)] = 'L')) then
+  begin
+    if lPos > 0 then
+      lWeekday := StrToInt(Copy(aDow, 1, lPos - 1))
+    else
+      lWeekday := StrToInt(Copy(aDow, 1, Length(aDow) - 1));
+    if aPlan.Dialect = cdQuartzSecondsFirst then
+      Dec(lWeekday);
+    if lPos > 0 then
+      lDowMatch := (lDow = lWeekday) and ((d - 1) div 7 + 1 = StrToInt(Copy(aDow, lPos + 1, 1)))
+    else
+      lDowMatch := (lDow = lWeekday) and (d + 7 > lLast);
+  end else begin
+    lDowMatch := aPlan.Day_of_the_Week.NextVal(lDow) = lDow;
+  end;
+  if (aPlan.DayMatchMode <> dmOr) or aPlan.Day_of_the_Month.IsAny or aPlan.Day_of_the_Week.IsAny then
+    Result := lDomMatch and lDowMatch
+  else
+    Result := lDomMatch or lDowMatch;
+end;
+
+function NextOracleFirst(const aPlan: TCronSchedulePlan; const aDom, aDow: string;
+  const aBase, aEnd: TDateTime; out aNext: TDateTime): Boolean;
+var
+  lDay: TDateTime;
+  lBound, lSerial: Int64;
+  h, mi, s: Integer;
+begin
+  Result := False;
+  aNext := 0;
+  lBound := NextOracleSerial(aBase);
+  lDay := Trunc(aBase);
+  // Brute force calendar days and allowed clock values; never call any search helper.
+  while lDay < aEnd do
+  begin
+    if NextOracleDayMatches(aPlan, aDom, aDow, lDay) then
+      for h := 0 to 23 do
+        if aPlan.Hour.NextVal(h) = h then
+          for mi := 0 to 59 do
+            if aPlan.Minute.NextVal(mi) = mi then
+              for s := 0 to 59 do
+                if aPlan.Second.NextVal(s) = s then
+                begin
+                  lSerial := NextOracleSerial(lDay) + h * 3600 + mi * 60 + s;
+                  if lSerial > lBound then
+                  begin
+                    aNext := lDay + EncodeTime(h, mi, s, 0);
+                    Exit(True);
+                  end;
+                end;
+    lDay := IncDay(lDay);
+  end;
+end;
+
+procedure TTestCronFuzzOracle.CheckNextOracle(const aText, aDom, aDow: string;
+  const aDialect: TmaxCronDialect; const aMode: TmaxCronDayMatchMode;
+  const aSeed: string; const aBase: TDateTime; var aFailures: string; var aChecked: Integer);
+var
+  lPlan: TCronSchedulePlan;
+  lNext, lExpected, lEnd: TDateTime;
+  lFound, lExpectedFound: Boolean;
+begin
+  lPlan := TCronSchedulePlan.Create;
+  try
+    lPlan.Dialect := aDialect;
+    lPlan.DayMatchMode := aMode;
+    lPlan.HashSeed := aSeed;
+    lPlan.Parse(aText);
+    lEnd := IncDay(Trunc(aBase), 400);
+    lExpectedFound := NextOracleFirst(lPlan, aDom, aDow, aBase, lEnd, lExpected);
+    lFound := lPlan.FindNextScheduleDate(aBase, lNext);
+    Inc(aChecked);
+    if (lFound and (NextOracleSerial(lNext) <= NextOracleSerial(aBase))) or
+      (lExpectedFound and ((not lFound) or (NextOracleSerial(lNext) <> NextOracleSerial(lExpected)))) or
+      ((not lExpectedFound) and lFound and (lNext < lEnd)) then
+      aFailures := aFailures + Format('case=%d dialect=%d mode=%d seed=%s plan="%s" base=%s found=%s next=%s expected=%s; ',
+        [aChecked, Ord(aDialect), Ord(aMode), aSeed, aText, FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', aBase),
+         BoolToStr(lFound, True), FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', lNext),
+         FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', lExpected)]);
+  finally
+    lPlan.Free;
+  end;
+end;
+
+procedure TTestCronFuzzOracle.NextDate_MonotonicAndFirstOccurrence;
+const
+  cRegressions: array[0..127] of TNextRegression = (
+    (Text: '* 23-23 LW JAN,MAR MON-FRI'; Dialect: 0; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '* 23-23 LW JAN,MAR MON-FRI'; Dialect: 0; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '* 23-23 LW JAN,MAR MON-FRI'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '* 23-23 LW JAN,MAR MON-FRI'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '* 23-23 LW JAN,MAR MON-FRI'; Dialect: 1; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '* 23-23 LW JAN,MAR MON-FRI'; Dialect: 1; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '* 23-23 LW JAN,MAR MON-FRI'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '* 23-23 LW JAN,MAR MON-FRI'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '0,30 H/5 17-23/2 ? 1-12 * *'; Dialect: 2; Mode: 0; Seed: 1; H: 23; M: 59; S: 30),
+    (Text: '0,30 H/5 17-23/2 ? 1-12 * *'; Dialect: 2; Mode: 0; Seed: 1; H: 23; M: 59; S: 30),
+    (Text: '0,30 H/5 17-23/2 ? 1-12 * *'; Dialect: 2; Mode: 1; Seed: 1; H: 23; M: 59; S: 30),
+    (Text: '0,30 H/5 17-23/2 ? 1-12 * *'; Dialect: 2; Mode: 1; Seed: 1; H: 23; M: 59; S: 30),
+    (Text: '0,30 H/5 17-23/2 ? 1-12 * *'; Dialect: 2; Mode: 2; Seed: 1; H: 23; M: 59; S: 30),
+    (Text: '0,30 H/5 17-23/2 ? 1-12 * *'; Dialect: 2; Mode: 2; Seed: 1; H: 23; M: 59; S: 30),
+    (Text: 'H/5 * * JAN,MAR MON-FRI * 0 0'; Dialect: 1; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * JAN,MAR MON-FRI * 0 0'; Dialect: 1; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * JAN,MAR MON-FRI * 0 0'; Dialect: 1; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * JAN,MAR MON-FRI * 0 0'; Dialect: 1; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * JAN,MAR MON-FRI * 0 0'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * JAN,MAR MON-FRI * 0 0'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * 1-28/3 1-12 0,2,4'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * 1-28/3 1-12 0,2,4'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * 1-28/3 1-12 0,2,4'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * 1-28/3 1-12 0,2,4'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 13-23/2 * * *'; Dialect: 0; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 13-23/2 * * *'; Dialect: 0; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 13-23/2 * * *'; Dialect: 0; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 13-23/2 * * *'; Dialect: 0; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 13-23/2 * * *'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 13-23/2 * * *'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 13-23/2 * * *'; Dialect: 1; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 13-23/2 * * *'; Dialect: 1; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 13-23/2 * * *'; Dialect: 1; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 13-23/2 * * *'; Dialect: 1; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 13-23/2 * * *'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 13-23/2 * * *'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * L */2 MON-FRI * 0 4294967295'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * L */2 MON-FRI * 0 4294967295'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '25,59 * * JAN,MAR * * 0 0'; Dialect: 1; Mode: 0; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '25,59 * * JAN,MAR * * 0 0'; Dialect: 1; Mode: 0; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '25,59 * * JAN,MAR * * 0 0'; Dialect: 1; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '25,59 * * JAN,MAR * * 0 0'; Dialect: 1; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '25,59 * * JAN,MAR * * 0 0'; Dialect: 1; Mode: 1; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '25,59 * * JAN,MAR * * 0 0'; Dialect: 1; Mode: 1; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '25,59 * * JAN,MAR * * 0 0'; Dialect: 1; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '25,59 * * JAN,MAR * * 0 0'; Dialect: 1; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '25,59 * * JAN,MAR * * 0 0'; Dialect: 1; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '25,59 * * JAN,MAR * * 0 0'; Dialect: 1; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '25,59 * * JAN,MAR * * 0 0'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '25,59 * * JAN,MAR * * 0 0'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '* 1,23 1-28/3 * 0,2,4'; Dialect: 0; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '* 1,23 1-28/3 * 0,2,4'; Dialect: 0; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '* 1,23 1-28/3 * 0,2,4'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '* 1,23 1-28/3 * 0,2,4'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '* 1,23 1-28/3 * 0,2,4'; Dialect: 1; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '* 1,23 1-28/3 * 0,2,4'; Dialect: 1; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '* 1,23 1-28/3 * 0,2,4'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '* 1,23 1-28/3 * 0,2,4'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '40,59 17-23/2 L * MON-FRI'; Dialect: 0; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '40,59 17-23/2 L * MON-FRI'; Dialect: 0; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '40,59 17-23/2 L * MON-FRI'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '40,59 17-23/2 L * MON-FRI'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '40,59 17-23/2 L * MON-FRI'; Dialect: 1; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '40,59 17-23/2 L * MON-FRI'; Dialect: 1; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '40,59 17-23/2 L * MON-FRI'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '40,59 17-23/2 L * MON-FRI'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * 1-12 MON-FRI'; Dialect: 0; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * 1-12 MON-FRI'; Dialect: 0; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * 1-12 MON-FRI'; Dialect: 0; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * 1-12 MON-FRI'; Dialect: 0; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * 1-12 MON-FRI'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * 1-12 MON-FRI'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * 1-12 MON-FRI'; Dialect: 1; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * 1-12 MON-FRI'; Dialect: 1; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * 1-12 MON-FRI'; Dialect: 1; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * 1-12 MON-FRI'; Dialect: 1; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * 1-12 MON-FRI'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * * 1-12 MON-FRI'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * ? */2 ?'; Dialect: 0; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * ? */2 ?'; Dialect: 0; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * ? */2 ?'; Dialect: 0; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * ? */2 ?'; Dialect: 0; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * ? */2 ?'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * ? */2 ?'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * ? */2 ?'; Dialect: 1; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * ? */2 ?'; Dialect: 1; Mode: 0; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * ? */2 ?'; Dialect: 1; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * ? */2 ?'; Dialect: 1; Mode: 1; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * ? */2 ?'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * ? */2 ?'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * 1,15 1-12 MON-FRI'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * 1,15 1-12 MON-FRI'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * 1,15 1-12 MON-FRI'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: 'H/5 * 1,15 1-12 MON-FRI'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '* 6,23 15W 1-12 MON-FRI'; Dialect: 0; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '* 6,23 15W 1-12 MON-FRI'; Dialect: 0; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '* 6,23 15W 1-12 MON-FRI'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '* 6,23 15W 1-12 MON-FRI'; Dialect: 0; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '* 6,23 15W 1-12 MON-FRI'; Dialect: 1; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '* 6,23 15W 1-12 MON-FRI'; Dialect: 1; Mode: 2; Seed: 0; H: 23; M: 59; S: 0),
+    (Text: '* 6,23 15W 1-12 MON-FRI'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '* 6,23 15W 1-12 MON-FRI'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 0),
+    (Text: '0,30 H/5 * LW */2 MON-FRI *'; Dialect: 2; Mode: 2; Seed: 1; H: 23; M: 59; S: 30),
+    (Text: '0,30 H/5 * LW */2 MON-FRI *'; Dialect: 2; Mode: 2; Seed: 1; H: 23; M: 59; S: 30),
+    (Text: '0,30 * 23,23 * */2 * *'; Dialect: 2; Mode: 0; Seed: 0; H: 23; M: 59; S: 30),
+    (Text: '0,30 * 23,23 * */2 * *'; Dialect: 2; Mode: 0; Seed: 0; H: 23; M: 59; S: 30),
+    (Text: '0,30 * 23,23 * */2 * *'; Dialect: 2; Mode: 0; Seed: 1; H: 23; M: 59; S: 30),
+    (Text: '0,30 * 23,23 * */2 * *'; Dialect: 2; Mode: 0; Seed: 1; H: 23; M: 59; S: 30),
+    (Text: '0,30 * 23,23 * */2 * *'; Dialect: 2; Mode: 1; Seed: 0; H: 23; M: 59; S: 30),
+    (Text: '0,30 * 23,23 * */2 * *'; Dialect: 2; Mode: 1; Seed: 0; H: 23; M: 59; S: 30),
+    (Text: '0,30 * 23,23 * */2 * *'; Dialect: 2; Mode: 1; Seed: 1; H: 23; M: 59; S: 30),
+    (Text: '0,30 * 23,23 * */2 * *'; Dialect: 2; Mode: 1; Seed: 1; H: 23; M: 59; S: 30),
+    (Text: '0,30 * 23,23 * */2 * *'; Dialect: 2; Mode: 2; Seed: 0; H: 23; M: 59; S: 30),
+    (Text: '0,30 * 23,23 * */2 * *'; Dialect: 2; Mode: 2; Seed: 0; H: 23; M: 59; S: 30),
+    (Text: '0,30 * 23,23 * */2 * *'; Dialect: 2; Mode: 2; Seed: 1; H: 23; M: 59; S: 30),
+    (Text: '0,30 * 23,23 * */2 * *'; Dialect: 2; Mode: 2; Seed: 1; H: 23; M: 59; S: 30),
+    (Text: '* 21,23 * */2 ? * */15 0'; Dialect: 1; Mode: 0; Seed: 0; H: 23; M: 59; S: 45),
+    (Text: '* 21,23 * */2 ? * */15 0'; Dialect: 1; Mode: 0; Seed: 0; H: 23; M: 59; S: 45),
+    (Text: '* 21,23 * */2 ? * */15 0'; Dialect: 1; Mode: 0; Seed: 1; H: 23; M: 59; S: 45),
+    (Text: '* 21,23 * */2 ? * */15 0'; Dialect: 1; Mode: 0; Seed: 1; H: 23; M: 59; S: 45),
+    (Text: '* 21,23 * */2 ? * */15 0'; Dialect: 1; Mode: 1; Seed: 0; H: 23; M: 59; S: 45),
+    (Text: '* 21,23 * */2 ? * */15 0'; Dialect: 1; Mode: 1; Seed: 0; H: 23; M: 59; S: 45),
+    (Text: '* 21,23 * */2 ? * */15 0'; Dialect: 1; Mode: 1; Seed: 1; H: 23; M: 59; S: 45),
+    (Text: '* 21,23 * */2 ? * */15 0'; Dialect: 1; Mode: 1; Seed: 1; H: 23; M: 59; S: 45),
+    (Text: '* 21,23 * */2 ? * */15 0'; Dialect: 1; Mode: 2; Seed: 0; H: 23; M: 59; S: 45),
+    (Text: '* 21,23 * */2 ? * */15 0'; Dialect: 1; Mode: 2; Seed: 0; H: 23; M: 59; S: 45),
+    (Text: '* 21,23 * */2 ? * */15 0'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 45),
+    (Text: '* 21,23 * */2 ? * */15 0'; Dialect: 1; Mode: 2; Seed: 1; H: 23; M: 59; S: 45));
+  cDom: array[0..5] of string = ('L', 'LW', '15W', '1', '31W', '*');
+var
+  lDialect: TmaxCronDialect;
+  lMode: TmaxCronDayMatchMode;
+  lTokens: TArray<string>;
+  lFailures, lDom, lDow, lText, lYear, lMonth, lSeed: string;
+  lBase: TDateTime;
+  lChecked, lSavedSeed, i, j, k, lOffset: Integer;
+begin
+  lChecked := 0;
+  lFailures := '';
+  // Keep all 128 D2 stops, including both seeds and both window walks.
+  for i := 0 to High(cRegressions) do
+  begin
+    lTokens := cRegressions[i].Text.Split([' ']);
+    lOffset := Ord(cRegressions[i].Dialect = Ord(cdQuartzSecondsFirst));
+    lSeed := '';
+    if cRegressions[i].Seed = 1 then lSeed := 'job-a';
+    CheckNextOracle(cRegressions[i].Text, lTokens[2 + lOffset], lTokens[4 + lOffset],
+      TmaxCronDialect(cRegressions[i].Dialect), TmaxCronDayMatchMode(cRegressions[i].Mode), lSeed,
+      EncodeDateTime(1900, 1, 1, cRegressions[i].H, cRegressions[i].M, cRegressions[i].S, 0),
+      lFailures, lChecked);
+  end;
+  lSavedSeed := RandSeed;
+  try
+    RandSeed := 137031;
+    for lDialect := Low(TmaxCronDialect) to High(TmaxCronDialect) do
+      for lMode := Low(TmaxCronDayMatchMode) to High(TmaxCronDayMatchMode) do
+        for j := 0 to 3 do
+          for k := 0 to High(cDom) do
+          begin
+            case j of
+              0: lBase := EncodeDate(1900, 1, 1);
+              1: lBase := EncodeDate(1900, 1, 31);
+              2: lBase := EncodeDate(2027, 12, 31);
+            else
+              lBase := EncodeDate(2028, 2, 28);
+            end;
+            lBase := lBase + EncodeTime(23, 59, Random(2) * 30, Random(2) * 500);
+            lYear := IntToStr(YearOf(lBase));
+            lMonth := '*';
+            lDom := cDom[k];
+            lDow := '1';
+            if lDialect = cdQuartzSecondsFirst then lDow := '2';
+            if k = 3 then
+            begin
+              lMonth := '2';
+              lDow := lDow + '#5';
+            end else if k = 4 then
+              lDow := lDow + 'L';
+            case lDialect of
+              cdStandard: lText := '*/5 13-23/2 ' + lDom + ' ' + lMonth + ' ' + lDow;
+              cdQuartzSecondsFirst: lText := '0,30 */5 13-23/2 ' + lDom + ' ' + lMonth + ' ' + lDow + ' ' + lYear;
+            else
+              lText := '*/5 13-23/2 ' + lDom + ' ' + lMonth + ' ' + lDow + ' ' + lYear + ' 0,30';
+            end;
+            CheckNextOracle(lText, lDom, lDow, lDialect, lMode, '', lBase, lFailures, lChecked);
+          end;
+  finally
+    RandSeed := lSavedSeed;
+  end;
+  Assert.AreEqual(344, lChecked, '128 deterministic D2 stops plus 216 fixed-seed generated cases');
+  Assert.AreEqual('', lFailures, 'Next must advance and equal the independent first occurrence: ' + lFailures);
 end;
 
 end.

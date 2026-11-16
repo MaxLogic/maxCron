@@ -2009,7 +2009,13 @@ begin
       Result := false;
       h := HourOf(NextDate);
       m := MinuteOf(NextDate);
-      NextDate := trunc(NextDate) + h * OneHour + (m + 1) * OneMinute + i * OneSecond;
+      // Add the whole day before the fractional time when carrying across midnight.
+      // Otherwise 23 hours + 60 minutes can round below midnight: DecodeTime sees
+      // the next day while Trunc still selects the previous day on the next pass.
+      if (h = 23) and (m = 59) then
+        NextDate := trunc(NextDate) + 1 + i * OneSecond
+      else
+        NextDate := trunc(NextDate) + h * OneHour + (m + 1) * OneMinute + i * OneSecond;
     end
     else if i > v then
     begin
