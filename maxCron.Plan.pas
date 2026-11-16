@@ -582,26 +582,42 @@ begin
   end;
 end;
 
+procedure DecodeSearchClock(const aStamp: TTimeStamp; out h, m, s, ms: Word);
+var
+  lSeconds: Integer;
+begin
+  // Date and clock must come from the same RTL millisecond normalization.
+  lSeconds := aStamp.Time div MSecsPerSec;
+  h := lSeconds div SecsPerHour;
+  m := (lSeconds div SecsPerMin) mod MinsPerHour;
+  s := lSeconds mod SecsPerMin;
+  ms := aStamp.Time mod MSecsPerSec;
+end;
+
 function TCronSchedulePlan.FindNextScheduleDate(const aBaseDate: TDateTime;
   out aNextDateTime: TDateTime;
   const aValidFrom,
   aValidTo: TDateTime): boolean;
 var
-  StartDate: TDateTime;
+  lStartDate: TDateTime;
+  lStamp: TTimeStamp;
   h, m, s, ms: word;
 begin
   if (aBaseDate > aValidFrom) then
-    StartDate := aBaseDate
+    lStartDate := aBaseDate
   else
-    StartDate := aValidFrom;
+    lStartDate := aValidFrom;
 
-  // clear out milliseconds
-  DecodeTime(StartDate, h, m, s, ms);
-  StartDate := trunc(StartDate) +
-    encodeTime(h, m, s, 0);
-  StartDate := StartDate + OneSecond;
+  lStamp := DateTimeToTimeStamp(lStartDate);
+  DecodeSearchClock(lStamp, h, m, s, ms);
+  lStartDate := lStamp.Date - DateDelta;
+  // Keep ordinary result bytes, but carry midnight as an integer day first.
+  if (h = 23) and (m = 59) and (s = 59) then
+    lStartDate := lStartDate + 1
+  else
+    lStartDate := lStartDate + EncodeTime(h, m, s, 0) + OneSecond;
 
-  Result := FindNextFromCandidate(StartDate, aValidTo, aNextDateTime);
+  Result := FindNextFromCandidate(lStartDate, aValidTo, aNextDateTime);
 end;
 
 function FormatTwo(const aValue: Word): string;
@@ -1878,6 +1894,7 @@ var
   v, i: word;
   lYear, lMonth, lDay: Word;
   lTarget: Word;
+  lStamp: TTimeStamp;
 begin
   Result := True;
   if fNoSpec then
@@ -1920,7 +1937,8 @@ begin
     if i <> v then
     begin
       Result := false;
-      NextDate := trunc(NextDate); // reset hh:nn:ss to 00:00:00
+      lStamp := DateTimeToTimeStamp(NextDate);
+      NextDate := lStamp.Date - DateDelta; // reset the normalized day to midnight
       if i > v then
         NextDate := NextDate + (i - v)
       else
@@ -1933,42 +1951,53 @@ end;
 
 function TCronPart.PushHour(var NextDate: TDateTime): boolean;
 var
-  v, i: word;
+  v, i, h, m, s, ms: Word;
+  lStamp: TTimeStamp;
+  lDate: TDateTime;
 begin
   Result := True;
   if not Fullrange then
   begin
-    v := HourOf(NextDate);
+    lStamp := DateTimeToTimeStamp(NextDate);
+    DecodeSearchClock(lStamp, h, m, s, ms);
+    lDate := lStamp.Date - DateDelta;
+    v := h;
     i := NextVal(v);
     if i < v then
     begin
       Result := false;
-      NextDate := trunc(NextDate) + 1 + i * OneHour;
+      NextDate := lDate + 1 + i * OneHour;
     end
     else if i > v then
-      NextDate := trunc(NextDate) + i * OneHour;
+      NextDate := lDate + i * OneHour;
   end;
 end;
 
 function TCronPart.PushMinute(var NextDate: TDateTime): boolean;
 var
-  h, v, i: word;
+  h, m, s, ms, v, i: Word;
+  lStamp: TTimeStamp;
+  lDate: TDateTime;
 begin
   Result := True;
   if not Fullrange then
   begin
-    v := MinuteOf(NextDate);
+    lStamp := DateTimeToTimeStamp(NextDate);
+    DecodeSearchClock(lStamp, h, m, s, ms);
+    lDate := lStamp.Date - DateDelta;
+    v := m;
     i := NextVal(v);
     if i < v then
     begin
       Result := false;
-      h := HourOf(NextDate);
-      NextDate := trunc(NextDate) + (h + 1) * OneHour + i * OneMinute;
+      if h = 23 then
+        NextDate := lDate + 1 + i * OneMinute
+      else
+        NextDate := lDate + (h + 1) * OneHour + i * OneMinute;
     end
     else if i > v then
     begin
-      h := HourOf(NextDate);
-      NextDate := trunc(NextDate) + h * OneHour + i * OneMinute;
+      NextDate := lDate + h * OneHour + i * OneMinute;
     end;
   end;
 end;
@@ -1997,31 +2026,30 @@ end;
 
 function TCronPart.PushSecond(var NextDate: TDateTime): boolean;
 var
-  h, m, v, i: word;
+  h, m, s, ms, v, i: Word;
+  lStamp: TTimeStamp;
+  lDate: TDateTime;
 begin
   Result := True;
   if not Fullrange then
   begin
-    v := SecondOf(NextDate);
+    lStamp := DateTimeToTimeStamp(NextDate);
+    DecodeSearchClock(lStamp, h, m, s, ms);
+    lDate := lStamp.Date - DateDelta;
+    v := s;
     i := NextVal(v);
     if i < v then
     begin
       Result := false;
-      h := HourOf(NextDate);
-      m := MinuteOf(NextDate);
-      // Add the whole day before the fractional time when carrying across midnight.
-      // Otherwise 23 hours + 60 minutes can round below midnight: DecodeTime sees
-      // the next day while Trunc still selects the previous day on the next pass.
+      // Carry an integer day before adding the fractional clock.
       if (h = 23) and (m = 59) then
-        NextDate := trunc(NextDate) + 1 + i * OneSecond
+        NextDate := lDate + 1 + i * OneSecond
       else
-        NextDate := trunc(NextDate) + h * OneHour + (m + 1) * OneMinute + i * OneSecond;
+        NextDate := lDate + h * OneHour + (m + 1) * OneMinute + i * OneSecond;
     end
     else if i > v then
     begin
-      h := HourOf(NextDate);
-      m := MinuteOf(NextDate);
-      NextDate := trunc(NextDate) + h * OneHour + m * OneMinute + i * OneSecond;
+      NextDate := lDate + h * OneHour + m * OneMinute + i * OneSecond;
     end;
   end;
 

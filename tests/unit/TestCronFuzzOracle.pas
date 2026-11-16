@@ -453,7 +453,7 @@ begin
   Result := False;
   aNext := 0;
   lBound := NextOracleSerial(aBase);
-  lDay := Trunc(aBase);
+  lDay := DateTimeToTimeStamp(aBase).Date - DateDelta;
   // Brute force calendar days and allowed clock values; never call any search helper.
   while lDay < aEnd do
   begin
@@ -503,6 +503,40 @@ begin
          FormatDateTime('yyyy-mm-dd hh:nn:ss.zzz', lExpected)]);
   finally
     lPlan.Free;
+  end;
+end;
+
+function NextBoundaryBase(const aDay: TDateTime; const aKind: Integer): TDateTime;
+var
+  lBits: UInt64;
+  i: Integer;
+begin
+  Result := aDay;
+  case aKind of
+    1..8:
+      begin
+        Move(Result, lBits, SizeOf(lBits));
+        if aKind <= 4 then
+          Dec(lBits, aKind)
+        else
+          Inc(lBits, aKind - 4);
+        Move(lBits, Result, SizeOf(Result));
+      end;
+    9: Result := (aDay - 1) + EncodeTime(23, 59, 59, 999);
+    10: Result := (aDay - 1) + (MSecsPerDay - 0.5) / MSecsPerDay;
+    11: Result := (aDay - 1) + (MSecsPerDay - 0.499) / MSecsPerDay;
+    12: Result := (aDay - 1) + (MSecsPerDay - 0.501) / MSecsPerDay;
+    13: Result := (aDay - 1) + 23 * OneHour + 60 * OneMinute;
+    14: Result := IncMilliSecond(IncMilliSecond(aDay, -2), 2);
+    15: Result := IncSecond(IncSecond(aDay, -1), 1);
+    16:
+      begin
+        Result := (aDay - 1) + EncodeTime(23, 59, 0, 0);
+        for i := 1 to 60 do
+          Result := Result + 1 / 86400;
+      end;
+    17: Result := (aDay - 1) + EncodeTime(23, 0, 0, 0) + EncodeTime(1, 0, 0, 0);
+    18: Result := IncMilliSecond(IncSecond(aDay, -1), 999);
   end;
 end;
 
@@ -643,8 +677,8 @@ var
   lMode: TmaxCronDayMatchMode;
   lTokens: TArray<string>;
   lFailures, lDom, lDow, lText, lYear, lMonth, lSeed: string;
-  lBase: TDateTime;
-  lChecked, lSavedSeed, i, j, k, lOffset: Integer;
+  lBase, lBoundary: TDateTime;
+  lChecked, lSavedSeed, i, j, k, lOffset, lShape: Integer;
 begin
   lChecked := 0;
   lFailures := '';
@@ -699,6 +733,42 @@ begin
     RandSeed := lSavedSeed;
   end;
   Assert.AreEqual(344, lChecked, '128 deterministic D2 stops plus 216 fixed-seed generated cases');
+  // Every boundary shape is crossed with all dialects, day modes and three clocks.
+  // Scan every midnight around floor, month/year and leap transitions, not just canonical bases.
+  for lDialect := Low(TmaxCronDialect) to High(TmaxCronDialect) do
+    for lMode := Low(TmaxCronDayMatchMode) to High(TmaxCronDayMatchMode) do
+      for j := 0 to 7 do
+      begin
+        case j of
+          0: lBoundary := EncodeDate(1900, 1, 1);
+          1: lBoundary := EncodeDate(1900, 1, 31);
+          2: lBoundary := EncodeDate(1900, 12, 31);
+          3: lBoundary := EncodeDate(2026, 1, 31);
+          4: lBoundary := EncodeDate(2026, 12, 31);
+          5: lBoundary := EncodeDate(2028, 2, 28);
+          6: lBoundary := EncodeDate(2000, 2, 28);
+        else
+          lBoundary := EncodeDate(2100, 2, 28);
+        end;
+        for i := 0 to 2 do
+          for k := 0 to 18 do
+          begin
+            lBase := NextBoundaryBase(lBoundary + i, k);
+            for lShape := 0 to 2 do
+            begin
+              case lShape of
+                0: lText := '0 23 * * *'; // Reviewer's carried-midnight case.
+                1: lText := '0 0 * * *';
+              else
+                lText := '59 23 * * *';
+              end;
+              if lDialect = cdQuartzSecondsFirst then
+                lText := '0 ' + lText;
+              CheckNextOracle(lText, '*', '*', lDialect, lMode, '', lBase, lFailures, lChecked);
+            end;
+          end;
+      end;
+  Assert.AreEqual(12656, lChecked, '344 original plus 12312 adversarial midnight cases');
   Assert.AreEqual('', lFailures, 'Next must advance and equal the independent first occurrence: ' + lFailures);
 end;
 
