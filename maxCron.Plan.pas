@@ -189,6 +189,9 @@ type
     procedure SetDialect(const Value: TmaxCronDialect);
     function PushDomDow(var NextDate: TDateTime): boolean;
     procedure ApplyDialectToParts;
+    function HasPossibleDayOfMonth: Boolean;
+    function FindNextFromCandidate(const aCandidate, aValidTo: TDateTime;
+      out aNextDateTime: TDateTime): Boolean;
   public
     Constructor Create;
     Destructor Destroy; override;
@@ -457,13 +460,8 @@ begin
   inherited;
 end;
 
-function TCronSchedulePlan.FindNextScheduleDate(const aBaseDate: TDateTime;
-  out aNextDateTime: TDateTime;
-  const aValidFrom,
-  aValidTo: TDateTime): boolean;
+function TCronSchedulePlan.HasPossibleDayOfMonth: Boolean;
 var
-  StartDate: TDateTime;
-  h, m, s, ms: word;
   lMode: TmaxCronDayMatchMode;
 
   function HasLeapYearInRange: Boolean;
@@ -542,21 +540,6 @@ var
     Result := False;
   end;
 begin
-  Result := false;
-
-  if (aBaseDate > aValidFrom) then
-    StartDate := aBaseDate
-  else
-    StartDate := aValidFrom;
-
-  // clear out milliseconds
-  DecodeTime(StartDate, h, m, s, ms);
-  StartDate := trunc(StartDate) +
-    encodeTime(h, m, s, 0);
-  StartDate := StartDate + OneSecond;
-
-  aNextDateTime := StartDate;
-
   lMode := fDayMatchMode;
   if lMode = TmaxCronDayMatchMode.dmDefault then
     lMode := TmaxCronDayMatchMode.dmAnd;
@@ -564,6 +547,17 @@ begin
     ((lMode = TmaxCronDayMatchMode.dmAnd) or FDayOfTheWeek.Fullrange) then
     if not HasDomInAllowedMonths then
       Exit(False);
+
+  Result := True;
+end;
+
+function TCronSchedulePlan.FindNextFromCandidate(const aCandidate, aValidTo: TDateTime;
+  out aNextDateTime: TDateTime): Boolean;
+begin
+  Result := False;
+  aNextDateTime := aCandidate;
+  if not HasPossibleDayOfMonth then
+    Exit(False);
 
   while True do
   begin
@@ -586,6 +580,28 @@ begin
             end;
 
   end;
+end;
+
+function TCronSchedulePlan.FindNextScheduleDate(const aBaseDate: TDateTime;
+  out aNextDateTime: TDateTime;
+  const aValidFrom,
+  aValidTo: TDateTime): boolean;
+var
+  StartDate: TDateTime;
+  h, m, s, ms: word;
+begin
+  if (aBaseDate > aValidFrom) then
+    StartDate := aBaseDate
+  else
+    StartDate := aValidFrom;
+
+  // clear out milliseconds
+  DecodeTime(StartDate, h, m, s, ms);
+  StartDate := trunc(StartDate) +
+    encodeTime(h, m, s, 0);
+  StartDate := StartDate + OneSecond;
+
+  Result := FindNextFromCandidate(StartDate, aValidTo, aNextDateTime);
 end;
 
 function FormatTwo(const aValue: Word): string;
