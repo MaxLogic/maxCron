@@ -5841,6 +5841,8 @@ var
   lCatchUpCount: Cardinal;
   lAllowDisabledDispatch: Boolean;
   lFindResult: TFindNextScheduleResult;
+  lNowStamp, lDueStamp: TTimeStamp;
+  lLatenessMs: Int64;
 begin
   lOnEvent := nil;
   lOnProc := nil;
@@ -5943,9 +5945,17 @@ begin
           Exit;
         end;
 
-      // Compare timestamps directly so the exact one-second boundary does not
-      // depend on cancellation when subtracting two large TDateTime values.
-      if (lMisfire = TmaxCronMisfirePolicy.mpSkip) and (aNow >= fNextSchedule + OneSecond) then
+      lLatenessMs := 0;
+      if lMisfire = TmaxCronMisfirePolicy.mpSkip then
+      begin
+        // Normalize both instants before subtraction: Double addition can move
+        // the exact one-second boundary by an ULP, depending on the due instant.
+        lNowStamp := DateTimeToTimeStamp(aNow);
+        lDueStamp := DateTimeToTimeStamp(fNextSchedule);
+        lLatenessMs := (Int64(lNowStamp.Date) - lDueStamp.Date) * MSecsPerDay +
+          lNowStamp.Time - lDueStamp.Time;
+      end;
+      if (lMisfire = TmaxCronMisfirePolicy.mpSkip) and (lLatenessMs >= MSecsPerSec) then
       begin
         lFindResult := FindNextScheduleWithPolicies(aNow, fNextSchedule);
         case lFindResult of

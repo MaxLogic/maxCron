@@ -14,6 +14,7 @@ All notable user-visible changes to this project will be documented in this file
 - Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
 
 ### Fixed
+- Fixed `mpSkip` inconsistently firing occurrences exactly one second late by comparing normalized integer milliseconds.
 - Fixed `mpSkip` discarding on-time cron occurrences: occurrences less than one second late now fire; those one second or more late are skipped.
 - Fixed `FindNextScheduleDate` returning backward or wrong-day occurrences near midnight by deriving the date and clock from one millisecond-normalized timestamp, including arithmetic bases and clock-field rollovers.
 - Corrected the pooled-dispatch regression test to verify worker reuse instead of assuming a fixed maximum pool size.
