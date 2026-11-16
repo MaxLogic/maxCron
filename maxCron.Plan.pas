@@ -7,10 +7,18 @@ uses
   System.SysUtils;
 
 const
+  cCronUsPerMs = 1000;
+  cCronUsPerSecond = 1000000;
+  cCronMsPerSecond = 1000;
+  cCronMsPerDay = 86400000;
+  cCronSecondsPerDay = 86400;
   /// Default result limit for plan range queries.
   cCronQueryDefaultLimit = 10000;
 
 type
+  /// Microseconds since 1899-12-30 00:00 on the originating wall clock.
+  TCronInstantUs = Int64;
+
   TCronSchedulePlan = class;
 
   /// <summary>
@@ -243,10 +251,88 @@ type
     property HashSeed: string read fHashSeed write fHashSeed;
   end;
 
+/// Floor / ceiling division for aDivisor > 0, including negative aValue.
+function CronFloorDiv(const aValue, aDivisor: Int64): Int64;
+function CronCeilDiv(const aValue, aDivisor: Int64): Int64;
+/// Nearest millisecond, ties to even. NaN/<=0 => 0; >=2958466 days saturates.
+function CronDateTimeToMs(const aValue: TDateTime): Int64;
+function CronDateTimeToInstantUs(const aValue: TDateTime): TCronInstantUs;
+/// Builds the same Double as EncodeDateTime for the decoded fields.
+function CronMsToDateTime(const aMs: Int64): TDateTime;
+function CronSecondToDateTime(const aSecond: Int64): TDateTime;
+function CronInstantFloorSecond(const aValue: TCronInstantUs): Int64;
+/// Display/persistence only: floors to whole milliseconds.
+function CronInstantUsToDateTime(const aValue: TCronInstantUs): TDateTime;
+
 implementation
 
 uses
   System.Classes, System.DateUtils, System.Math, System.StrUtils;
+
+function CronFloorDiv(const aValue, aDivisor: Int64): Int64;
+begin
+  Result := aValue div aDivisor;
+  if (aValue < 0) and (aValue mod aDivisor <> 0) then
+    Dec(Result);
+end;
+
+function CronCeilDiv(const aValue, aDivisor: Int64): Int64;
+begin
+  Result := aValue div aDivisor;
+  if (aValue > 0) and (aValue mod aDivisor <> 0) then
+    Inc(Result);
+end;
+
+function CronDateTimeToMs(const aValue: TDateTime): Int64;
+var
+  lDay, lWhole: Int64;
+  lFraction, lProduct, lRemainder: Double;
+begin
+  // IsNan first: an ordered comparison with NaN raises EInvalidOp under default FPC float masks.
+  if IsNan(aValue) or not (aValue > 0) then
+    Exit(0);
+  if aValue >= 2958466 then
+    Exit(Int64(2958466) * cCronMsPerDay);
+  lDay := Trunc(aValue);
+  lFraction := aValue - lDay;
+  lProduct := lFraction * 86400000.0;
+  lWhole := Trunc(lProduct);
+  lRemainder := lProduct - lWhole;
+  if (lRemainder > 0.5) or ((lRemainder = 0.5) and Odd(lWhole)) then
+    Inc(lWhole);
+  Result := lDay * cCronMsPerDay + lWhole;
+end;
+
+function CronDateTimeToInstantUs(const aValue: TDateTime): TCronInstantUs;
+begin
+  Result := CronDateTimeToMs(aValue) * cCronUsPerMs;
+end;
+
+function CronMsToDateTime(const aMs: Int64): TDateTime;
+var
+  lDay, lMsOfDay: Int64;
+  lTime: Double;
+begin
+  lDay := CronFloorDiv(aMs, cCronMsPerDay);
+  lMsOfDay := aMs - lDay * cCronMsPerDay;
+  lTime := lMsOfDay / 86400000.0;
+  Result := lDay + lTime;
+end;
+
+function CronSecondToDateTime(const aSecond: Int64): TDateTime;
+begin
+  Result := CronMsToDateTime(aSecond * cCronMsPerSecond);
+end;
+
+function CronInstantFloorSecond(const aValue: TCronInstantUs): Int64;
+begin
+  Result := CronFloorDiv(aValue, cCronUsPerSecond);
+end;
+
+function CronInstantUsToDateTime(const aValue: TCronInstantUs): TDateTime;
+begin
+  Result := CronMsToDateTime(CronFloorDiv(aValue, cCronUsPerMs));
+end;
 
 const
   OneMinute = 1 / 24 / 60;

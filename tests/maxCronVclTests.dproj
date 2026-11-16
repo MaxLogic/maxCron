@@ -158,6 +158,7 @@
         <DCCReference Include="..\maxCron.Internal.TimeZone.pas"/>
         <DCCReference Include="..\maxCron.Plan.pas"/>
         <DCCReference Include="..\maxCron.pas"/>
+        <DCCReference Include="unit\TestVclDeadline.pas"/>
         <DCCReference Include="unit\TestVclBackend.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>

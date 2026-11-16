@@ -9,12 +9,13 @@ All notable user-visible changes to this project will be documented in this file
 - Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
 
 ### Changed
+- Align cron passes to second boundaries with a deadline timing thread and precise Windows wall clock; add timer-resolution selection and coalesced VCL delivery.
 - Split calculation code into the RTL-only `maxCron.Plan.pas` and isolated timer, async, debug, environment and timezone calls behind internal seams, preserving scheduler behavior and the `uses maxCron` API. Add `maxCron.Plan.pas`, `maxCron.Internal.Platform.pas` and `maxCron.Internal.TimeZone.pas` to consumer projects (or add their folder to the search path), keeping `maxCron.inc` beside them. Unit-qualified RTTI names of moved types now use `maxCron.Plan`; short names are unchanged.
 - Updated the demo startup schedules to use explicit current `cdMaxCron` semantics for second-level showcase events, so the sample no longer implies that 6-field default-dialect plans are seconds-based. (T-103)
 - Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
 
 ### Fixed
-- Fixed `mpSkip` inconsistently firing occurrences exactly one second late by comparing normalized integer milliseconds.
+- Fixed `mpSkip` boundaries with integer microsecond decisions: occurrences less than one second late fire, including sub-millisecond neighbours of the one-second boundary; occurrences exactly one second late are skipped. Run/reset and late-pass searches no longer skip the next occurrence in the final half-millisecond before it.
 - Fixed `mpSkip` discarding on-time cron occurrences: occurrences less than one second late now fire; those one second or more late are skipped.
 - Fixed `FindNextScheduleDate` returning backward or wrong-day occurrences near midnight by deriving the date and clock from one millisecond-normalized timestamp, including arithmetic bases and clock-field rollovers.
 - Corrected the pooled-dispatch regression test to verify worker reuse instead of assuming a fixed maximum pool size.

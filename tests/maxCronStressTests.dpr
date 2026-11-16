@@ -17,7 +17,9 @@ uses
   TestHeavyStress in 'unit\TestHeavyStress.pas',
   TestHeavyStressMixed in 'unit\TestHeavyStressMixed.pas',
   TestLongSoak24h in 'unit\TestLongSoak24h.pas',
-  TestWatchdogDiagnostics in 'unit\TestWatchdogDiagnostics.pas';
+  TestWatchdogDiagnostics in 'unit\TestWatchdogDiagnostics.pas',
+  TestCronPhaseDifferential in 'unit\TestCronPhaseDifferential.pas',
+  TestDeadlineTimerStress in 'unit\TestDeadlineTimerStress.pas';
 
 var
   Runner: ITestRunner;
@@ -31,6 +33,8 @@ begin
     TDUnitX.RegisterTestFixture(TTestHeavyStressMixed);
     TDUnitX.RegisterTestFixture(TTestLongSoak24h);
     TDUnitX.RegisterTestFixture(TTestWatchdogDiagnostics);
+    TDUnitX.RegisterTestFixture(TTestCronPhaseDifferential);
+    TDUnitX.RegisterTestFixture(TTestDeadlineTimerStress);
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));

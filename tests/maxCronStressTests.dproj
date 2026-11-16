@@ -1,4 +1,4 @@
-﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     <PropertyGroup>
         <ProjectGuid>{334494E0-2B17-4AC0-8471-554DE703235E}</ProjectGuid>
         <MainSource>maxCronStressTests.dpr</MainSource>
@@ -201,6 +201,8 @@
         <DCCReference Include="..\maxCron.Internal.TimeZone.pas"/>
         <DCCReference Include="..\maxCron.Plan.pas"/>
         <DCCReference Include="..\maxCron.pas"/>
+        <DCCReference Include="unit\TestCronPhaseDifferential.pas"/>
+        <DCCReference Include="unit\TestDeadlineTimerStress.pas"/>
         <DCCReference Include="unit\TestHeavyStress.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>

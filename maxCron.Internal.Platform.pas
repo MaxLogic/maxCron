@@ -8,18 +8,30 @@ uses
 
 type
   {$SCOPEDENUMS ON}
-  // Delivery thread; the factory preserves the existing timer implementations.
-  TCronTickSourceKind = (tskMainThread, tskWorkerThread);
+  TCronWaitResolution = (HighResolution, TimerPeriod, SystemDefault);
   {$SCOPEDENUMS OFF}
-
-  ICronTickSource = interface
-    ['{4F31A17D-83A7-4250-ACF5-6C38B49053A9}']
-    procedure SetOnTick(const aHandler: TNotifyEvent);
-    procedure Start(const aIntervalMs: Cardinal);
-    procedure Stop;
+  TCronTickDelayFunc = function: Int64 of object;
+  TCronTickSourceDiagnostics = record
+    TicksDelivered: UInt64;
+    SpinGuardHits: UInt64;
+    TickExceptions: UInt64;
   end;
 
-function CreateCronTickSource(const aKind: TCronTickSourceKind): ICronTickSource;
+  ICronTickSource = interface
+    ['{7C53E039-BC5D-4F7A-953D-29602A8BB8FD}']
+    procedure SetOnTick(const aHandler: TNotifyEvent);
+    procedure SetDelayProvider(const aProvider: TCronTickDelayFunc);
+    procedure Start(const aMaxSleepMs: Cardinal);
+    procedure Stop;
+    procedure Shutdown;
+    procedure Wake;
+    function GetResolution: TCronWaitResolution;
+    function GetDiagnostics: TCronTickSourceDiagnostics;
+  end;
+
+function CreateCronTickSource(const aPreferred: TCronWaitResolution): ICronTickSource;
+function CronMonotonicNowUs: Int64;
+function CronPreciseLocalNowUs: Int64;
 function CronMaxAsyncCall(const aProc: TThreadProcedure; const aTaskName: string): IInterface;
 procedure CronDebugOutput(const aText: string);
 function CronGetEnvironmentVariable(const aName: string): string;
@@ -27,96 +39,345 @@ function CronGetEnvironmentVariable(const aName: string): string;
 implementation
 
 uses
-  {$IFDEF MSWINDOWS} Winapi.Windows, {$ENDIF}
-  Vcl.ExtCtrls,
-  maxAsync, MaxLogic.PortableTimer;
+  System.Diagnostics, System.Math, System.SyncObjs,
+  {$IFDEF MSWINDOWS} Winapi.MMSystem, Winapi.Windows, {$ENDIF}
+  maxAsync;
 
 type
-  TCronVclTickSource = class(TInterfacedObject, ICronTickSource)
+  TCronWaiter = class
   private
-    fTimer: Vcl.ExtCtrls.TTimer;
+    fWake: TEvent;
+    fResolution: TCronWaitResolution;
+    {$IFDEF MSWINDOWS}
+    fTimer: THandle;
+    {$ENDIF}
   public
-    constructor Create;
+    constructor Create(const aPreferred: TCronWaitResolution);
     destructor Destroy; override;
-    procedure Start(const aIntervalMs: Cardinal);
-    procedure Stop;
-    procedure SetOnTick(const aHandler: TNotifyEvent);
+    function Wait(const aDelayUs: Int64): Boolean;
+    procedure Wake;
   end;
 
-  TCronPortableTickSource = class(TInterfacedObject, ICronTickSource)
+  TCronDeadlineTickSource = class;
+  TCronDeadlineThread = class(TThread)
   private
-    fTimer: MaxLogic.PortableTimer.TPortableTimer;
+    fSource: TCronDeadlineTickSource;
+  protected
+    procedure Execute; override;
   public
-    constructor Create;
-    destructor Destroy; override;
-    procedure Start(const aIntervalMs: Cardinal);
-    procedure Stop;
-    procedure SetOnTick(const aHandler: TNotifyEvent);
+    constructor Create(const aSource: TCronDeadlineTickSource);
   end;
 
-constructor TCronVclTickSource.Create;
+  TCronDeadlineTickSource = class(TInterfacedObject, ICronTickSource)
+  private
+    fLock: TCriticalSection;
+    fWaiter: TCronWaiter;
+    fThread: TCronDeadlineThread;
+    fOnTick: TNotifyEvent;
+    fProvider: TCronTickDelayFunc;
+    fRunning: Integer;
+    fMaxSleepMs: Integer;
+    fTicksDelivered, fSpinGuardHits, fTickExceptions: Int64;
+  public
+    constructor Create(const aPreferred: TCronWaitResolution);
+    destructor Destroy; override;
+    procedure SetOnTick(const aHandler: TNotifyEvent);
+    procedure SetDelayProvider(const aProvider: TCronTickDelayFunc);
+    procedure Start(const aMaxSleepMs: Cardinal);
+    procedure Stop;
+    procedure Shutdown;
+    procedure Wake;
+    function GetResolution: TCronWaitResolution;
+    function GetDiagnostics: TCronTickSourceDiagnostics;
+  end;
+
+{$IFDEF MSWINDOWS}
+type
+  TCronPreciseTimeProc = procedure(out aFileTime: TFileTime); stdcall;
+var
+  gCronPreciseTime: TCronPreciseTimeProc;
+{$ENDIF}
+
+function CronMonotonicNowUs: Int64;
+var
+  lTicks, lFrequency: Int64;
 begin
-  inherited Create;
-  fTimer := Vcl.ExtCtrls.TTimer.Create(nil);
+  lTicks := TStopwatch.GetTimeStamp;
+  lFrequency := TStopwatch.Frequency;
+  Result := (lTicks div lFrequency) * 1000000 +
+    ((lTicks mod lFrequency) * 1000000) div lFrequency;
 end;
 
-destructor TCronVclTickSource.Destroy;
+function CronPreciseLocalNowUs: Int64;
+{$IFDEF MSWINDOWS}
+var
+  lUtc, lLocal: TFileTime;
+  lValue: UInt64;
 begin
-  fTimer.Free;
-  inherited;
-end;
-
-procedure TCronVclTickSource.Start(const aIntervalMs: Cardinal);
-begin
-  fTimer.Interval := aIntervalMs;
-  fTimer.Enabled := True;
-end;
-
-procedure TCronVclTickSource.Stop;
-begin
-  fTimer.Enabled := False;
-end;
-
-procedure TCronVclTickSource.SetOnTick(const aHandler: TNotifyEvent);
-begin
-  fTimer.OnTimer := aHandler;
-end;
-
-constructor TCronPortableTickSource.Create;
-begin
-  inherited Create;
-  fTimer := MaxLogic.PortableTimer.TPortableTimer.Create;
-end;
-
-destructor TCronPortableTickSource.Destroy;
-begin
-  fTimer.Free;
-  inherited;
-end;
-
-procedure TCronPortableTickSource.Start(const aIntervalMs: Cardinal);
-begin
-  fTimer.Start(aIntervalMs);
-end;
-
-procedure TCronPortableTickSource.Stop;
-begin
-  fTimer.Stop;
-end;
-
-procedure TCronPortableTickSource.SetOnTick(const aHandler: TNotifyEvent);
-begin
-  fTimer.OnTimer := aHandler;
-end;
-
-function CreateCronTickSource(const aKind: TCronTickSourceKind): ICronTickSource;
-begin
-  case aKind of
-    TCronTickSourceKind.tskWorkerThread:
-      Result := TCronPortableTickSource.Create;
+  if Assigned(gCronPreciseTime) then
+    gCronPreciseTime(lUtc)
   else
-    Result := TCronVclTickSource.Create;
+    GetSystemTimeAsFileTime(lUtc);
+  if not FileTimeToLocalFileTime(lUtc, lLocal) then
+    RaiseLastOSError;
+  lValue := (UInt64(lLocal.dwHighDateTime) shl 32) or lLocal.dwLowDateTime;
+  Result := Int64(lValue div 10) - Int64(109205) * 86400000000;
+{$ELSE}
+begin
+  Result := Round(Now * 86400000000.0);
+{$ENDIF}
+end;
+
+constructor TCronWaiter.Create(const aPreferred: TCronWaitResolution);
+{$IFDEF MSWINDOWS}
+const
+  cCreateWaitableTimerHighResolution = $00000002;
+  cTimerAllAccess = $001F0003;
+{$ENDIF}
+begin
+  inherited Create;
+  fWake := TEvent.Create(nil, False, False, '');
+  fResolution := TCronWaitResolution.SystemDefault;
+  {$IFDEF MSWINDOWS}
+  fResolution := aPreferred;
+  if aPreferred = TCronWaitResolution.HighResolution then
+  begin
+    fTimer := CreateWaitableTimerExW(nil, nil, cCreateWaitableTimerHighResolution, cTimerAllAccess);
+    if fTimer = 0 then
+      fResolution := TCronWaitResolution.TimerPeriod;
   end;
+  {$ENDIF}
+end;
+
+destructor TCronWaiter.Destroy;
+begin
+  {$IFDEF MSWINDOWS}
+  if fTimer <> 0 then
+    CloseHandle(fTimer);
+  {$ENDIF}
+  fWake.Free;
+  inherited;
+end;
+
+procedure TCronWaiter.Wake;
+begin
+  fWake.SetEvent;
+end;
+
+function TCronWaiter.Wait(const aDelayUs: Int64): Boolean;
+var
+  lDelayUs: Int64;
+  lStartedUs: Int64;
+  lPeriodActive: Boolean;
+  {$IFDEF MSWINDOWS}
+  lDue: TLargeInteger;
+  lHandles: array[0..1] of THandle;
+  lResult: Cardinal;
+  {$ENDIF}
+begin
+  // The source clamps waits to one second, including the spin guard.
+  lDelayUs := EnsureRange(aDelayUs, Int64(1), Int64(1000000));
+  {$IFDEF MSWINDOWS}
+  if fResolution = TCronWaitResolution.HighResolution then
+  begin
+    lDue := -lDelayUs * 10;
+    if SetWaitableTimer(fTimer, lDue, 0, nil, nil, False) then
+    begin
+      lHandles[0] := fWake.Handle;
+      lHandles[1] := fTimer;
+      lResult := WaitForMultipleObjects(2, @lHandles[0], False, Cardinal((lDelayUs + 999) div 1000) + 1000);
+      if lResult = WAIT_FAILED then
+        RaiseLastOSError;
+      Exit(lResult = WAIT_OBJECT_0);
+    end;
+  end;
+  if fResolution = TCronWaitResolution.TimerPeriod then
+  begin
+    lStartedUs := CronMonotonicNowUs;
+    if lDelayUs > 20000 then
+    begin
+      if fWake.WaitFor(Cardinal((lDelayUs - 20000 + 999) div 1000)) = wrSignaled then
+        Exit(True);
+      lDelayUs := Max(Int64(1), aDelayUs - (CronMonotonicNowUs - lStartedUs));
+    end;
+    lPeriodActive := timeBeginPeriod(1) = TIMERR_NOERROR;
+    try
+      Result := fWake.WaitFor(Cardinal((lDelayUs + 999) div 1000)) = wrSignaled;
+    finally
+      if lPeriodActive then
+        timeEndPeriod(1);
+    end;
+    Exit;
+  end;
+  {$ENDIF}
+  Result := fWake.WaitFor(Cardinal((lDelayUs + 999) div 1000)) = wrSignaled;
+end;
+
+constructor TCronDeadlineThread.Create(const aSource: TCronDeadlineTickSource);
+begin
+  inherited Create(True);
+  FreeOnTerminate := False;
+  fSource := aSource;
+end;
+
+procedure TCronDeadlineThread.Execute;
+var
+  lDelayUs: Int64;
+  lZeroStreak: Integer;
+  lHandler: TNotifyEvent;
+  lProvider: TCronTickDelayFunc;
+begin
+  lZeroStreak := 0;
+  while not Terminated do
+  begin
+    if TInterlocked.CompareExchange(fSource.fRunning, 0, 0) = 0 then
+    begin
+      fSource.fWaiter.Wait(1000000);
+      Continue;
+    end;
+    fSource.fLock.Acquire;
+    try
+      lProvider := fSource.fProvider;
+      lHandler := fSource.fOnTick;
+    finally
+      fSource.fLock.Release;
+    end;
+    lDelayUs := Int64(TInterlocked.CompareExchange(fSource.fMaxSleepMs, 0, 0)) * 1000;
+    try
+      if Assigned(lProvider) then
+        lDelayUs := Min(lDelayUs, lProvider());
+    except
+      on E: Exception do
+        CronDebugOutput('maxCron deadline provider: ' + E.Message);
+    end;
+    if lDelayUs > 0 then
+    begin
+      lZeroStreak := 0;
+      if fSource.fWaiter.Wait(lDelayUs) then
+        Continue;
+    end else begin
+      Inc(lZeroStreak);
+      if lZeroStreak > 64 then
+      begin
+        TInterlocked.Increment(fSource.fSpinGuardHits);
+        fSource.fWaiter.Wait(1000);
+        lZeroStreak := 0;
+      end;
+    end;
+    if Terminated or (TInterlocked.CompareExchange(fSource.fRunning, 0, 0) = 0) then
+      Continue;
+    try
+      if Assigned(lHandler) then
+        lHandler(Self);
+    except
+      on E: Exception do
+      begin
+        TInterlocked.Increment(fSource.fTickExceptions);
+        CronDebugOutput('maxCron deadline tick: ' + E.Message);
+      end;
+    end;
+    TInterlocked.Increment(fSource.fTicksDelivered);
+  end;
+end;
+
+constructor TCronDeadlineTickSource.Create(const aPreferred: TCronWaitResolution);
+begin
+  inherited Create;
+  fLock := TCriticalSection.Create;
+  fWaiter := TCronWaiter.Create(aPreferred);
+  fMaxSleepMs := 1000;
+end;
+
+destructor TCronDeadlineTickSource.Destroy;
+begin
+  Shutdown;
+  fThread.Free;
+  fWaiter.Free;
+  fLock.Free;
+  inherited;
+end;
+
+procedure TCronDeadlineTickSource.SetOnTick(const aHandler: TNotifyEvent);
+begin
+  fLock.Acquire;
+  try
+    fOnTick := aHandler;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TCronDeadlineTickSource.SetDelayProvider(const aProvider: TCronTickDelayFunc);
+begin
+  fLock.Acquire;
+  try
+    fProvider := aProvider;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TCronDeadlineTickSource.Start(const aMaxSleepMs: Cardinal);
+begin
+  fLock.Acquire;
+  try
+    TInterlocked.Exchange(fMaxSleepMs, Integer(EnsureRange(aMaxSleepMs, Cardinal(1), Cardinal(1000))));
+    if (fThread <> nil) and fThread.Terminated then
+      Exit;
+    TInterlocked.Exchange(fRunning, 1);
+    if fThread = nil then
+    begin
+      fThread := TCronDeadlineThread.Create(Self);
+      fThread.Start;
+    end;
+    fWaiter.Wake;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TCronDeadlineTickSource.Stop;
+begin
+  TInterlocked.Exchange(fRunning, 0);
+  if fWaiter <> nil then
+    fWaiter.Wake;
+end;
+
+procedure TCronDeadlineTickSource.Shutdown;
+begin
+  Stop;
+  if fThread <> nil then
+  begin
+    fThread.Terminate;
+    fWaiter.Wake;
+    if TThread.CurrentThread.ThreadID <> fThread.ThreadID then
+      fThread.WaitFor;
+  end;
+end;
+
+procedure TCronDeadlineTickSource.Wake;
+begin
+  // Scheduler ticks already update their delay before the next wait.
+  if (fThread <> nil) and (TThread.CurrentThread.ThreadID = fThread.ThreadID) then
+    Exit;
+  fWaiter.Wake;
+end;
+
+function TCronDeadlineTickSource.GetResolution: TCronWaitResolution;
+begin
+  Result := fWaiter.fResolution;
+end;
+
+function TCronDeadlineTickSource.GetDiagnostics: TCronTickSourceDiagnostics;
+begin
+  Result.TicksDelivered := UInt64(TInterlocked.Read(fTicksDelivered));
+  Result.SpinGuardHits := UInt64(TInterlocked.Read(fSpinGuardHits));
+  Result.TickExceptions := UInt64(TInterlocked.Read(fTickExceptions));
+end;
+
+function CreateCronTickSource(const aPreferred: TCronWaitResolution): ICronTickSource;
+begin
+  Result := TCronDeadlineTickSource.Create(aPreferred);
 end;
 
 function CronMaxAsyncCall(const aProc: TThreadProcedure; const aTaskName: string): IInterface;
@@ -136,4 +397,8 @@ begin
   Result := System.SysUtils.GetEnvironmentVariable(aName);
 end;
 
+initialization
+  {$IFDEF MSWINDOWS}
+  gCronPreciseTime := GetProcAddress(GetModuleHandle('kernel32.dll'), 'GetSystemTimePreciseAsFileTime');
+  {$ENDIF}
 end.

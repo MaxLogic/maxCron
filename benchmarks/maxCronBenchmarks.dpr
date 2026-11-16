@@ -89,6 +89,7 @@ type
 const
   cDefaultIterations = 9;
   cDefaultWarmupIterations = 2;
+  cIdleWarmupMs = 35000;
 
 procedure SetEnvVar(const aName, aValue: string; const aBackups: TList<TEnvBackup>);
 var
@@ -1108,7 +1109,7 @@ begin
       DayOf(aDue), MonthOf(aDue), YearOf(aDue), SecondOf(aDue)]),
     procedure(aSender: IMaxCronEvent)
     begin
-      aRecorder.Capture(aDue, Now);
+      aRecorder.Capture(aDue, CronPreciseLocalNowUs / Double(86400000000.0));
     end);
   lEvent.Run;
   if Abs(lEvent.NextSchedule - aDue) * MSecsPerDay > 0.5 then
@@ -1158,7 +1159,12 @@ begin
     lReport.Add('# maxCron ' + lOptions.Mode + ' benchmark');
     lReport.Add('');
     lReport.Add('UTC: ' + lStamp + '; machine: ' + GetEnvironmentVariable('COMPUTERNAME'));
-    lReport.Add('Portable timer; imThread; engine selected by MAXCRON_ENGINE; warmup 2 seconds.');
+    lReport.Add('Portable timer; imThread; engine selected by MAXCRON_ENGINE.');
+    if lOptions.Mode = 'idle' then
+      lReport.Add(Format('Idle warmup %d seconds; use the same warmup for baseline comparisons.',
+        [cIdleWarmupMs div 1000]))
+    else
+      lReport.Add('Latency warmup 2 seconds.');
     if lOptions.Mode = 'idle' then
       lLines.Add('iteration,events,configured_engine,effective_engine,elapsed_ms,cpu_ms,cpu_one_core_pct')
     else
@@ -1183,7 +1189,8 @@ begin
               end);
             lEvent.Run;
           end;
-          Sleep(2000);
+          // Keep the native startup pool's observed 30-second retirement outside the CPU window.
+          Sleep(cIdleWarmupMs);
           lCpuStart := ProcessCpuMs;
           lClock := TStopwatch.StartNew;
           Sleep(Cardinal(lOptions.Seconds) * 1000);

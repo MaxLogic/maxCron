@@ -356,7 +356,11 @@ $env:MAXCRON_ENGINE = 'scan' # repeat with heap and auto
 Adjust the compiler path to the installed Delphi version. The existing benchmark
 build wrapper also supports these options. Real-time modes explicitly start the
 portable timer because `MAXCRON_TESTS` disables automatic timer startup in this
-project. Both modes warm up for two seconds; `--warmup` applies to `ticks` only.
+project. Idle mode warms up for 35 seconds before its CPU window, beyond the 30-second
+Windows startup-worker retirement observed during profiling. Compare it with a
+baseline using the same warm-up and timed window. The Phase 0 results below used
+a two-second warm-up; rerun the baseline for comparisons with this protocol.
+Latency mode warms up for two seconds; `--warmup` applies to `ticks` only.
 `--seconds` defaults to 60, `--events` to 1000 and `--fires` to 60. `--iterations`
 still defaults to 9. `--compare` accepts only the historical `ticks` CSV format.
 
@@ -1110,3 +1114,39 @@ Examples:
 | * * * 1,2,3 * *                      | * * * 1,2,3 |
 | 0 0 * * * *                          | 0 0 |
 | 0 0 * * 3 *                          | 0 0 * * 3 |
+
+### Cron timer precision
+
+Each scheduler owns one timing thread. Cron passes run once per wall-clock second,
+aligned just after the second boundary, using a precise local wall clock on Windows.
+`LastExecution` and `NextSchedule` retain their scheduled wall-clock values.
+Cron dispatch interprets these `TDateTime` carriers at the nearest millisecond,
+with ties to even. The precise clock stays in integer microseconds through due
+and misfire decisions; a pass less than one second late fires under `mpSkip`,
+including 999.6-999.999 ms late. Run/reset and late-pass searches use the whole
+second containing the precise instant, so a pass just before an occurrence
+does not skip it. The additive `TCronInstantUs` type and `CronDateTimeToMs`,
+`CronDateTimeToInstantUs`, `CronMsToDateTime`, `CronSecondToDateTime`,
+`CronInstantFloorSecond`, `CronInstantUsToDateTime`, `CronFloorDiv` and
+`CronCeilDiv` helpers are available from `maxCron.Plan` and `maxCron`.
+`CronInstantUsToDateTime` floors to milliseconds for display or persistence.
+`ctPortable` delivers ticks on the timing thread; `ctVcl` posts coalesced ticks to
+the main thread through `TThread.ForceQueue` and requires a message pump. Main-thread
+load and callback dispatch add latency. The default callback mode is `imMainThread`;
+a console application must pump queued work or select `imTTask`/`imThread`.
+
+`MAXCRON_TIMER_RESOLUTION` is read when creating the scheduler: `high` (default)
+uses a high-resolution waitable timer, `period` requests 1 ms timer resolution only
+for the final 20 ms of each wait, and `default` uses the system wait resolution.
+If a high-resolution timer is unavailable, maxCron falls back to `period`.
+`ActiveTimerResolution` reports `trHighResolution`, `trTimerPeriod`, or
+`trSystemDefault`. Timer-period requests can affect the whole system on older
+Windows versions. Every wait is bounded to one second so clock jumps are noticed.
+Power throttling, battery operation, and background/minimized process policies may
+coarsen waits; this host's measurements do not qualify those environments. QPC
+behavior across system sleep remains platform-defined and unverified here.
+
+The library timer no longer depends on `Vcl.ExtCtrls` or `MaxLogic.PortableTimer`.
+Under `MAXCRON_TESTS`, `StartTimerForTests` selects the maximum sleep duration,
+clamped to 1..1000 ms. Explicit `TickAt` calls remain direct cron passes using the millisecond carrier rule;
+`TickAtUs` accepts exact wall-clock microseconds.

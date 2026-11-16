@@ -28,6 +28,9 @@ uses
   TestLifecycle in 'unit\TestLifecycle.pas',
   TestMisfirePolicy in 'unit\TestMisfirePolicy.pas',
   TestMisfireOnTime in 'unit\TestMisfireOnTime.pas',
+  TestCronInstant in 'unit\TestCronInstant.pas',
+  TestTimeBoundaries in 'unit\TestTimeBoundaries.pas',
+  TestDeadlineTimer in 'unit\TestDeadlineTimer.pas',
   TestMaxCron in 'unit\TestMaxCron.pas',
   TestMetricsSnapshot in 'unit\TestMetricsSnapshot.pas',
   TestPersistenceRecovery in 'unit\TestPersistenceRecovery.pas',
@@ -61,6 +64,9 @@ begin
     TDUnitX.RegisterTestFixture(TTestLifecycle);
     TDUnitX.RegisterTestFixture(TTestMisfirePolicy);
     TDUnitX.RegisterTestFixture(TTestMisfireOnTime);
+    TDUnitX.RegisterTestFixture(TTestCronInstant);
+    TDUnitX.RegisterTestFixture(TTestTimeBoundaries);
+    TDUnitX.RegisterTestFixture(TTestDeadlineTimer);
     TDUnitX.RegisterTestFixture(TTestMaxCron);
     TDUnitX.RegisterTestFixture(TTestMetricsSnapshot);
     TDUnitX.RegisterTestFixture(TTestPersistenceRecovery);

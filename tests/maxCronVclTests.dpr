@@ -12,7 +12,8 @@ uses
   maxCron.Internal.TimeZone in '..\maxCron.Internal.TimeZone.pas',
   maxCron.Plan in '..\maxCron.Plan.pas',
   maxCron in '..\maxCron.pas',
-  TestVclBackend in 'unit\TestVclBackend.pas';
+  TestVclBackend in 'unit\TestVclBackend.pas',
+  TestVclDeadline in 'unit\TestVclDeadline.pas';
 
 var
   Runner: ITestRunner;
@@ -23,6 +24,7 @@ begin
   try
     TDUnitX.CheckCommandLine;
     TDUnitX.RegisterTestFixture(TTestVclBackend);
+    TDUnitX.RegisterTestFixture(TTestVclDeadline);
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));

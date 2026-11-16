@@ -1,4 +1,4 @@
-﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     <PropertyGroup>
         <ProjectGuid>{71D1F868-FC94-43E0-AA03-151167B43D2E}</ProjectGuid>
         <MainSource>maxCronBenchmarks.dpr</MainSource>
@@ -43,6 +43,9 @@
         <Base_Win32>true</Base_Win32>
         <CfgParent>Base</CfgParent>
         <Base>true</Base>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(Platform)'=='Win64'">
+        <DCC_Namespace>Winapi;System.Win;$(DCC_Namespace)</DCC_Namespace>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Config)'=='Release' or '$(Cfg_1)'!=''">
         <Cfg_1>true</Cfg_1>
