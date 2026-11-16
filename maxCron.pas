@@ -5943,24 +5943,27 @@ begin
           Exit;
         end;
 
-      case lMisfire of
-        TmaxCronMisfirePolicy.mpSkip:
-          begin
-            lFindResult := FindNextScheduleWithPolicies(aNow, fNextSchedule);
-            case lFindResult of
-              TFindNextScheduleResult.fnsFound:
-                fNextScheduleNeedsResolve := False;
-              TFindNextScheduleResult.fnsNotFound:
-                begin
-                  fNextScheduleNeedsResolve := False;
-                  FEnabled := False;
-                end;
-              TFindNextScheduleResult.fnsSearchLimitReached:
-                fNextScheduleNeedsResolve := True;
+      // Compare timestamps directly so the exact one-second boundary does not
+      // depend on cancellation when subtracting two large TDateTime values.
+      if (lMisfire = TmaxCronMisfirePolicy.mpSkip) and (aNow >= fNextSchedule + OneSecond) then
+      begin
+        lFindResult := FindNextScheduleWithPolicies(aNow, fNextSchedule);
+        case lFindResult of
+          TFindNextScheduleResult.fnsFound:
+            fNextScheduleNeedsResolve := False;
+          TFindNextScheduleResult.fnsNotFound:
+            begin
+              fNextScheduleNeedsResolve := False;
+              FEnabled := False;
             end;
-            Exit;
-          end;
-        TmaxCronMisfirePolicy.mpFireOnceNow:
+          TFindNextScheduleResult.fnsSearchLimitReached:
+            fNextScheduleNeedsResolve := True;
+        end;
+        Exit;
+      end;
+
+      case lMisfire of
+        TmaxCronMisfirePolicy.mpSkip, TmaxCronMisfirePolicy.mpFireOnceNow:
           begin
             lFireAt := fNextSchedule;
             fLastExecutionTime := lFireAt;

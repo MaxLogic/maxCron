@@ -27,6 +27,7 @@ uses
   TestInvokeModes in 'unit\TestInvokeModes.pas',
   TestLifecycle in 'unit\TestLifecycle.pas',
   TestMisfirePolicy in 'unit\TestMisfirePolicy.pas',
+  TestMisfireOnTime in 'unit\TestMisfireOnTime.pas',
   TestMaxCron in 'unit\TestMaxCron.pas',
   TestMetricsSnapshot in 'unit\TestMetricsSnapshot.pas',
   TestPersistenceRecovery in 'unit\TestPersistenceRecovery.pas',
@@ -59,6 +60,7 @@ begin
     TDUnitX.RegisterTestFixture(TTestInvokeModes);
     TDUnitX.RegisterTestFixture(TTestLifecycle);
     TDUnitX.RegisterTestFixture(TTestMisfirePolicy);
+    TDUnitX.RegisterTestFixture(TTestMisfireOnTime);
     TDUnitX.RegisterTestFixture(TTestMaxCron);
     TDUnitX.RegisterTestFixture(TTestMetricsSnapshot);
     TDUnitX.RegisterTestFixture(TTestPersistenceRecovery);

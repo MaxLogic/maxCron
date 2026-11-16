@@ -665,7 +665,7 @@ NewSchedule.MisfirePolicy := TmaxCronMisfirePolicy.mpFireOnceNow; // per-event o
 ```
 
 Policies:
-- `mpSkip`: skip missed occurrences and advance to the next time after `now`.
+- `mpSkip`: fire occurrences processed in their due second (less than one second late); skip occurrences one second or more late and advance to the next time after `now`.
 - `mpFireOnceNow`: execute once, then advance to the next time after `now`.
 - `mpCatchUpAll`: execute missed occurrences sequentially, bounded per tick by `DefaultMisfireCatchUpLimit`.
 
