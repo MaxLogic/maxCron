@@ -49,6 +49,14 @@ type
     procedure HistoricalSubMs(const aEngine: string);
     [Test] procedure HistoricalHourlyRun;
     [Test] procedure WatchdogMicrosecondThreshold;
+    [TestCase('second', '0')]
+    [TestCase('minute', '1')]
+    [TestCase('hour', '2')]
+    [TestCase('day', '3')]
+    procedure CalculationApiContract(const aPeriodIndex: Integer);
+    [Test] procedure CalculationValidityRepresentation;
+    [Test] procedure ExactMsReference;
+    [Test] procedure ExactMsQueries;
   end;
 
 implementation
@@ -63,6 +71,14 @@ const
     999000, 999400, 999499, 999500, 999501, 999600, 999900, 999999, 1000000, 1000001,
     1000500, 1999999, 2000000, 2000001);
 
+type
+  TExactMsRow = record
+    Bits: Int64;
+    Ms: Int64;
+  end;
+
+{$I TestTimeBoundariesExactMs.inc}
+
 function GridMs(const aValue: TDateTime): Int64;
 var
   lStamp: TTimeStamp;
@@ -73,19 +89,62 @@ begin
   Result := (Int64(lStamp.Date) - DateDelta) * MSecsPerDay + lStamp.Time;
 end;
 
-// Independent carrier interpretation, without the production conversion.
-function CarrierUs(const aValue: TDateTime): Int64;
+// Independent exact carrier interpretation, without the production conversion and without
+// Double arithmetic: the 128-bit product of the integer mantissa and 86400000 is shifted by
+// the binary exponent and rounded on its guard and sticky bits (nearest, ties to even).
+function CarrierMs(const aValue: TDateTime): Int64;
+const
+  cMask32: UInt64 = $FFFFFFFF;
 var
-  lDay, lWhole: Int64;
-  lPart, lRemainder: Double;
+  lBits, lMantissa, lLowPart, lHighPart, lMiddle, lLo, lHi, lQuotient: UInt64;
+  lExponent, lShift: Integer;
+  lGuard, lSticky: Boolean;
 begin
-  lDay := Trunc(aValue);
-  lPart := (aValue - lDay) * 86400000.0;
-  lWhole := Trunc(lPart);
-  lRemainder := lPart - lWhole;
-  if (lRemainder > 0.5) or ((lRemainder = 0.5) and Odd(lWhole)) then
-    Inc(lWhole);
-  Result := (lDay * MSecsPerDay + lWhole) * 1000;
+  if IsNan(aValue) or not (aValue > 0) then
+    Exit(0);
+  if aValue >= 2958466 then
+    Exit(Int64(2958466) * MSecsPerDay);
+  Move(aValue, lBits, SizeOf(lBits));
+  lExponent := Integer((lBits shr 52) and $7FF);
+  lMantissa := lBits and (UInt64(1) shl 52 - 1);
+  if lExponent = 0 then
+    lExponent := 1
+  else
+    lMantissa := lMantissa or (UInt64(1) shl 52);
+  // aValue * 86400000 = (lHi:lLo) / 2^lShift with (lHi:lLo) = lMantissa * 86400000 < 2^80.
+  lShift := 1075 - lExponent;
+  lLowPart := (lMantissa and cMask32) * 86400000;
+  lHighPart := (lMantissa shr 32) * 86400000;
+  // Limb 1 collects the upper half of the low product and the lower half of the high product.
+  lMiddle := (lLowPart shr 32) + (lHighPart and cMask32);
+  lLo := (lLowPart and cMask32) or ((lMiddle and cMask32) shl 32);
+  lHi := (lHighPart shr 32) + (lMiddle shr 32);
+  if lShift >= 82 then
+    Exit(0);
+  if lShift >= 64 then
+  begin
+    lQuotient := lHi shr (lShift - 64);
+    if lShift = 64 then
+      lGuard := (lLo shr 63) <> 0
+    else
+      lGuard := ((lHi shr (lShift - 65)) and 1) <> 0;
+    if lShift = 64 then
+      lSticky := (lLo and (UInt64(1) shl 63 - 1)) <> 0
+    else
+      lSticky := (lLo <> 0) or ((lHi and (UInt64(1) shl (lShift - 65) - 1)) <> 0);
+  end else begin
+    lQuotient := (lLo shr lShift) or (lHi shl (64 - lShift));
+    lGuard := ((lLo shr (lShift - 1)) and 1) <> 0;
+    lSticky := (lLo and (UInt64(1) shl (lShift - 1) - 1)) <> 0;
+  end;
+  if lGuard and (lSticky or ((lQuotient and 1) <> 0)) then
+    Inc(lQuotient);
+  Result := Int64(lQuotient);
+end;
+
+function CarrierUs(const aValue: TDateTime): Int64;
+begin
+  Result := CarrierMs(aValue) * 1000;
 end;
 
 function Neighbour(const aValue: TDateTime; const aDistance: Integer): TDateTime;
@@ -436,6 +495,200 @@ begin
     g.Clear;
     SetMaxCronWallClockHook(nil);
   end;
+end;
+
+
+procedure TTestTimeBoundaries.CalculationApiContract(const aPeriodIndex: Integer);
+const
+  cOffsetsMs: array[0..6] of Integer = (-1001, -1000, -1, 0, 1, 999, 1000);
+var
+  g: TGarbos;
+  lPlan: TCronSchedulePlan;
+  lDates: TDates;
+  lSeed: UInt64;
+  lDueMs, lPeriodMs, lInputMs, lExpectedNext, lExpectedPrevious, lFirst, lLast: Int64;
+  lBase, lEnd, lNext, lPrevious: TDateTime;
+  lVariant, lOffset, lNeighbour, lExpectedCount: Integer;
+  lHint: string;
+begin
+  GC(lPlan, TCronSchedulePlan.Create, g);
+  lPlan.Parse(cPlans[aPeriodIndex]);
+  lSeed := 20261116;
+  lPeriodMs := Int64(cPeriods[aPeriodIndex]) * 1000;
+  // i 0..63 keep the original 2000..2999 dues; i 64..95 add the early domain from 1900-01-06.
+  for var i := 0 to 95 do
+  begin
+    lSeed := (lSeed * 1664525 + 1013904223) and $FFFFFFFF;
+    if i < 64 then
+      lDueMs := (Int64(36526) + Int64(lSeed mod 365000)) * MSecsPerDay
+    else
+      lDueMs := (Int64(7) + Int64(lSeed mod 36519)) * MSecsPerDay;
+    lDueMs := lDueMs + (Int64(lSeed mod 86400) * 1000 div lPeriodMs) * lPeriodMs;
+    for lOffset in cOffsetsMs do
+      for lVariant := 0 to 3 do
+        for lNeighbour := -4 to 4 do
+        begin
+          case lVariant of
+            0: lBase := CronInstantUsToDateTime((lDueMs + lOffset) * 1000);
+            1: lBase := IncMilliSecond(CronInstantUsToDateTime(lDueMs * 1000), lOffset);
+            2: lBase := (lDueMs + lOffset - 0.4999) / 86400000.0;
+          else
+            lBase := (lDueMs + lOffset + 0.4999) / 86400000.0;
+          end;
+          lBase := Neighbour(lBase, lNeighbour);
+          lInputMs := CarrierUs(lBase) div 1000;
+          lExpectedNext := (lInputMs div lPeriodMs + 1) * lPeriodMs;
+          lExpectedPrevious := ((lInputMs + lPeriodMs - 1) div lPeriodMs - 1) * lPeriodMs;
+          lHint := Format('G7 seed=20261116 i=%d plan=%s dueMs=%d offset=%d variant=%d ulp=%d inputMs=%d',
+            [i, cPlans[aPeriodIndex], lDueMs, lOffset, lVariant, lNeighbour, lInputMs]);
+          Assert.IsTrue(lPlan.FindNextScheduleDate(lBase, lNext), lHint + ' next found');
+          Assert.AreEqual(lExpectedNext, GridMs(lNext), lHint + ' next');
+          Assert.IsTrue(lPlan.FindPreviousScheduleDate(lBase, lPrevious), lHint + ' previous found');
+          Assert.AreEqual(lExpectedPrevious, GridMs(lPrevious), lHint + ' previous');
+          Assert.AreEqual(3, lPlan.GetNextOccurrences(3, lBase, lDates), lHint + ' next page count');
+          for var j := 0 to 2 do
+            Assert.AreEqual(lExpectedNext + j * lPeriodMs, GridMs(lDates[j]), lHint + ' next page');
+          Assert.AreEqual(3, lPlan.GetPreviousOccurrences(3, lBase, lDates), lHint + ' previous page count');
+          for var j := 0 to 2 do
+            Assert.AreEqual(lExpectedPrevious - j * lPeriodMs, GridMs(lDates[j]), lHint + ' previous page');
+          lEnd := CronInstantUsToDateTime((lInputMs + 2 * lPeriodMs) * 1000);
+          lFirst := ((lInputMs + lPeriodMs - 1) div lPeriodMs) * lPeriodMs;
+          lLast := ((CarrierUs(lEnd) div 1000 + lPeriodMs - 1) div lPeriodMs - 1) * lPeriodMs;
+          lExpectedCount := (lLast - lFirst) div lPeriodMs + 1;
+          Assert.AreEqual(lExpectedCount, lPlan.GetOccurrencesBetween(lBase, lEnd, lDates), lHint + ' range count');
+          for var j := 0 to lExpectedCount - 1 do
+            Assert.AreEqual(lFirst + j * lPeriodMs, GridMs(lDates[j]), lHint + ' range member');
+          Assert.AreEqual(lExpectedCount, lPlan.CountBetween(lBase, lEnd), lHint + ' count');
+          Assert.IsTrue(lPlan.HasOccurrenceBetween(lBase, lEnd), lHint + ' has');
+        end;
+  end;
+end;
+
+procedure TTestTimeBoundaries.CalculationValidityRepresentation;
+var
+  g: TGarbos;
+  lPlan: TCronSchedulePlan;
+  lDue, lBase, lNext: TDateTime;
+  lDueMs: Int64;
+begin
+  GC(lPlan, TCronSchedulePlan.Create, g);
+  lPlan.Parse('* * * * * * *');
+  for var y in [1900, 2000, 2026, 2079, 2100, 2500, 2999] do
+  begin
+    lDue := EncodeDateTime(y, 11, 16, 10, 0, 0, 0);
+    lDueMs := GridMs(lDue);
+    lBase := IncSecond(lDue, -1);
+    Assert.IsTrue(lPlan.FindNextScheduleDate(lBase, lNext, 0, Neighbour(lDue, -1)),
+      'P1 nearest-ms equality year=' + IntToStr(y));
+    Assert.AreEqual(lDueMs, GridMs(lNext));
+    Assert.IsTrue(lPlan.FindNextScheduleDate(IncSecond(lDue, -10), lNext, lDue, 0));
+    Assert.AreEqual(lDueMs + 1000, GridMs(lNext), 'Q4 exclusive ValidFrom stays');
+    lPlan.Parse('0 23 * * *');
+    Assert.IsTrue(lPlan.FindNextScheduleDate(lBase, lNext, 0, lDue));
+    Assert.AreEqual(GridMs(EncodeDateTime(y, 11, 16, 23, 0, 0, 0)), GridMs(lNext),
+      'Q4 ValidTo overshoot stays');
+    lPlan.Parse('* * * * * * *');
+  end;
+end;
+
+procedure TTestTimeBoundaries.ExactMsReference;
+var
+  lValue: TDateTime;
+  lFailures, lCarrierFailures: Integer;
+  lFirst: string;
+begin
+  lFailures := 0;
+  lCarrierFailures := 0;
+  lFirst := '';
+  for var i := Low(cExactMsRows) to High(cExactMsRows) do
+  begin
+    Move(cExactMsRows[i].Bits, lValue, SizeOf(lValue));
+    if CarrierMs(lValue) <> cExactMsRows[i].Ms then
+      Inc(lCarrierFailures);
+    if (CronDateTimeToMs(lValue) <> cExactMsRows[i].Ms) or
+      (CronDateTimeToInstantUs(lValue) <> cExactMsRows[i].Ms * cCronUsPerMs) then
+    begin
+      Inc(lFailures);
+      if lFirst = '' then
+        lFirst := Format('row=%d bits=%s expectedMs=%d actualMs=%d',
+          [i, IntToHex(cExactMsRows[i].Bits, 16), cExactMsRows[i].Ms, CronDateTimeToMs(lValue)]);
+    end;
+  end;
+  Assert.AreEqual(0, lCarrierFailures, 'Test carrier reference disagrees with the exact rational table');
+  Assert.AreEqual(0, lFailures, Format('Exact ms conversion failures=%d of %d; first %s',
+    [lFailures, Length(cExactMsRows), lFirst]));
+end;
+
+procedure TTestTimeBoundaries.ExactMsQueries;
+const
+  // Review r1 inputs within 2^-35 ms of a half millisecond: bits, previous ms, next ms.
+  cReview: array[0..5, 0..2] of Int64 = (
+    ($400015DAD5EBA115, 173722000, 173723000),
+    ($40001A252A145EEB, 173902000, 173903000),
+    ($405900CDF0186B11, 8641086000, 8641087000),
+    ($405901320FE794EF, 8641613000, 8641614000),
+    ($4076D64C474E8B07, 31570009000, 31570010000),
+    ($4076D653B8B174F9, 31570165000, 31570166000));
+var
+  g: TGarbos;
+  lPlan: TCronSchedulePlan;
+  lValue, lResult, lEnd: TDateTime;
+  lDates: TDates;
+  lMs, lFloor, lCeil, lMinMs, lMaxMs: Int64;
+  lCount, lChecked: Integer;
+  lHint: string;
+begin
+  GC(lPlan, TCronSchedulePlan.Create, g);
+  lPlan.Parse('* * * * * * *');
+  for var r := 0 to 5 do
+  begin
+    Move(cReview[r, 0], lValue, SizeOf(lValue));
+    lHint := 'review r1 bits=' + IntToHex(cReview[r, 0], 16);
+    Assert.IsTrue(lPlan.FindPreviousScheduleDate(lValue, lResult), lHint);
+    Assert.AreEqual(cReview[r, 1], GridMs(lResult), lHint + ' previous');
+    Assert.IsTrue(lPlan.FindNextScheduleDate(lValue, lResult), lHint);
+    Assert.AreEqual(cReview[r, 2], GridMs(lResult), lHint + ' next');
+  end;
+  lMinMs := GridMs(EncodeDate(1900, 1, 3));
+  lMaxMs := GridMs(EncodeDate(3000, 12, 29));
+  lChecked := 0;
+  for var i := Low(cExactMsRows) to High(cExactMsRows) do
+  begin
+    lMs := cExactMsRows[i].Ms;
+    if (lMs < lMinMs) or (lMs > lMaxMs) then
+      Continue;
+    Move(cExactMsRows[i].Bits, lValue, SizeOf(lValue));
+    Inc(lChecked);
+    lFloor := (lMs div 1000) * 1000;
+    lCeil := ((lMs + 999) div 1000) * 1000;
+    lHint := Format('bits=%s exactMs=%d', [IntToHex(cExactMsRows[i].Bits, 16), lMs]);
+    Assert.IsTrue(lPlan.FindNextScheduleDate(lValue, lResult), lHint);
+    Assert.AreEqual(lFloor + 1000, GridMs(lResult), lHint + ' next');
+    Assert.IsTrue(lPlan.FindPreviousScheduleDate(lValue, lResult), lHint);
+    Assert.AreEqual(lCeil - 1000, GridMs(lResult), lHint + ' previous');
+    // Inclusive start: [value, floor + 2.5 s).
+    lEnd := CronMsToDateTime(lFloor + 2500);
+    lCount := (lFloor + 2000 - lCeil) div 1000 + 1;
+    Assert.AreEqual(lCount, lPlan.GetOccurrencesBetween(lValue, lEnd, lDates), lHint + ' range count');
+    for var j := 0 to lCount - 1 do
+      Assert.AreEqual(lCeil + j * 1000, GridMs(lDates[j]), lHint + ' range member');
+    Assert.AreEqual(lCount, lPlan.CountBetween(lValue, lEnd), lHint + ' count');
+    Assert.IsTrue(lPlan.HasOccurrenceBetween(lValue, lEnd), lHint + ' has');
+    // Exclusive end: [floor - 2 s, value).
+    lCount := (lCeil - lFloor + 1000) div 1000 + 1;
+    Assert.AreEqual(lCount, lPlan.GetOccurrencesBetween(CronMsToDateTime(lFloor - 2000), lValue, lDates),
+      lHint + ' end count');
+    Assert.AreEqual(lCeil - 1000, GridMs(lDates[lCount - 1]), lHint + ' last before end');
+    // Validity inputs: ValidFrom stays exclusive and ValidTo admits nearest-ms equality.
+    Assert.IsTrue(lPlan.FindNextScheduleDate(CronMsToDateTime(lFloor - 5000), lResult, lValue, 0),
+      lHint + ' valid from');
+    Assert.AreEqual(lFloor + 1000, GridMs(lResult), lHint + ' valid from next');
+    Assert.AreEqual(lCeil = lMs, lPlan.FindNextScheduleDate(CronMsToDateTime(lCeil - 1000), lResult, 0, lValue),
+      lHint + ' valid to');
+    if lCeil = lMs then
+      Assert.AreEqual(lMs, GridMs(lResult), lHint + ' valid to equality');
+  end;
+  Assert.IsTrue(lChecked > 2000, 'Exact query rows checked=' + IntToStr(lChecked));
 end;
 
 end.

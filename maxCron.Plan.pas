@@ -254,7 +254,8 @@ type
 /// Floor / ceiling division for aDivisor > 0, including negative aValue.
 function CronFloorDiv(const aValue, aDivisor: Int64): Int64;
 function CronCeilDiv(const aValue, aDivisor: Int64): Int64;
-/// Nearest millisecond, ties to even. NaN/<=0 => 0; >=2958466 days saturates.
+/// Nearest millisecond to the exact value of aValue, ties to even, computed with integer
+/// arithmetic on the Double's bits. NaN/<=0 => 0; >=2958466 days saturates.
 function CronDateTimeToMs(const aValue: TDateTime): Int64;
 function CronDateTimeToInstantUs(const aValue: TDateTime): TCronInstantUs;
 /// Builds the same Double as EncodeDateTime for the decoded fields.
@@ -284,23 +285,49 @@ begin
 end;
 
 function CronDateTimeToMs(const aValue: TDateTime): Int64;
+const
+  cMantissaMask: UInt64 = $000FFFFFFFFFFFFF;
+  cHiddenBit: UInt64 = $0010000000000000;
+  // 86400000 = 84375 * 2^10; the power of two is folded into the binary exponent.
+  cMsPerDayOddFactor = 84375;
+  cLowBits = 20;
+  cLowMask: UInt64 = $FFFFF;
 var
-  lDay, lWhole: Int64;
-  lFraction, lProduct, lRemainder: Double;
+  lBits, lMantissa, lHigh, lLow, lQuotient, lRemainder, lHalf: UInt64;
+  lExponent, lShift: Integer;
 begin
   // IsNan first: an ordered comparison with NaN raises EInvalidOp under default FPC float masks.
   if IsNan(aValue) or not (aValue > 0) then
     Exit(0);
   if aValue >= 2958466 then
     Exit(Int64(2958466) * cCronMsPerDay);
-  lDay := Trunc(aValue);
-  lFraction := aValue - lDay;
-  lProduct := lFraction * 86400000.0;
-  lWhole := Trunc(lProduct);
-  lRemainder := lProduct - lWhole;
-  if (lRemainder > 0.5) or ((lRemainder = 0.5) and Odd(lWhole)) then
-    Inc(lWhole);
-  Result := lDay * cCronMsPerDay + lWhole;
+  // Exact by construction: aValue = lMantissa * 2^(lExponent - 1075), so
+  // aValue * 86400000 = lMantissa * 84375 / 2^lShift with lShift = 1065 - lExponent.
+  // Below 2^22 days lExponent <= 1044, hence lShift >= 21. No Double rounding takes part.
+  Move(aValue, lBits, SizeOf(lBits));
+  lExponent := Integer((lBits shr 52) and $7FF);
+  lMantissa := lBits and cMantissaMask;
+  if lExponent = 0 then
+    lExponent := 1
+  else
+    lMantissa := lMantissa or cHiddenBit;
+  lShift := 1065 - lExponent;
+  // Product P = lMantissa * 84375 < 2^70, split as P = lHigh * 2^20 + lLow with lLow < 2^20.
+  lHigh := (lMantissa shr cLowBits) * cMsPerDayOddFactor;
+  lLow := (lMantissa and cLowMask) * cMsPerDayOddFactor;
+  lHigh := lHigh + (lLow shr cLowBits);
+  lLow := lLow and cLowMask;
+  lShift := lShift - cLowBits;
+  // lHigh < 2^51: from lShift > 52 on, P < 2^70 < 2^(lShift + 19) = half a millisecond.
+  if lShift > 52 then
+    Exit(0);
+  lQuotient := lHigh shr lShift;
+  // Exact remainder P - lQuotient * 2^(lShift + 20) = lRemainder * 2^20 + lLow; half = lHalf * 2^20.
+  lRemainder := lHigh and ((UInt64(1) shl lShift) - 1);
+  lHalf := UInt64(1) shl (lShift - 1);
+  if (lRemainder > lHalf) or ((lRemainder = lHalf) and ((lLow <> 0) or ((lQuotient and 1) <> 0))) then
+    Inc(lQuotient);
+  Result := Int64(lQuotient);
 end;
 
 function CronDateTimeToInstantUs(const aValue: TDateTime): TCronInstantUs;
@@ -660,15 +687,18 @@ end;
 
 function TCronSchedulePlan.FindNextFromCandidate(const aCandidate, aValidTo: TDateTime;
   out aNextDateTime: TDateTime): Boolean;
+var
+  lValidToMs: Int64;
 begin
   Result := False;
   aNextDateTime := aCandidate;
+  lValidToMs := CronDateTimeToMs(aValidTo);
   if not HasPossibleDayOfMonth then
     Exit(False);
 
   while True do
   begin
-    if (aValidTo > 0) and (aNextDateTime > aValidTo) then
+    if (aValidTo > 0) and (CronDateTimeToMs(aNextDateTime) > lValidToMs) then
       Exit(false);
 
 
@@ -701,23 +731,30 @@ begin
   ms := aStamp.Time mod MSecsPerSec;
 end;
 
+procedure DecodeSearchClockMs(const aMs: Int64; out h, m, s, ms: Word);
+var
+  lSeconds: Integer;
+begin
+  // Date and clock must come from the same canonical millisecond normalization.
+  lSeconds := (aMs mod cCronMsPerDay) div MSecsPerSec;
+  h := lSeconds div SecsPerHour;
+  m := (lSeconds div SecsPerMin) mod MinsPerHour;
+  s := lSeconds mod SecsPerMin;
+  ms := aMs mod MSecsPerSec;
+end;
+
 function TCronSchedulePlan.FindNextScheduleDate(const aBaseDate: TDateTime;
   out aNextDateTime: TDateTime;
   const aValidFrom,
   aValidTo: TDateTime): boolean;
 var
   lStartDate: TDateTime;
-  lStamp: TTimeStamp;
+  lStartMs: Int64;
   h, m, s, ms: word;
 begin
-  if (aBaseDate > aValidFrom) then
-    lStartDate := aBaseDate
-  else
-    lStartDate := aValidFrom;
-
-  lStamp := DateTimeToTimeStamp(lStartDate);
-  DecodeSearchClock(lStamp, h, m, s, ms);
-  lStartDate := lStamp.Date - DateDelta;
+  lStartMs := Max(CronDateTimeToMs(aBaseDate), CronDateTimeToMs(aValidFrom));
+  DecodeSearchClockMs(lStartMs, h, m, s, ms);
+  lStartDate := CronFloorDiv(lStartMs, cCronMsPerDay);
   // Keep ordinary result bytes, but carry midnight as an integer day first.
   if (h = 23) and (m = 59) and (s = 59) then
     lStartDate := lStartDate + 1
@@ -728,11 +765,8 @@ begin
 end;
 
 function QuerySerial(const aDate: TDateTime): Int64;
-var
-  lStamp: TTimeStamp;
 begin
-  lStamp := DateTimeToTimeStamp(aDate);
-  Result := Int64(lStamp.Date) * 86400 + lStamp.Time div 1000;
+  Result := CronFloorDiv(CronDateTimeToMs(aDate), cCronMsPerSecond);
 end;
 
 function TCronPart.TryPrevVal(const aValue: Word; out aResult: Word): Boolean;
@@ -799,7 +833,7 @@ function TCronSchedulePlan.FindPreviousScheduleDate(const aBaseDate: TDateTime;
   out aPreviousDateTime: TDateTime): Boolean;
 var
   y, mo, d, h, mi, s: Integer;
-  lStamp: TTimeStamp;
+  lBaseMs: Int64;
   lYear, lMonth, lDay, lHour, lMinute, lSecond, lMilli, v: Word;
 
   procedure EndOfPreviousYear;
@@ -866,9 +900,10 @@ begin
   aPreviousDateTime := 0;
   if not HasPossibleDayOfMonth then
     Exit(False);
-  if aBaseDate <= EncodeDate(1900, 1, 1) then
+  lBaseMs := CronDateTimeToMs(aBaseDate);
+  if lBaseMs <= CronDateTimeToMs(EncodeDate(1900, 1, 1)) then
     Exit(False);
-  if aBaseDate >= EncodeDate(3001, 1, 1) then
+  if lBaseMs >= CronDateTimeToMs(EncodeDate(3001, 1, 1)) then
   begin
     y := 3000;
     mo := 12;
@@ -877,9 +912,8 @@ begin
     mi := 59;
     s := 59;
   end else begin
-    lStamp := DateTimeToTimeStamp(aBaseDate);
-    DecodeDate(lStamp.Date - DateDelta, lYear, lMonth, lDay);
-    DecodeSearchClock(lStamp, lHour, lMinute, lSecond, lMilli);
+    DecodeDate(CronFloorDiv(lBaseMs, cCronMsPerDay), lYear, lMonth, lDay);
+    DecodeSearchClockMs(lBaseMs, lHour, lMinute, lSecond, lMilli);
     y := lYear;
     mo := lMonth;
     d := lDay;
@@ -992,32 +1026,25 @@ end;
 function TCronSchedulePlan.CollectBetween(const aStart, aEnd: TDateTime; const aLimit: Integer;
   const aStore: Boolean; out aDates: TDates): Integer;
 var
-  lStart, lEnd, lCandidate, lNext, lPrevious: TDateTime;
-  lStamp: TTimeStamp;
-  lLast, lLower, lSerial: Int64;
+  lEnd, lCandidate, lNext, lPrevious: TDateTime;
+  lStartMs, lEndMs, lFloorMs, lCeilingMs, lLast, lLower, lSerial: Int64;
   lCapacity: Integer;
 begin
   Result := 0;
   aDates := nil;
   if aLimit <= 0 then
     Exit;
-  lStart := Max(aStart, EncodeDate(1900, 1, 1));
-  lEnd := Min(aEnd, EncodeDate(3001, 1, 1));
-  // Clamp before converting timestamps, so out-of-domain values never reach the decoder.
-  if (lStart >= EncodeDate(3001, 1, 1)) or (lEnd <= EncodeDate(1900, 1, 1)) then
+  lFloorMs := CronDateTimeToMs(EncodeDate(1900, 1, 1));
+  lCeilingMs := CronDateTimeToMs(EncodeDate(3001, 1, 1));
+  lStartMs := Max(CronDateTimeToMs(aStart), lFloorMs);
+  lEndMs := Min(CronDateTimeToMs(aEnd), lCeilingMs);
+  // Clamp before decoding; the conversion helper also handles out-of-domain carriers.
+  if (lStartMs >= lCeilingMs) or (lEndMs <= lFloorMs) then
     Exit;
-  lStamp := DateTimeToTimeStamp(lStart);
-  lLower := QuerySerial(lStart);
-  lCandidate := RecodeMilliSecond(lStart, 0);
-  if lStamp.Time mod 1000 > 0 then
-  begin
-    Inc(lLower);
-    lCandidate := IncSecond(lCandidate, 1);
-  end;
-  lStamp := DateTimeToTimeStamp(lEnd);
-  lLast := QuerySerial(lEnd);
-  if lStamp.Time mod 1000 = 0 then
-    Dec(lLast);
+  lLower := CronCeilDiv(lStartMs, cCronMsPerSecond);
+  lLast := CronCeilDiv(lEndMs, cCronMsPerSecond) - 1;
+  lCandidate := CronSecondToDateTime(lLower);
+  lEnd := CronMsToDateTime(lEndMs);
   if lLast < lLower then
     Exit;
   if not FindNextFromCandidate(lCandidate, lEnd, lNext) then
@@ -1161,7 +1188,7 @@ begin
     if not FindNextScheduleDate(lCursor, lNext, aValidFrom, aValidTo) then
       Break;
 
-    if lNext <= lCursor then
+    if CronDateTimeToMs(lNext) <= CronDateTimeToMs(lCursor) then
     begin
       Inc(lStall);
       if lStall > lMaxStall then

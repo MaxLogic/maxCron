@@ -906,7 +906,9 @@ end;
 The example uses `System.DateUtils` and `System.SysUtils`, plus either `maxCron`
 or the RTL-only `maxCron.Plan` unit. Previous searches are strictly before the
 base time. Ranges include the start and exclude the end: `[start, end)`.
-Comparisons use RTL millisecond rounding and occurrences are whole seconds:
+Comparisons read TDateTime inputs at the millisecond nearest to the exact stored
+Double, ties to even, using the library conversion helper on Win32 and Win64.
+Occurrences are whole seconds:
 previous at `10:15:00.000` excludes that occurrence, while `10:15:00.001`
 includes it. A range starting at `10:00:00.001` begins with `10:15`.
 

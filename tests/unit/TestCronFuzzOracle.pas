@@ -383,11 +383,20 @@ type
     DomKind, DomValue, DowKind, DowValue, DowNth: Integer;
   end;
 
+function OracleTimeStamp(const aDate: TDateTime): TTimeStamp;
+var
+  lMs: Int64;
+begin
+  lMs := CronDateTimeToMs(aDate);
+  Result.Date := lMs div MSecsPerDay + DateDelta;
+  Result.Time := lMs mod MSecsPerDay;
+end;
+
 function OracleSerial(const aDate: TDateTime): Int64;
 var
   lStamp: TTimeStamp;
 begin
-  lStamp := DateTimeToTimeStamp(aDate);
+  lStamp := OracleTimeStamp(aDate);
   Result := Int64(lStamp.Date) * 86400 + lStamp.Time div 1000;
 end;
 
@@ -491,7 +500,7 @@ begin
     lFloor := EncodeDate(lYears[0], 1, 1);
     lCeiling := EncodeDate(lYears[High(lYears)], 12, 31);
   end;
-  lStamp := DateTimeToTimeStamp(aBase);
+  lStamp := OracleTimeStamp(aBase);
   lBound := OracleSerial(aBase);
   if aBackward then
   begin
@@ -675,11 +684,11 @@ begin
           begin
             lEnd := IncSecond(lBase, cWidths[lCaseIndex mod 6]);
             lOracleBase := RecodeMilliSecond(lBase, 0);
-            if DateTimeToTimeStamp(lBase).Time mod 1000 = 0 then
+            if OracleTimeStamp(lBase).Time mod 1000 = 0 then
               lOracleBase := IncSecond(lOracleBase, -1);
             // Include lower bound, but exclude upper bound after RTL millisecond rounding.
             lExpected := QueryOracleDates(lPlan, lSpec, lOracleBase,
-              IncSecond(RecodeMilliSecond(lEnd, 0), Ord(DateTimeToTimeStamp(lEnd).Time mod 1000 > 0)),
+              IncSecond(RecodeMilliSecond(lEnd, 0), Ord(OracleTimeStamp(lEnd).Time mod 1000 > 0)),
               500, lScanDays, False, lHint);
             lPlan.GetOccurrencesBetween(lBase, lEnd, lActual, 500);
             EqualDates(lExpected, lActual);
@@ -760,7 +769,7 @@ function NextOracleSerial(const aDate: TDateTime): Int64;
 var
   lStamp: TTimeStamp;
 begin
-  lStamp := DateTimeToTimeStamp(aDate);
+  lStamp := OracleTimeStamp(aDate);
   Result := Int64(lStamp.Date) * 86400 + lStamp.Time div 1000;
 end;
 
@@ -830,7 +839,7 @@ begin
   Result := False;
   aNext := 0;
   lBound := NextOracleSerial(aBase);
-  lDay := DateTimeToTimeStamp(aBase).Date - DateDelta;
+  lDay := OracleTimeStamp(aBase).Date - DateDelta;
   // Brute force calendar days and allowed clock values; never call any search helper.
   while lDay < aEnd do
   begin

@@ -30,11 +30,8 @@ begin
 end;
 
 function Serial(const aDate: TDateTime): Int64;
-var
-  lStamp: TTimeStamp;
 begin
-  lStamp := DateTimeToTimeStamp(aDate);
-  Result := Int64(lStamp.Date) * 86400 + lStamp.Time div 1000;
+  Result := CronFloorDiv(CronDateTimeToMs(aDate), 1000) + Int64(DateDelta) * 86400;
 end;
 
 procedure TTestCronQuery.PreviousExamples;
