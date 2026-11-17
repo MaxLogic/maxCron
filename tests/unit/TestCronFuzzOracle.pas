@@ -579,6 +579,38 @@ begin
   SetLength(Result, lFound);
 end;
 
+
+procedure AssertOracleWrappedField(const aPart: TCronPart; const aToken: string;
+  const aLow, aHigh: Integer);
+var
+  lText: string;
+  lDash, lSlash, lFrom, lTo, lStep, lWidth, lSpan, lValue, lDistance: Integer;
+begin
+  lText := aToken;
+  if Pos(',', lText) > 0 then Exit;
+  if lText = 'NOV-FEB' then lText := '11-2';
+  lDash := Pos('-', lText);
+  if lDash = 0 then Exit;
+  lSlash := Pos('/', lText);
+  lStep := 1;
+  if lSlash > 0 then
+  begin
+    lStep := StrToInt(Copy(lText, lSlash + 1, MaxInt));
+    lText := Copy(lText, 1, lSlash - 1);
+  end;
+  lFrom := StrToInt(Copy(lText, 1, lDash - 1));
+  lTo := StrToInt(Copy(lText, lDash + 1, MaxInt));
+  if lFrom <= lTo then Exit;
+  lWidth := aHigh - aLow + 1;
+  lSpan := aHigh - lFrom + 1 + lTo - aLow + 1;
+  for lValue := aLow to aHigh do
+  begin
+    lDistance := (lValue - lFrom + lWidth) mod lWidth;
+    Assert.AreEqual((lDistance < lSpan) and (lDistance mod lStep = 0),
+      aPart.NextVal(lValue) = lValue, aToken);
+  end;
+end;
+
 procedure TTestCronFuzzOracle.RunQueryOracle(const aKind: Integer);
 const
   cWidths: array[0..5] of Integer = (0, 1, 59, 3600, 86400, 259200);
@@ -588,7 +620,7 @@ var
   lDialect: TmaxCronDialect;
   lMode: TmaxCronDayMatchMode;
   lSeed, lCases, lCount, lScanDays, lCaseIndex, lDomPick, lDowPick, lDowNumber, lRelations, i, n: Integer;
-  lText, lDom, lDow, lMinute, lSecond, lMonth, lYear, lHint: string;
+  lText, lDom, lDow, lMinute, lSecond, lMonth, lYear, lHint, lHour: string;
   lBase, lEnd, lCursor, lNext, lPrevious, lOracleBase: TDateTime;
   lExpected, lActual, lReverse: TDates;
   lFound: Boolean;
@@ -679,6 +711,14 @@ begin
             lMinute := PickToken(['0', 'H', 'H/15', 'H(0-29)/10']);
             lSecond := PickToken(['0', 'H', 'H/15', 'H(0-29)/10']);
             lMonth := PickToken(['*', '2', '2,4,6-12', '*/3']);
+            lHour := '*';
+            if aKind = 5 then
+            begin
+              lHour := PickToken(['*', '22-2', '22-2/3', '20-4/2', '0,12']);
+              lMinute := PickToken(['0', 'H/15', '50-10/15', '55-5/5', '45-14/20']);
+              lSecond := PickToken(['0', 'H/15', '50-10/15', '55-5/5', '45-14/20']);
+              lMonth := PickToken(['*', 'NOV-FEB', '11-2/2', '2,4,6-12']);
+            end;
             // February fifth weekdays can be decades apart, beyond the default oracle scan.
             if (lMonth = '2') and (lSpec.DowKind = 2) and (lSpec.DowNth = 5) then
               lMonth := '2,4,6-12';
@@ -686,14 +726,21 @@ begin
               ((lSpec.DomKind = 5) and (lSpec.DomValue >= 19))) then lMonth := '*';
             lYear := PickToken(['*', '2024-2027', '2025,2028', '*/4']);
             case lDialect of
-              cdStandard: lText := lMinute + ' * ' + lDom + ' ' + lMonth + ' ' + lDow;
+              cdStandard: lText := lMinute + ' ' + lHour + ' ' + lDom + ' ' + lMonth + ' ' + lDow;
               cdQuartzSecondsFirst:
-                lText := lSecond + ' ' + lMinute + ' * ' + lDom + ' ' + lMonth + ' ' + lDow + ' ' + lYear;
+                lText := lSecond + ' ' + lMinute + ' ' + lHour + ' ' + lDom + ' ' + lMonth + ' ' + lDow + ' ' + lYear;
             else
-              lText := lMinute + ' * ' + lDom + ' ' + lMonth + ' ' + lDow + ' ' + lYear + ' ' + lSecond;
+              lText := lMinute + ' ' + lHour + ' ' + lDom + ' ' + lMonth + ' ' + lDow + ' ' + lYear + ' ' + lSecond;
             end;
           end;
           lPlan.Parse(lText);
+          if aKind = 5 then
+          begin
+            AssertOracleWrappedField(lPlan.Hour, lHour, 0, 23);
+            AssertOracleWrappedField(lPlan.Minute, lMinute, 0, 59);
+            if lDialect <> cdStandard then AssertOracleWrappedField(lPlan.Second, lSecond, 0, 59);
+            AssertOracleWrappedField(lPlan.Month, lMonth, 1, 12);
+          end;
           lBase := EncodeDateTime(2023 + Random(7), 1 + Random(12), 1, Random(24), Random(60),
             Random(60), 500 * Random(2));
           if lCaseIndex mod 4 = 0 then

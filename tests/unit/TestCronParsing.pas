@@ -67,6 +67,7 @@ type
 
     [Test]
     procedure Plan_Text_RespectsDialect;
+    [Test] procedure Parse_WrappedRanges_Expansion;
     [Test] procedure Parse_MonthEndOffsetLists_ErrorPrecedence;
     [Test] procedure Parse_MonthEndOffsets_LaterFieldDiagnostics;
     [Test] procedure Parse_MonthEndOffsets;
@@ -411,6 +412,10 @@ end;
 
 procedure TTestCronParsing.Describe_SyntaxAdditions;
 begin
+  AssertDescription('0 22-2 * * *', 'Custom schedule');
+  AssertDescription('30-0/30 * * * *', 'Every 30 minutes');
+  AssertDescription('0 8 * * FRI-MON', 'Every week on Sun,Mon,Fri,Sat at 08:00');
+  AssertDescription('0 9 * NOV-FEB *', 'Custom schedule');
   AssertDescription('0 10 L-2 * *', 'Every month on the last day minus 2 days at 10:00');
   AssertDescription('0 10 L-1 * *', 'Every month on the last day minus 1 day at 10:00');
   AssertDescription('0 10 LW-2 * *', 'Every month on the last weekday minus 2 weekdays at 10:00');
@@ -421,6 +426,125 @@ begin
   AssertDescription('0 10 L-0 * *', 'Every month on the last day at 10:00');
   AssertDescription('0 10 LW-0 * *', 'Every month on the last weekday at 10:00');
   AssertDescription('0 10 L-2 2 *', 'Every year on Feb the last day minus 2 days at 10:00');
+end;
+
+procedure TTestCronParsing.Parse_WrappedRanges_Expansion;
+const
+  cSteps: array[0..11] of Integer = (1, 2, 3, 4, 5, 6, 7, 10, 15, 30, 59, 61);
+  cMonths: array[1..12] of string = ('JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+    'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC');
+var
+  lPlan: TCronSchedulePlan;
+  lPart: TCronPart;
+  lKind, lLow, lHigh, lWidth, lFrom, lTo, lStep, lSpan, lOffset, lValue, lName, lDialect: Integer;
+  lExpected: array[0..59] of Boolean;
+  lToken, lLeft, lRight: string;
+
+  procedure CheckError(const aText, aMessage: string);
+  var
+    lRaised: Boolean;
+  begin
+    lRaised := False;
+    try
+      lPlan.Parse(aText);
+    except
+      on E: Exception do
+      begin
+        lRaised := True;
+        Assert.AreEqual('Exception', E.ClassName, aText);
+        Assert.AreEqual(aMessage, E.Message, aText);
+      end;
+    end;
+    Assert.IsTrue(lRaised, aText);
+  end;
+
+begin
+  lPlan := TCronSchedulePlan.Create;
+  try
+    for lKind := 0 to 4 do
+    begin
+      case lKind of
+        0: begin lPart := lPlan.Second; lLow := 0; lHigh := 59; end;
+        1: begin lPart := lPlan.Minute; lLow := 0; lHigh := 59; end;
+        2: begin lPart := lPlan.Hour; lLow := 0; lHigh := 23; end;
+        3: begin lPart := lPlan.Month; lLow := 1; lHigh := 12; end;
+      else
+        begin lPart := lPlan.Day_of_the_Week; lLow := 0; lHigh := 6; end;
+      end;
+      lWidth := lHigh - lLow + 1;
+      for lFrom := lLow + 1 to lHigh do
+      begin
+        for lTo := lLow to lFrom - 1 do
+        begin
+          for lStep in cSteps do
+          begin
+            // Month names and both weekday numberings exercise replacement/normalization.
+            for lName := 0 to Ord(lKind = 3) do
+            begin
+              for lDialect := 0 to Ord(lKind = 4) do
+              begin
+                lLeft := IntToStr(lFrom + lDialect);
+                lRight := IntToStr(lTo + lDialect);
+                if lName = 1 then
+                begin
+                  lLeft := cMonths[lFrom];
+                  lRight := cMonths[lTo];
+                end;
+                lToken := lLeft + '-' + lRight + '/' + IntToStr(lStep);
+                if lDialect = 1 then
+                  lPlan.Dialect := cdQuartzSecondsFirst
+                else
+                  lPlan.Dialect := cdMaxCron;
+                // Data parses through the public setter using the configured numbering.
+                lPart.Data := lToken;
+                for lValue := lLow to lHigh do lExpected[lValue] := False;
+                if lKind = 4 then
+                begin
+                  // Preserve established weekday per-segment stepping.
+                  for lValue := lLow to lHigh do
+                    lExpected[lValue] := ((lValue >= lFrom) and ((lValue - lFrom) mod lStep = 0)) or
+                      ((lValue <= lTo) and ((lValue - lLow) mod lStep = 0));
+                end else begin
+                  lSpan := lHigh - lFrom + 1 + lTo - lLow + 1;
+                  lOffset := 0;
+                  while lOffset < lSpan do
+                  begin
+                    lExpected[lLow + ((lFrom - lLow + lOffset) mod lWidth)] := True;
+                    Inc(lOffset, lStep);
+                  end;
+                end;
+                for lValue := lLow to lHigh do
+                  Assert.AreEqual(lExpected[lValue], lPart.NextVal(lValue) = lValue, lToken + ' value ' + IntToStr(lValue));
+                if (lKind = 4) and (lDialect = 0) and (lTo = 0) then
+                begin
+                  lPart.Data := IntToStr(lFrom) + '-7/' + IntToStr(lStep);
+                  for lValue := lLow to lHigh do
+                    Assert.AreEqual(lExpected[lValue], lPart.NextVal(lValue) = lValue, 'Sunday alias ' + lToken);
+                end;
+              end;
+            end;
+          end;
+          lPlan.Dialect := cdMaxCron;
+          lPart.Data := IntToStr(lFrom) + '-' + IntToStr(lTo) + '/' + IntToStr(lWidth + 1);
+          for lValue := lLow to lHigh do
+            Assert.AreEqual((lValue = lFrom) or ((lKind = 4) and (lValue = lLow)),
+              lPart.NextVal(lValue) = lValue, 'width+1');
+        end;
+      end;
+    end;
+    lPlan.Parse('0 22-2/2147483647 * * *');
+    for lValue := 0 to 23 do Assert.AreEqual(lValue = 22, lPlan.Hour.NextVal(lValue) = lValue);
+    CheckError('0 0 25-5 * *', 'Invalid cron range');
+    CheckError('0 0 1 * * 2030-2026', 'Invalid cron range');
+    CheckError('0 H(22-2) * * *', 'Cron value out of range');
+    // The 7 alias and the 0-7 meaning remain unchanged.
+    lPlan.Parse('0 0 * * 0-7');
+    for lValue := 0 to 6 do Assert.AreEqual(lValue = 0, lPlan.Day_of_the_Week.NextVal(lValue) = lValue);
+    lPlan.Parse('0 0 * * 1-7/4');
+    for lValue := 0 to 6 do Assert.AreEqual(lValue in [0, 1, 5], lPlan.Day_of_the_Week.NextVal(lValue) = lValue);
+  finally
+    lPlan.Free;
+  end;
 end;
 
 procedure TTestCronParsing.Parse_MonthEndOffsetLists_ErrorPrecedence;

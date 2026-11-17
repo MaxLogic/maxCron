@@ -5,6 +5,7 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Added wrapped ranges with continuous steps in seconds, minutes, hours and months, including month names. Existing weekday range behavior is unchanged.
 - Added month-end offsets `L-n`, `LW-n` and `L-nW` (0..30), with descriptions and matching next, previous and range queries.
 - Added monotonic interval events with `AddInterval`, `@every` plans, fixed-rate and fixed-delay modes, read-only interval metadata, wake-on-change, and persistence through the existing schedule store. Existing overlap, retry, execution-limit, and global-cap policies apply.
 - Added interval accuracy and CPU benchmarking with `--mode=interval --interval-ms=N`.

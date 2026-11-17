@@ -1039,6 +1039,13 @@ After an asterisk (*) or a range of values, you can use character / to specify t
 
 In Month and Day of Week fields, you can use names of months or days of weeks abbreviated to first three letters ("Jan,Feb,...,Dec" or "Mon,Tue,...,Sun") instead of their numeric values.
 
+Wrapped ranges in seconds, minutes, hours and months continue through the field minimum.
+Steps count continuously from the range start: `22-2` means hours 22,23,0,1,2;
+`22-2/2` means 22,0,2; `22-2/3` means 22,1. Month names work too:
+`NOV-FEB` means November through February; `NOV-FEB/2` means November and January.
+Day-of-week wraps such as `FRI-MON` retain their existing per-segment step behavior.
+Day-of-month, year and `H(...)` ranges do not wrap.
+
 Additional syntax we support:
 
 - Quartz-style modifiers for Day-of-Month and Day-of-Week:

@@ -2469,6 +2469,17 @@ var
       Inc(v, aStep);
     end;
   end;
+
+  procedure AddWrappedRange(const aFrom, aTo, aStep: Integer);
+  var
+    lWidth, lSpan, i: Integer;
+  begin
+    lWidth := FValidTo - FValidFrom + 1;
+    lSpan := FValidTo - aFrom + 1 + aTo - FValidFrom + 1;
+    // The iteration bound keeps i * aStep below the span, even for MaxInt steps.
+    for i := 0 to (lSpan - 1) div aStep do
+      Add2Range(FValidFrom + ((aFrom - FValidFrom + i * aStep) mod lWidth));
+  end;
 begin
 
   s := Trim(Value);
@@ -2538,7 +2549,10 @@ begin
       AddRange(FValidFrom, RangeTo, Repeater);
       Exit;
     end;
-    raise Exception.Create('Invalid cron range');
+    if fPartKind in [ckDayOfTheMonth, ckYear] then
+      raise Exception.Create('Invalid cron range');
+    AddWrappedRange(RangeFrom, RangeTo, Repeater);
+    Exit;
   end;
 
   AddRange(RangeFrom, RangeTo, Repeater);

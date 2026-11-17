@@ -57,3 +57,8 @@ H(10-20)/0 * * * *
 0 0 1-5W * *
 0 0 15W-2 * *
 0 0 * * L-2
+
+# Wrapped ranges are not allowed in day of month or year, nor in hash ranges
+0 0 25-5 * *
+0 0 1 * * 2030-2026
+0 H(22-2) * * *
