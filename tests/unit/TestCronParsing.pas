@@ -67,6 +67,10 @@ type
 
     [Test]
     procedure Plan_Text_RespectsDialect;
+    [Test] procedure Parse_MonthEndOffsetLists_ErrorPrecedence;
+    [Test] procedure Parse_MonthEndOffsets_LaterFieldDiagnostics;
+    [Test] procedure Parse_MonthEndOffsets;
+    [Test] procedure Describe_SyntaxAdditions;
   end;
 
 implementation
@@ -344,6 +348,229 @@ begin
   lPlan.Second := '7';
   lPlan.ExecutionLimit := '3';
   Assert.AreEqual('10 11 12 1 2 2027 7 3', lPlan.Text);
+end;
+
+
+procedure TTestCronParsing.Parse_MonthEndOffsets;
+const
+  cForms: array[0..10] of string = ('L-0', 'L-2', 'L-30', 'LW-0', 'LW-2', 'lw-19',
+    'L-0W', 'L-3W', 'l-30w', 'L-05', 'LW-30');
+  cInvalid: array[0..15] of string = ('L-', 'L-W', 'L-x', 'L--1', 'L-+1', 'L-$1',
+    'L-2/2', 'L-2,15', 'LW-2W', 'L-2L', '1-5W', '15W-2', '15,L-2', 'L-2,L-3', 'L-1-2', 'LW-');
+  cOutOfRange: array[0..3] of string = ('L-31', 'LW-31', 'L-31W', 'L-99999999999');
+var
+  lDialect: TmaxCronDialect;
+  lToken, lText: string;
+  lPlan: TCronSchedulePlan;
+  lDate: TDateTime;
+
+  procedure CheckError(const aToken, aMessage: string);
+  var
+    lRaised: Boolean;
+  begin
+    lRaised := False;
+    try
+      AssertParses('0 0 ' + aToken + ' * *');
+    except
+      on E: Exception do
+      begin
+        lRaised := True;
+        Assert.AreEqual('Exception', E.ClassName, aToken);
+        Assert.AreEqual(aMessage, E.Message, aToken);
+      end;
+    end;
+    Assert.IsTrue(lRaised, aToken);
+  end;
+
+begin
+  for lDialect := Low(TmaxCronDialect) to High(TmaxCronDialect) do
+  begin
+    for lToken in cForms do
+    begin
+      if lDialect = cdQuartzSecondsFirst then
+        lText := '0 0 0 ' + lToken + ' * ?'
+      else
+        lText := '0 0 ' + lToken + ' * *';
+      AssertParsesDialect(lText, lDialect);
+    end;
+  end;
+  for lToken in cInvalid do CheckError(lToken, 'Invalid cron token');
+  for lToken in cOutOfRange do CheckError(lToken, 'Cron value out of range');
+  lPlan := TCronSchedulePlan.Create;
+  try
+    // Large offsets can parse but never match the selected month or any month.
+    for lToken in ['L-30', 'L-30W', 'LW-30'] do
+    begin
+      lPlan.Parse('0 0 ' + lToken + ' 2 *');
+      Assert.IsFalse(lPlan.FindNextScheduleDate(EncodeDate(2026, 1, 1), lDate));
+    end;
+  finally
+    lPlan.Free;
+  end;
+end;
+
+procedure TTestCronParsing.Describe_SyntaxAdditions;
+begin
+  AssertDescription('0 10 L-2 * *', 'Every month on the last day minus 2 days at 10:00');
+  AssertDescription('0 10 L-1 * *', 'Every month on the last day minus 1 day at 10:00');
+  AssertDescription('0 10 LW-2 * *', 'Every month on the last weekday minus 2 weekdays at 10:00');
+  AssertDescription('0 10 LW-1 * *', 'Every month on the last weekday minus 1 weekday at 10:00');
+  AssertDescription('0 10 L-3W * *', 'Every month on the nearest weekday to the last day minus 3 days at 10:00');
+  AssertDescription('0 10 L-1W * *', 'Every month on the nearest weekday to the last day minus 1 day at 10:00');
+  AssertDescription('0 10 L-0W * *', 'Every month on the nearest weekday to the last day at 10:00');
+  AssertDescription('0 10 L-0 * *', 'Every month on the last day at 10:00');
+  AssertDescription('0 10 LW-0 * *', 'Every month on the last weekday at 10:00');
+  AssertDescription('0 10 L-2 2 *', 'Every year on Feb the last day minus 2 days at 10:00');
+end;
+
+procedure TTestCronParsing.Parse_MonthEndOffsetLists_ErrorPrecedence;
+const
+  cOffsets: array[0..5] of string = ('0', '2', '30', '31', '2147483648', '99999999999');
+var
+  lDialect: TmaxCronDialect;
+  lOffset, lToken, lFailures: string;
+  lForm, lChecked: Integer;
+
+  procedure Check(const aToken, aExpected: string);
+  var
+    lPlan: TCronSchedulePlan;
+    lText, lClass, lMessage: string;
+  begin
+    Inc(lChecked);
+    if lDialect = cdQuartzSecondsFirst then lText := '0 0 0 ' + aToken + ' * ?'
+    else lText := '0 0 ' + aToken + ' * *';
+    lClass := '';
+    lMessage := '';
+    lPlan := TCronSchedulePlan.Create;
+    try
+      lPlan.Dialect := lDialect;
+      try
+        lPlan.Parse(lText);
+      except
+        on E: Exception do
+        begin
+          lClass := E.ClassName;
+          lMessage := E.Message;
+        end;
+      end;
+    finally
+      lPlan.Free;
+    end;
+    if (lClass <> 'Exception') or (lMessage <> aExpected) then
+      lFailures := lFailures + IntToStr(Ord(lDialect)) + '|' + lText + ': expected Exception|' +
+        aExpected + ', got ' + lClass + '|' + lMessage + sLineBreak;
+  end;
+
+begin
+  lChecked := 0;
+  lFailures := '';
+  for lDialect := Low(TmaxCronDialect) to High(TmaxCronDialect) do
+  begin
+    for lForm := 0 to 2 do
+    begin
+      for lOffset in cOffsets do
+      begin
+        case lForm of
+          0: lToken := 'L-' + lOffset;
+          1: lToken := 'LW-' + lOffset;
+        else lToken := 'L-' + lOffset + 'W';
+        end;
+        Check(lToken + ',15', 'Invalid cron token');
+        Check('15,' + lToken, 'Invalid cron token');
+      end;
+      case lForm of
+        0: lToken := 'L-31';
+        1: lToken := 'LW-31';
+      else lToken := 'L-31W';
+      end;
+      // Existing nW validation still wins when it appears before the new token.
+      Check('0W,' + lToken, 'Cron value out of range');
+      Check(lToken + ',0W', 'Invalid cron token');
+    end;
+    Check('0W,15', 'Cron value out of range');
+    Check('15,0W', 'Cron value out of range');
+    Check('32W,15', 'Cron value out of range');
+    Check('15,32W', 'Cron value out of range');
+  end;
+  Assert.AreEqual(138, lChecked, 'All forms, offsets, orders and dialects must be exercised');
+  Assert.AreEqual('', lFailures, lFailures);
+end;
+
+procedure TTestCronParsing.Parse_MonthEndOffsets_LaterFieldDiagnostics;
+const
+  cForms: array[0..5] of string = ('L-2', 'LW-2', 'L-2W', 'l-0', 'lw-30', 'l-030w');
+var
+  lDialect: TmaxCronDialect;
+  lToken, lLater, lText, lExpectedClass, lExpectedMessage: string;
+  lChecked: Integer;
+
+  procedure Diagnostic(const aText: string; out aClass, aMessage: string);
+  var
+    lPlan: TCronSchedulePlan;
+  begin
+    aClass := '';
+    aMessage := '';
+    lPlan := TCronSchedulePlan.Create;
+    try
+      lPlan.Dialect := lDialect;
+      try
+        lPlan.Parse(aText);
+      except
+        on E: Exception do
+        begin
+          aClass := E.ClassName;
+          aMessage := E.Message;
+        end;
+      end;
+    finally
+      lPlan.Free;
+    end;
+  end;
+
+  procedure Check(const aText, aClass, aMessage: string);
+  var
+    lClass, lMessage: string;
+  begin
+    Inc(lChecked);
+    Diagnostic(aText, lClass, lMessage);
+    Assert.AreEqual(aClass, lClass, aText);
+    Assert.AreEqual(aMessage, lMessage, aText);
+  end;
+
+begin
+  lChecked := 0;
+  for lDialect := Low(TmaxCronDialect) to High(TmaxCronDialect) do
+  begin
+    for lToken in cForms do
+    begin
+      for lLater in ['13,15', 'W,15', 'BAD,15', '13-15', 'JAN-GARBAGE', 'nov,13', '2/0'] do
+      begin
+        if lDialect = cdQuartzSecondsFirst then lText := '0 0 0 1 ' + lLater + ' ?'
+        else lText := '0 0 1 ' + lLater + ' *';
+        Diagnostic(lText, lExpectedClass, lExpectedMessage);
+        Assert.IsTrue(lExpectedClass <> '', 'Legacy-valid DOM must expose invalid month');
+        if lDialect = cdQuartzSecondsFirst then lText := '0 0 0 ' + lToken + ' ' + lLater + ' ?'
+        else lText := '0 0 ' + lToken + ' ' + lLater + ' *';
+        Check(lText, lExpectedClass, lExpectedMessage);
+      end;
+      if lDialect = cdQuartzSecondsFirst then
+      begin
+        Check('0 0 0 ' + lToken + ' 13,15 ?', 'Exception', 'Cron value out of range');
+        Check('0 0 0 ' + lToken + ' * 8', 'Exception', 'Cron value out of range');
+        Check('0 0 0 ' + lToken + ' * ? 2030-2026', 'Exception', 'Invalid cron range');
+      end else begin
+        Check('0 0 ' + lToken + ' 13,15 *', 'Exception', 'Cron value out of range');
+        Check('0 0 ' + lToken + ' * 8', 'Exception', 'Cron value out of range');
+        if lDialect = cdMaxCron then
+        begin
+          Check('0 0 ' + lToken + ' * * 2030-2026', 'Exception', 'Invalid cron range');
+          Check('0 0 ' + lToken + ' * * * 60', 'Exception', 'Cron value out of range');
+          Check('0 0 ' + lToken + ' * * * 0 -1', 'Exception', 'Cron value out of range');
+        end;
+      end;
+    end;
+  end;
+  Assert.AreEqual(186, lChecked, 'All dialects/forms/month errors and later fields');
 end;
 
 end.

@@ -3,7 +3,7 @@ unit TestCronUtilsCorpus;
 interface
 
 uses
-  System.DateUtils, System.SysUtils, System.Classes,
+  System.Classes, System.DateUtils, System.SysUtils,
   DUnitX.TestFramework,
   maxCron;
 
@@ -12,7 +12,7 @@ type
   TTestCronUtilsCorpus = class
   private
     function FindRepoRootDir: string;
-    function LoadCorpusLines: TStringList;
+    function LoadCorpusLines(const aName: string = 'cron-utils-unix-5field.txt'): TStringList;
     function IsNoNextScheduleExpr(const aExpr: string): Boolean;
   public
     [Test]
@@ -20,6 +20,7 @@ type
 
     [Test]
     procedure CronUtils_Unix5Field_NextSchedule_Sanity;
+    [Test] procedure MaxCronSyntaxCorpus_ParsesWithNextAndPrevious;
   end;
 
 implementation
@@ -48,11 +49,11 @@ begin
   raise Exception.Create('Unable to locate repo root (expected maxCron.pas + README.md).');
 end;
 
-function TTestCronUtilsCorpus.LoadCorpusLines: TStringList;
+function TTestCronUtilsCorpus.LoadCorpusLines(const aName: string): TStringList;
 var
   lFileName: string;
 begin
-  lFileName := FindRepoRootDir + PathDelim + 'tests' + PathDelim + 'data' + PathDelim + 'cron-utils-unix-5field.txt';
+  lFileName := FindRepoRootDir + PathDelim + 'tests' + PathDelim + 'data' + PathDelim + aName;
   Result := TStringList.Create;
   Result.StrictDelimiter := True;
   Result.LineBreak := sLineBreak;
@@ -135,6 +136,37 @@ begin
     end;
   finally
     Lines.Free;
+  end;
+end;
+
+
+procedure TTestCronUtilsCorpus.MaxCronSyntaxCorpus_ParsesWithNextAndPrevious;
+var
+  lLines: TStringList;
+  lPlan: TCronSchedulePlan;
+  lText, lLine: string;
+  lBase, lDate: TDateTime;
+begin
+  lLines := LoadCorpusLines('cron-valid.txt');
+  try
+    lPlan := TCronSchedulePlan.Create;
+    try
+      lBase := EncodeDate(2025, 1, 1);
+      for lLine in lLines do
+      begin
+        lText := Trim(lLine);
+        if (lText = '') or lText.StartsWith('#') then Continue;
+        lPlan.Parse(lText);
+        Assert.IsTrue(lPlan.FindNextScheduleDate(lBase, lDate), lText);
+        Assert.IsTrue(CronDateTimeToMs(lDate) > CronDateTimeToMs(lBase), lText);
+        Assert.IsTrue(lPlan.FindPreviousScheduleDate(lBase, lDate), lText);
+        Assert.IsTrue(CronDateTimeToMs(lDate) < CronDateTimeToMs(lBase), lText);
+      end;
+    finally
+      lPlan.Free;
+    end;
+  finally
+    lLines.Free;
   end;
 end;
 

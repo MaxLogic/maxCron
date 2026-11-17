@@ -1,0 +1,12 @@
+# maxCron syntax corpus, cdMaxCron, each line parses and has a next and a previous occurrence from 2025-01-01
+0 0 L-2 * *
+0 0 L-0 * *
+0 0 L-30 * *
+0 0 LW-1 * *
+0 0 LW-0 * *
+0 0 lw-19 * *
+0 0 L-3W * *
+0 0 L-0W * *
+0 0 l-30w * *
+0 0 L-05 * *
+0 0 L-2 * MON

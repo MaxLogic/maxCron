@@ -773,6 +773,8 @@ running the gate; otherwise the scripts search `PATH`, then
 explicit override fails immediately. No persistent environment setting is needed.
 For an override exported inside WSL, also export `WSLENV=DAK_EXE/w` so it reaches Windows. Build output paths stay as configured in the projects. Release is the default;
 `MAXCRON_DEBUG_SAFETY=1` selects Debug.
+The maxCron syntax corpus is stored in `tests/data/cron-valid.txt`.
+
 Our upstream-derived cron corpus used by tests is stored in `tests/data/cron-utils-unix-5field.txt`.
 Negative corpus (expected to fail parse) is stored in `tests/data/cron-invalid.txt`.
 
@@ -1041,6 +1043,13 @@ Additional syntax we support:
 
 - Quartz-style modifiers for Day-of-Month and Day-of-Week:
   - DOM: `L` (last day), `W` (nearest weekday), `LW` (last weekday).
+    Offsets `L-n` (n days before the last day), `LW-n` (n weekdays before the last weekday),
+    and `L-nW` (nearest weekday to the last day minus n days) accept n from 0 to 30.
+    Plans containing a newly recognised day-of-month form and an invalid later field now report the later field's error.
+    Nearest-weekday adjustments stay within the month. If the target falls before the month,
+    that month has no match. `L-0` equals `L`; `LW-0` and `L-0W` match `LW`.
+    For example, `L-2` is February 26 in 2027, `LW-2` is May 27 in 2026,
+    and `L-30W` is August 3 in 2026. Large `LW-n` offsets can have no match in any month.
   - DOW: `?` (no specific value), `nL` (last weekday in month), `n#k` (nth weekday, k=1..5).
 - Note: we accept `?` for Quartz compatibility and treat it as "any" when matching schedules.
 - Macros: `@yearly`/`@annually`, `@monthly`, `@weekly`, `@daily`/`@midnight`, `@hourly`, `@reboot` (runs once on the next scheduler tick; `@reboot` is supported only in `cdMaxCron`; `@weekly` uses Sunday in each dialect: `0` in `cdStandard`/`cdMaxCron`, `1` in `cdQuartzSecondsFirst`).

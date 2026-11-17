@@ -56,13 +56,14 @@ type
     );
 
   /// <summary>
-  /// Day-of-Month special modifiers (Quartz-style).
+  /// Day-of-Month special modifiers: L, L-n, LW, LW-n, nW and L-nW.
   /// </summary>
   TCronDomModifier = (
     cdmNone,
     cdmLastDay,
     cdmNearestWeekday,
-    cdmLastWeekday
+    cdmLastWeekday,
+    cdmLastDayNearestWeekday
     );
 
   /// <summary>
@@ -138,6 +139,7 @@ type
     function Hash32(const aValue: string): Cardinal;
     function TryParseHashedToken(const aValue: string): Boolean;
     function GetLastDayOfMonth(const aYear, aMonth: Word): Word;
+    function GetLastWeekdayOffsetOfMonth(const aYear, aMonth, aOffset: Word; out aDay: Word): Boolean;
     function GetLastWeekdayOfMonth(const aYear, aMonth: Word; out aDay: Word): Boolean;
     function GetNearestWeekdayTo(const aYear, aMonth, aDay: Word; out aNearestDay: Word): Boolean;
     function GetNthWeekdayOfMonth(const aYear, aMonth, aDow, aNth: Word; out aDay: Word): Boolean;
@@ -283,6 +285,12 @@ implementation
 
 uses
   System.Classes, System.DateUtils, System.Math, System.StrUtils;
+
+const
+  cCronMaxLastDayOffset = 30;
+  cDescribeLastDayMinusDays = 'the last day minus %d days';
+  cDescribeLastWeekdayMinusWeekdays = 'the last weekday minus %d weekdays';
+  cDescribeLastDayNearestMinusDays = 'the nearest weekday to the last day minus %d days';
 
 function CronFloorDiv(const aValue, aDivisor: Int64): Int64;
 begin
@@ -1973,29 +1981,58 @@ end;
 
 function TCronPart.TryParseDomSpecial(const aToken: string): Boolean;
 var
-  s: string;
-  lNum: Integer;
+  s, lOffset: string;
+  lNum, i: Integer;
+  lModifier: TCronDomModifier;
 begin
   s := UpperCase(Trim(aToken));
-
   if (Pos('L', s) = 0) and (Pos('W', s) = 0) then
     Exit(False);
-
-  if (Pos('#', s) > 0) or (Pos('/', s) > 0) or (Pos('-', s) > 0) then
+  if (Pos('#', s) > 0) or (Pos('/', s) > 0) then
     raise Exception.Create('Invalid cron token');
-
   if s = 'L' then
   begin
     fDomModifier := TCronDomModifier.cdmLastDay;
     Exit(True);
   end;
-
   if s = 'LW' then
   begin
     fDomModifier := TCronDomModifier.cdmLastWeekday;
     Exit(True);
   end;
-
+  if (Copy(s, 1, 3) = 'LW-') or (Copy(s, 1, 2) = 'L-') then
+  begin
+    if Pos(',', FData) > 0 then
+      raise Exception.Create('Invalid cron token');
+    if Copy(s, 1, 3) = 'LW-' then
+    begin
+      lOffset := Copy(s, 4, MaxInt);
+      lModifier := TCronDomModifier.cdmLastWeekday;
+    end else begin
+      lOffset := Copy(s, 3, MaxInt);
+      lModifier := TCronDomModifier.cdmLastDay;
+      if (lOffset <> '') and (lOffset[Length(lOffset)] = 'W') then
+      begin
+        Delete(lOffset, Length(lOffset), 1);
+        lModifier := TCronDomModifier.cdmLastDayNearestWeekday;
+      end;
+    end;
+    if lOffset = '' then
+      raise Exception.Create('Invalid cron token');
+    for i := 1 to Length(lOffset) do
+    begin
+      if not CharInSet(lOffset[i], ['0'..'9']) then
+        raise Exception.Create('Invalid cron token');
+    end;
+    lNum := StrToIntDef(lOffset, MaxInt);
+    if lNum > cCronMaxLastDayOffset then
+      raise Exception.Create('Cron value out of range');
+    fDomModifier := lModifier;
+    fDomValue := lNum;
+    Exit(True);
+  end;
+  if Pos('-', s) > 0 then
+    raise Exception.Create('Invalid cron token');
   if s[Length(s)] = 'W' then
   begin
     lNum := StrToIntDef(Copy(s, 1, Length(s) - 1), -1);
@@ -2005,7 +2042,6 @@ begin
     fDomValue := lNum;
     Exit(True);
   end;
-
   raise Exception.Create('Invalid cron token');
 end;
 
@@ -2088,6 +2124,22 @@ begin
   Result := aDay >= 1;
 end;
 
+function TCronPart.GetLastWeekdayOffsetOfMonth(const aYear, aMonth, aOffset: Word;
+  out aDay: Word): Boolean;
+var
+  i: Integer;
+begin
+  Result := GetLastWeekdayOfMonth(aYear, aMonth, aDay);
+  if not Result then Exit;
+  for i := 1 to aOffset do
+  begin
+    repeat
+      if aDay <= 1 then Exit(False);
+      Dec(aDay);
+    until not ((DayOfTheWeek(EncodeDate(aYear, aMonth, aDay)) mod 7) in [0, 6]);
+  end;
+end;
+
 function TCronPart.GetNearestWeekdayTo(const aYear, aMonth, aDay: Word; out aNearestDay: Word): Boolean;
 var
   lLastDay: Word;
@@ -2147,16 +2199,24 @@ begin
 end;
 
 function TCronPart.TryGetDomSpecialDay(const aYear, aMonth: Word; out aDay: Word): Boolean;
+var
+  lLast: Word;
 begin
   Result := False;
   case fDomModifier of
-    TCronDomModifier.cdmLastDay:
+    TCronDomModifier.cdmLastDay, TCronDomModifier.cdmLastDayNearestWeekday:
       begin
-        aDay := GetLastDayOfMonth(aYear, aMonth);
-        Result := True;
+        lLast := GetLastDayOfMonth(aYear, aMonth);
+        if fDomValue >= lLast then Exit;
+        if fDomModifier = TCronDomModifier.cdmLastDay then
+        begin
+          aDay := lLast - fDomValue;
+          Result := True;
+        end else
+          Result := GetNearestWeekdayTo(aYear, aMonth, lLast - fDomValue, aDay);
       end;
     TCronDomModifier.cdmLastWeekday:
-      Result := GetLastWeekdayOfMonth(aYear, aMonth, aDay);
+      Result := GetLastWeekdayOffsetOfMonth(aYear, aMonth, fDomValue, aDay);
     TCronDomModifier.cdmNearestWeekday:
       Result := GetNearestWeekdayTo(aYear, aMonth, fDomValue, aDay);
   end;
@@ -2301,9 +2361,17 @@ function TCronPart.DescribeDomSpecial: string;
 begin
   case fDomModifier of
     TCronDomModifier.cdmLastDay:
-      Result := 'the last day';
+      if fDomValue = 0 then Result := 'the last day'
+      else if fDomValue = 1 then Result := 'the last day minus 1 day'
+      else Result := Format(cDescribeLastDayMinusDays, [fDomValue]);
     TCronDomModifier.cdmLastWeekday:
-      Result := 'the last weekday';
+      if fDomValue = 0 then Result := 'the last weekday'
+      else if fDomValue = 1 then Result := 'the last weekday minus 1 weekday'
+      else Result := Format(cDescribeLastWeekdayMinusWeekdays, [fDomValue]);
+    TCronDomModifier.cdmLastDayNearestWeekday:
+      if fDomValue = 0 then Result := 'the nearest weekday to the last day'
+      else if fDomValue = 1 then Result := 'the nearest weekday to the last day minus 1 day'
+      else Result := Format(cDescribeLastDayNearestMinusDays, [fDomValue]);
     TCronDomModifier.cdmNearestWeekday:
       Result := Format('the nearest weekday to %d', [fDomValue]);
   else

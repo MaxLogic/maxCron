@@ -35,6 +35,7 @@ type
       const aSeed: string; const aBase: TDateTime; var aFailures: string; var aChecked: Integer);
   public
     [Test] procedure NextDate_MonotonicAndFirstOccurrence;
+    [Test] procedure SyntaxAdditions_NextPreviousBetween_MatchBruteForceOracle;
     [Test] procedure PreviousOccurrences_MatchBruteForceOracle;
     [Test] procedure ModifierPlans_NextAndPrevious_MatchBruteForceOracle;
     [Test] procedure Between_MatchBruteForceOracle;
@@ -405,6 +406,7 @@ function OracleDayMatches(const aPlan: TCronSchedulePlan; const aSpec: TQueryOra
 var
   y, mo, d, lLast, lTarget, lDow: Word;
   lDomMatch, lDowMatch: Boolean;
+  lOffset: Integer;
 begin
   DecodeDate(aDate, y, mo, d);
   if (aPlan.Year.NextVal(y) <> y) or (aPlan.Month.NextVal(mo) <> mo) then
@@ -422,10 +424,30 @@ begin
         end;
         lDomMatch := d = lTarget;
       end;
-    3:
+    4: lDomMatch := (aSpec.DomValue < lLast) and (d = lLast - aSpec.DomValue);
+    5:
       begin
-        lTarget := aSpec.DomValue;
-        if lTarget > lLast then
+        lTarget := lLast;
+        lOffset := aSpec.DomValue;
+        while lTarget > 0 do
+        begin
+          if not ((DayOfTheWeek(EncodeDate(y, mo, lTarget)) mod 7) in [0, 6]) then
+          begin
+            if lOffset = 0 then Break;
+            Dec(lOffset);
+          end;
+          Dec(lTarget);
+        end;
+        lDomMatch := d = lTarget;
+      end;
+    3, 6:
+      begin
+        if aSpec.DomKind = 6 then
+        begin
+          if aSpec.DomValue >= lLast then lTarget := 0 else lTarget := lLast - aSpec.DomValue;
+        end else
+          lTarget := aSpec.DomValue;
+        if (lTarget < 1) or (lTarget > lLast) then
           lDomMatch := False
         else
         begin
@@ -584,6 +606,7 @@ var
 
 begin
   lSeed := ReadEnvInt('MAXCRON_FUZZ_SEED', 137031, 1, High(Integer) - 4);
+  if (aKind = 5) and (lSeed > High(Integer) - 5) then Dec(lSeed);
   RandSeed := lSeed + aKind;
   lRelations := 0;
   lCases := ReadEnvInt('MAXCRON_FUZZ_CASES', 36, 1, 250);
@@ -601,7 +624,7 @@ begin
           lPlan.Dialect := lDialect;
           lPlan.DayMatchMode := lMode;
           if Random(2) = 1 then lPlan.HashSeed := 'job-a';
-          if (aKind = 1) or ((aKind <> 2) and (lCaseIndex mod 2 = 0)) then
+          if (aKind = 1) or ((not (aKind in [2, 5])) and (lCaseIndex mod 2 = 0)) then
             lText := BuildPlanText(lDialect, lMode)
           else
           begin
@@ -623,6 +646,18 @@ begin
                   lDom := IntToStr(lSpec.DomValue) + 'W';
                 end;
               4: lDom := '1,15';
+            end;
+            if (aKind = 5) and (lDomPick in [1, 2, 3]) then
+            begin
+              lSpec.DomKind := lDomPick + 3;
+              if lDomPick = 2 then lSpec.DomValue := Random(23)
+              else if lCaseIndex mod 3 = 0 then lSpec.DomValue := 27 + Random(4)
+              else lSpec.DomValue := Random(31);
+              case lDomPick of
+                1: lDom := 'L-' + IntToStr(lSpec.DomValue);
+                2: lDom := 'LW-' + IntToStr(lSpec.DomValue);
+                3: lDom := 'L-' + IntToStr(lSpec.DomValue) + 'W';
+              end;
             end;
             lSpec.DowValue := Random(7);
             lDowNumber := lSpec.DowValue;
@@ -647,6 +682,8 @@ begin
             // February fifth weekdays can be decades apart, beyond the default oracle scan.
             if (lMonth = '2') and (lSpec.DowKind = 2) and (lSpec.DowNth = 5) then
               lMonth := '2,4,6-12';
+            if (aKind = 5) and (((lSpec.DomKind in [4, 6]) and (lSpec.DomValue >= 28)) or
+              ((lSpec.DomKind = 5) and (lSpec.DomValue >= 19))) then lMonth := '*';
             lYear := PickToken(['*', '2024-2027', '2025,2028', '*/4']);
             case lDialect of
               cdStandard: lText := lMinute + ' * ' + lDom + ' ' + lMonth + ' ' + lDow;
@@ -665,7 +702,7 @@ begin
             lBase := EncodeDateTime(2026, 1 + Random(12), 1 + Random(20), Random(24), Random(60),
               Random(60), 500 * Random(2));
           lHint := BuildCaseHint(lSeed + aKind, lCaseIndex, lDialect, lMode, lText, lBase);
-          if aKind in [1, 2] then
+          if aKind in [1, 2, 5] then
           begin
             lExpected := QueryOracleDates(lPlan, lSpec, lBase, EncodeDate(3001, 1, 1), lCount, lScanDays, True, lHint);
             n := lPlan.GetPreviousOccurrences(lCount, lBase, lActual);
@@ -674,11 +711,23 @@ begin
             lFound := lPlan.FindPreviousScheduleDate(lBase, lPrevious);
             Assert.AreEqual(Length(lExpected) > 0, lFound, lHint);
             if lFound then Assert.AreEqual(OracleSerial(lExpected[0]), OracleSerial(lPrevious), lHint);
-            if aKind = 2 then
+            if aKind in [2, 5] then
             begin
               lExpected := QueryOracleDates(lPlan, lSpec, lBase, EncodeDate(3001, 1, 1), lCount, lScanDays, False, lHint);
               lPlan.GetNextOccurrences(lCount, lBase, lActual);
               EqualDates(lExpected, lActual);
+              if aKind = 5 then
+              begin
+                lEnd := IncDay(lBase, 1);
+                lOracleBase := RecodeMilliSecond(lBase, 0);
+                if OracleTimeStamp(lBase).Time mod 1000 = 0 then lOracleBase := IncSecond(lOracleBase, -1);
+                lExpected := QueryOracleDates(lPlan, lSpec, lOracleBase,
+                  IncSecond(RecodeMilliSecond(lEnd, 0), Ord(OracleTimeStamp(lEnd).Time mod 1000 > 0)),
+                  500, lScanDays, False, lHint);
+                lPlan.GetOccurrencesBetween(lBase, lEnd, lActual, 500);
+                EqualDates(lExpected, lActual);
+                Assert.AreEqual(Integer(Length(lExpected)), lPlan.CountBetween(lBase, lEnd, 500), lHint);
+              end;
             end;
           end else if aKind = 3 then
           begin
@@ -1156,6 +1205,11 @@ begin
       end;
   Assert.AreEqual(12656, lChecked, '344 original plus 12312 adversarial midnight cases');
   Assert.AreEqual('', lFailures, 'Next must advance and equal the independent first occurrence: ' + lFailures);
+end;
+
+procedure TTestCronFuzzOracle.SyntaxAdditions_NextPreviousBetween_MatchBruteForceOracle;
+begin
+  RunQueryOracle(5);
 end;
 
 end.

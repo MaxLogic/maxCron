@@ -51,6 +51,7 @@ const
   cdmLastDay = maxCron.Plan.cdmLastDay;
   cdmNearestWeekday = maxCron.Plan.cdmNearestWeekday;
   cdmLastWeekday = maxCron.Plan.cdmLastWeekday;
+  cdmLastDayNearestWeekday = maxCron.Plan.cdmLastDayNearestWeekday;
   cdwNone = maxCron.Plan.cdwNone;
   cdwLastWeekday = maxCron.Plan.cdwLastWeekday;
   cdwNthWeekday = maxCron.Plan.cdwNthWeekday;

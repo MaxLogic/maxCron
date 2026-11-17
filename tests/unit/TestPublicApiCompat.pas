@@ -132,7 +132,7 @@ begin
     Assert.IsTrue(Succ(dmAnd) = dmOr);
     Assert.AreEqual(0, Ord(Low(TmaxCronDialect)));
     Assert.IsTrue(ckSecond = High(TPartKind), 'TPartKind re-export guard');
-    Assert.IsTrue(cdmLastWeekday = High(TCronDomModifier), 'TCronDomModifier re-export guard');
+    Assert.IsTrue(cdmLastDayNearestWeekday = High(TCronDomModifier), 'TCronDomModifier re-export guard');
     Assert.IsTrue(cdwNthWeekday = High(TCronDowModifier), 'TCronDowModifier re-export guard');
     Assert.IsTrue(dmOr = High(TmaxCronDayMatchMode), 'TmaxCronDayMatchMode re-export guard');
     Assert.IsTrue(cdQuartzSecondsFirst = High(TmaxCronDialect), 'TmaxCronDialect re-export guard');
@@ -150,7 +150,7 @@ const
   cPartKinds: array[TPartKind] of TPartKind = (ckMinute, ckHour, ckDayOfTheMonth, ckMonth,
     ckDayOfTheWeek, ckYear, ckSecond);
   cDomModifiers: array[TCronDomModifier] of TCronDomModifier = (cdmNone, cdmLastDay,
-    cdmNearestWeekday, cdmLastWeekday);
+    cdmNearestWeekday, cdmLastWeekday, cdmLastDayNearestWeekday);
   cDowModifiers: array[TCronDowModifier] of TCronDowModifier = (cdwNone, cdwLastWeekday, cdwNthWeekday);
 var
   lIntervalMode: TmaxCronIntervalMode;

@@ -5,12 +5,15 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Added month-end offsets `L-n`, `LW-n` and `L-nW` (0..30), with descriptions and matching next, previous and range queries.
 - Added monotonic interval events with `AddInterval`, `@every` plans, fixed-rate and fixed-delay modes, read-only interval metadata, wake-on-change, and persistence through the existing schedule store. Existing overlap, retry, execution-limit, and global-cap policies apply.
 - Added interval accuracy and CPU benchmarking with `--mode=interval --interval-ms=N`.
 - Added previous-occurrence and range queries to `TCronSchedulePlan`: `FindPreviousScheduleDate`, `GetPreviousOccurrences`, `GetOccurrencesBetween`, `CountBetween` and `HasOccurrenceBetween` over `[start, end)` with a result limit (`cCronQueryDefaultLimit`, 10,000). Queries use the plan's wall-clock time and ignore the execution limit. Fuzz-oracle coverage now checks previous and range results, and DOM/DOW modifier plans in both directions, against brute force.
 - Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
 
 ### Changed
+- Plans containing a newly recognised day-of-month form and an invalid later field now report the later field's error.
+- Recognized `L-n`, `LW-n` and `L-nW` forms with out-of-range or overflowing offsets now report `Cron value out of range` instead of `Invalid cron token`.
 - Align cron passes to second boundaries with a deadline timing thread and precise Windows wall clock; add timer-resolution selection and coalesced VCL delivery.
 - Split calculation code into the RTL-only `maxCron.Plan.pas` and isolated timer, async, debug, environment and timezone calls behind internal seams, preserving scheduler behavior and the `uses maxCron` API. Add `maxCron.Plan.pas`, `maxCron.Internal.Platform.pas` and `maxCron.Internal.TimeZone.pas` to consumer projects (or add their folder to the search path), keeping `maxCron.inc` beside them. Unit-qualified RTTI names of moved types now use `maxCron.Plan`; short names are unchanged.
 - Updated the demo startup schedules to use explicit current `cdMaxCron` semantics for second-level showcase events, so the sample no longer implies that 6-field default-dialect plans are seconds-based. (T-103)

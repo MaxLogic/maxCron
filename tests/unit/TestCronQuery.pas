@@ -17,6 +17,7 @@ type
     [Test] procedure RangeExamples;
     [Test] procedure LimitsAndEmptyWindows;
     [Test] procedure HashAndExecutionLimit;
+    [Test] procedure SyntaxAdditionsExamples;
   end;
 
 implementation
@@ -247,6 +248,53 @@ begin
       if i > 0 then
         Assert.IsTrue(Serial(lDates[i]) > Serial(lDates[i - 1]));
     end;
+  finally
+    lPlan.Free;
+  end;
+end;
+
+
+procedure TTestCronQuery.SyntaxAdditionsExamples;
+var
+  lPlan: TCronSchedulePlan;
+  lDate: TDateTime;
+  lDates: TDates;
+
+  procedure Check(const aText, aBase, aNext, aPrevious: string);
+  begin
+    lPlan.Parse(aText);
+    Assert.IsTrue(lPlan.FindNextScheduleDate(Stamp(aBase), lDate), aText);
+    Assert.AreEqual(Serial(Stamp(aNext)), Serial(lDate), aText + ' next');
+    if aPrevious <> '' then
+    begin
+      Assert.IsTrue(lPlan.FindPreviousScheduleDate(Stamp(aBase), lDate), aText);
+      Assert.AreEqual(Serial(Stamp(aPrevious)), Serial(lDate), aText + ' previous');
+    end;
+    Assert.AreEqual(1, lPlan.GetOccurrencesBetween(Stamp(aNext), IncSecond(Stamp(aNext), 1), lDates), aText);
+    Assert.AreEqual(Serial(Stamp(aNext)), Serial(lDates[0]), aText + ' between');
+    Assert.AreEqual(1, lPlan.CountBetween(Stamp(aNext), IncSecond(Stamp(aNext), 1)), aText);
+  end;
+
+begin
+  lPlan := TCronSchedulePlan.Create;
+  try
+    Check('0 0 L-2 * *', '2026-02-01', '2026-02-26', '2026-01-29');
+    Check('0 0 L-2 * *', '2027-02-01', '2027-02-26', '2027-01-29');
+    Check('0 0 L-30 * *', '2026-02-01', '2026-03-01', '2026-01-01');
+    Check('0 0 LW-1 * *', '2026-05-01', '2026-05-28', '2026-04-29');
+    Check('0 0 LW-2 * *', '2026-05-01', '2026-05-27', '2026-04-28');
+    Check('0 0 LW-19 2 *', '2026-01-01', '2026-02-02', '2025-02-03');
+    Check('0 0 LW-20 2 *', '2026-01-01', '2028-02-01', '');
+    Check('0 0 L-2W * *', '2026-11-01', '2026-11-27', '2026-10-29');
+    Check('0 0 L-30W * *', '2026-07-02', '2026-08-03', '2026-07-01');
+    Check('0 0 L-0W * *', '2026-05-01', '2026-05-29', '2026-04-30');
+    Check('0 0 L-0 * *', '2026-05-01', '2026-05-31', '2026-04-30');
+    lPlan.DayMatchMode := dmOr;
+    Check('0 0 L-2 * MON', '2026-11-17', '2026-11-23', '2026-11-16');
+    FreeAndNil(lPlan);
+    lPlan := TCronSchedulePlan.Create;
+    lPlan.Dialect := cdQuartzSecondsFirst;
+    Check('0 0 0 L-2W * ?', '2026-11-01', '2026-11-27', '2026-10-29');
   finally
     lPlan.Free;
   end;
