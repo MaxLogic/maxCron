@@ -1,6 +1,6 @@
 unit TestIntervalEvents;
 interface
-uses System.Classes, System.SyncObjs, System.SysUtils, Winapi.Windows, DUnitX.TestFramework, maxCron;
+uses System.Classes, System.SyncObjs, System.SysUtils, System.Threading, Winapi.Windows, DUnitX.TestFramework, maxCron;
 type
   [TestFixture]
   TTestIntervalEvents = class
@@ -736,7 +736,8 @@ var
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
   lThread: TThread;
-  lAStarted, lARelease, lAExited, lBStarted, lBRelease, lBExited: TEvent;
+  lAStarted, lARelease, lAExited, lBStarted, lBRelease, lBExited, lCStarted: TEvent;
+  lATask, lBTask, lCTask: ITask;
   lMono, lOrigin, lIntervalUs, lOwningEndUs, lDeadlineUs, lExpectedNext: Int64;
   lCount, lBadAwaiting, lIndex: Integer;
   lUntil: UInt64;
@@ -749,6 +750,7 @@ begin
   lAStarted := TEvent.Create(nil,True,False,''); lARelease := TEvent.Create(nil,True,False,'');
   lAExited := TEvent.Create(nil,True,False,''); lBStarted := TEvent.Create(nil,True,False,'');
   lBRelease := TEvent.Create(nil,True,False,''); lBExited := TEvent.Create(nil,True,False,'');
+  lCStarted := TEvent.Create(nil,True,False,'');
   SetMaxCronMonotonicClockHook(function: Int64 begin Result := TInterlocked.Read(lMono); end);
   SetMaxCronWallClockHook(function: Int64 begin Result := cWall+TInterlocked.Read(lMono)-lOrigin; end);
   if aRoute=1 then lCron := TmaxCron.Create(ctVcl) else lCron := TmaxCron.Create(ctPortable);
@@ -761,6 +763,7 @@ begin
         if (lRun=2) and (aSender.NextSchedule<>0) then TInterlocked.Increment(lBadAwaiting);
         if lRun=1 then
         begin
+          if aRoute>=2 then lATask := TTask.CurrentTask;
           lAStarted.SetEvent;
           if aRoute<2 then
           begin
@@ -776,11 +779,16 @@ begin
           lAExited.SetEvent;
         end else if lRun=2 then
         begin
+          if aRoute>=2 then lBTask := TTask.CurrentTask;
           lBStarted.SetEvent;
           if aRoute>=2 then lBRelease.WaitFor(5000);
           TInterlocked.Add(lMono,lIntervalUs div 3);
           TInterlocked.Exchange(lOwningEndUs,TInterlocked.Read(lMono));
           lBExited.SetEvent;
+        end else if lRun=3 then
+        begin
+          if aRoute>=2 then lCTask := TTask.CurrentTask;
+          lCStarted.SetEvent;
         end;
       end,ivFixedDelay);
     if aRoute=2 then lEvent.InvokeMode := imTTask
@@ -808,24 +816,33 @@ begin
         Assert.IsTrue(lBStarted.WaitFor(5000)=wrSignaled,lContext+' B start');
         lBRelease.SetEvent;
         Assert.IsTrue(lBExited.WaitFor(5000)=wrSignaled,lContext+' B end');
+        Assert.IsTrue(lBTask<>nil,lContext+' B task');
+        Assert.IsTrue(lBTask.Wait(5000),lContext+' B dispatch completion');
         lUntil := GetTickCount64+5000;
         while (lEvent.NextSchedule=0) and (GetTickCount64<lUntil) do TThread.Sleep(1);
         lExpectedNext := CronDateTimeToMs(lEvent.NextSchedule);
         Assert.IsTrue(lExpectedNext<>0,lContext+' B completion stalled');
         lARelease.SetEvent;
         Assert.IsTrue(lAExited.WaitFor(5000)=wrSignaled,lContext+' A end');
-        TThread.Sleep(2);
+        Assert.IsTrue(lATask<>nil,lContext+' A task');
+        Assert.IsTrue(lATask.Wait(5000),lContext+' A dispatch completion');
         Assert.AreEqual<Int64>(lExpectedNext,CronDateTimeToMs(lEvent.NextSchedule),lContext+' stale A changed B deadline');
       end else begin
         lARelease.SetEvent;
         Assert.IsTrue(lAExited.WaitFor(5000)=wrSignaled,lContext+' A end');
+        // Callback-local signals precede FinalizeOverlap and CompleteIntervalRun.
+        // Both asynchronous routes use TTask (route 3 explicitly enables the pool).
+        // Join the dispatch before advancing the fake clock to its reset deadline.
+        Assert.IsTrue(lATask<>nil,lContext+' A task');
+        Assert.IsTrue(lATask.Wait(5000),lContext+' A dispatch completion');
         if aOverlap<>omSkipIfRunning then
         begin
           Assert.IsTrue(lBStarted.WaitFor(5000)=wrSignaled,lContext+' B start');
-          TThread.Sleep(2);
           Assert.AreEqual<TDateTime>(0,lEvent.NextSchedule,lContext+' stale A armed blocked B');
           lBRelease.SetEvent;
           Assert.IsTrue(lBExited.WaitFor(5000)=wrSignaled,lContext+' B end');
+          Assert.IsTrue(lBTask<>nil,lContext+' B task');
+          Assert.IsTrue(lBTask.Wait(5000),lContext+' B dispatch completion');
         end;
       end;
     end;
@@ -855,11 +872,28 @@ begin
     while (TInterlocked.CompareExchange(lCount,0,0)=lIndex) and (GetTickCount64<lUntil) do
     begin CheckSynchronize(0); TThread.Sleep(1); end;
     Assert.AreEqual(lIndex+1,TInterlocked.CompareExchange(lCount,0,0),lContext+' did not rearm exactly once');
+    if aRoute>=2 then
+      if lIndex=1 then
+      begin
+        Assert.IsTrue(lBStarted.WaitFor(5000)=wrSignaled,lContext+' rearm start');
+        Assert.IsTrue(lBTask<>nil,lContext+' rearm task');
+        Assert.IsTrue(lBTask.Wait(5000),lContext+' rearm dispatch completion');
+      end else begin
+        Assert.IsTrue(lCStarted.WaitFor(5000)=wrSignaled,lContext+' rearm start');
+        Assert.IsTrue(lCTask<>nil,lContext+' rearm task');
+        Assert.IsTrue(lCTask.Wait(5000),lContext+' rearm dispatch completion');
+      end;
   finally
     lARelease.SetEvent; lBRelease.SetEvent;
+    if lATask<>nil then lATask.Wait(5000);
+    if lBTask<>nil then lBTask.Wait(5000);
+    if lCTask<>nil then lCTask.Wait(5000);
+    // Tasks retain the callback closure, which captures these task references.
+    lATask := nil; lBTask := nil; lCTask := nil;
     lCron.Shutdown(5000,spWait); CheckSynchronize(0);
     lEvent := nil; lCron.Free;
     SetMaxCronMonotonicClockHook(nil); SetMaxCronWallClockHook(nil);
+    lCStarted.Free;
     lBExited.Free; lBRelease.Free; lBStarted.Free; lAExited.Free; lARelease.Free; lAStarted.Free;
   end;
 end;
