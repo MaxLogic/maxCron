@@ -12,6 +12,7 @@ uses
   maxCron.Internal.DeadlineQueue in '..\maxCron.Internal.DeadlineQueue.pas',
   maxCron.Internal.Platform in '..\maxCron.Internal.Platform.pas',
   maxCron.Internal.TimeZone in '..\maxCron.Internal.TimeZone.pas',
+  TestIntervalTiming in 'unit\TestIntervalTiming.pas',
   TestIntervalPlan in 'unit\TestIntervalPlan.pas',
   TestDeadlineQueue in 'unit\TestDeadlineQueue.pas',
   TestIntervalEvents in 'unit\TestIntervalEvents.pas',
@@ -84,6 +85,7 @@ begin
     TDUnitX.RegisterTestFixture(TTestIntervalPlan);
     TDUnitX.RegisterTestFixture(TTestDeadlineQueue);
     TDUnitX.RegisterTestFixture(TTestIntervalEvents);
+    TDUnitX.RegisterTestFixture(TTestIntervalTiming);
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));

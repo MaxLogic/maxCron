@@ -1154,3 +1154,56 @@ The library timer no longer depends on `Vcl.ExtCtrls` or `MaxLogic.PortableTimer
 Under `MAXCRON_TESTS`, `StartTimerForTests` selects the maximum sleep duration,
 clamped to 1..1000 ms. Explicit `TickAt` calls remain direct cron passes using the millisecond carrier rule;
 `TickAtUs` accepts exact wall-clock microseconds.
+
+## Interval events
+
+Use `AddInterval('poll', 100, Callback)` or `Add('poll', '@every 100ms', Callback)`
+for monotonic intervals from 1 to 4,294,967,295 milliseconds. Events start disabled;
+call `Run` or set `Enabled := True`. `Run` restarts the phase and counters.
+
+The grammar is `@every <integer>ms|s|m|h [fixed-rate|fixed-delay] [limit N]`.
+Keywords are case-insensitive, whitespace before the unit is allowed, and trailing
+`# comments` work. Zero limits mean unlimited. For example,
+`@every 1h fixed-delay limit 3` runs at most three callbacks. Interval parse,
+canonical format, and description helpers live in `maxCron.Plan`;
+`TCronSchedulePlan.Parse`, `Describe`, and `MakePreview` remain cron-only.
+
+Fixed rate is the default: deadlines retain their original phase. The existing
+misfire policies skip overdue intervals, fire the latest occurrence once, or
+catch up in bounded batches, paced by one interval. An occurrence less than one
+interval late is on time, including under `mpSkip`. Fixed delay schedules the next
+start one full interval after the final callback attempt finishes. Use
+`AddInterval(..., ivFixedDelay)` or the plan keyword. Callback errors, rejected
+dispatches, and overlap skips complete through the same re-arm path. Stop, delete,
+or shutdown cancellation ends the event. Existing overlap, retry, execution-limit,
+and global callback-cap policies also apply to intervals.
+
+Query `IMaxCronIntervalEvent` with `Supports` for the read-only `IsInterval`,
+`IntervalMs`, and `IntervalMode` properties. Change intervals through `EventPlan`.
+`NextSchedule` projects the monotonic deadline onto local wall time and is zero
+while a fixed-delay callback is in flight or the event is disabled. `LastExecution`
+projects the fired occurrence, rather than the callback completion. Plans and
+projected deadlines round-trip through the existing schedule store. A restored
+future deadline is clamped to one interval; past deadlines follow the misfire policy.
+
+`ValidFrom` and `ValidTo` apply. Time zones, DST, dialect, day matching, weekdays,
+excluded dates, blackout windows, and cron jitter have no scheduling effect on
+intervals; their values are retained and can be changed without restarting the phase.
+Wall-clock changes do not move interval deadlines. Elapsed time across system
+sleep follows the platform's monotonic clock; QPC sleep behavior is unverified.
+
+For millisecond intervals use `ctPortable` with `imTTask`, or `imThread` with
+`MAXCRON_THREAD_DISPATCH_POOL=1`. `imMainThread` and `ctVcl` add message-queue
+latency. The default invoke mode is `imMainThread`, which needs a message pump in
+console hosts too. Typical wait resolution is about 1 ms with high-resolution
+timers, 1-2 ms with the timer-period fallback, and 15.6 ms with system defaults.
+Shorter intervals follow their misfire policy or arrive in catch-up bursts.
+Windows power throttling and background/minimized applications can coarsen waits;
+the scheduler does not promise hard real-time precision. The accepted 1 ms minimum
+interval does not guarantee delivery of every occurrence, even with high-resolution
+waits. The interval benchmark observed missed occurrences under load at 1 ms;
+10 ms and 100 ms runs had no missed occurrences on the measured host.
+
+Consumers listing units explicitly must include `maxCron.Internal.DeadlineQueue.pas`.
+The interval benchmark accepts `--mode=interval --interval-ms=10 --fires=500` and
+reports lateness, missed fires, and process CPU; use Release builds for measurements.

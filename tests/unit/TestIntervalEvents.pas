@@ -1,29 +1,42 @@
 unit TestIntervalEvents;
 interface
-uses System.SysUtils, DUnitX.TestFramework, maxCron;
+uses System.Classes, System.SyncObjs, System.SysUtils, Winapi.Windows, DUnitX.TestFramework, maxCron;
 type
   [TestFixture]
   TTestIntervalEvents = class
+  private
+    procedure CheckCompletionOwnership(const aRoute, aMutation, aOrder, aIntervalMs: Integer;
+      const aOverlap: TmaxCronOverlapMode);
   public
+    [Test] procedure SerializedRestartOwnsCompletion;
     [Test] procedure RestoreOriginShiftInvariant;
+    [Test] procedure CompletionOwnershipInvariant;
     [Test] procedure FixedRateIntegerModel;
     [Test] procedure ViewsLimitsAndPlanSwitch;
     [Test] procedure ValidityAndIgnoredCronProperties;
     [Test] procedure PersistenceProjection;
+    [Test] procedure RestoreOverduePolicies;
+    [Test] procedure PlanSwitchEngines;
     [Test] procedure IntervalDialectAfterCron;
+    [Test] procedure FixedDelayCompletion;
+    [Test] procedure FixedDelayIntegerModel;
+    [Test] procedure CatchUpPacing;
+    [Test] procedure FixedDelayExitPaths;
+    [Test] procedure FixedDelayQueuedFailure;
+    [Test] procedure DueBatchSurvivesDispatchFailure;
   end;
 type
   TIntervalMemoryStore = class(TInterfacedObject, IMaxCronScheduleStore)
   public
-    States: TArray<TMaxCronPersistedEvent>;
+    fStates: TArray<TMaxCronPersistedEvent>;
     procedure Save(const aEvents: TArray<TMaxCronPersistedEvent>);
     function TryLoad(out aEvents: TArray<TMaxCronPersistedEvent>): Boolean;
   end;
 implementation
 procedure TIntervalMemoryStore.Save(const aEvents: TArray<TMaxCronPersistedEvent>);
-begin States := Copy(aEvents); end;
+begin fStates := Copy(aEvents); end;
 function TIntervalMemoryStore.TryLoad(out aEvents: TArray<TMaxCronPersistedEvent>): Boolean;
-begin aEvents := Copy(States); Result := True; end;
+begin aEvents := Copy(fStates); Result := True; end;
 procedure TTestIntervalEvents.FixedRateIntegerModel;
 const
   cOffsets: array[0..14] of Int64 = (-1,0,1,499,500,999,1000,99999,100000,100001,
@@ -104,7 +117,7 @@ begin
   try
     Assert.WillRaiseWithMessage(procedure begin lCron.AddInterval('invalid',0); end,
       Exception,'Interval plan value out of range');
-    Assert.AreEqual(0,Length(lCron.Snapshot));
+    Assert.AreEqual<NativeInt>(0,Length(lCron.Snapshot));
     lEvent := lCron.AddInterval('view',100,
       procedure(aSender: IMaxCronEvent) begin Inc(lCount); end);
     Assert.IsFalse(lEvent.Enabled);
@@ -199,11 +212,11 @@ begin
     lEvent := lCron.Add('persist','@every 5s fixed-delay limit 3',
       procedure(aSender: IMaxCronEvent) begin end);
     lEvent.Run; Assert.AreEqual(1,lCron.SaveScheduleState);
-    lStoreObject.States[0].NumOfExecutionsPerformed := 2;
+    lStoreObject.fStates[0].NumOfExecutionsPerformed := 2;
     for i := 0 to 3 do
     begin
-      if cOffsets[i]=0 then lStoreObject.States[0].NextSchedule := 0
-      else lStoreObject.States[0].NextSchedule := CronMsToDateTime(cWall div 1000+cOffsets[i]);
+      if cOffsets[i]=0 then lStoreObject.fStates[0].NextSchedule := 0
+      else lStoreObject.fStates[0].NextSchedule := CronMsToDateTime(cWall div 1000+cOffsets[i]);
       Assert.AreEqual(1,lCron.RestoreScheduleState);
       lEvent := lCron.Snapshot[0];
       Assert.IsTrue(Supports(lEvent,IMaxCronIntervalEvent,lView));
@@ -212,7 +225,7 @@ begin
       Assert.AreEqual<UInt64>(2,lEvent.NumOfExecutionsPerformed);
       Assert.AreEqual<Int64>(cWall div 1000+cNext[i],CronDateTimeToMs(lEvent.NextSchedule));
     end;
-    lStoreObject.States[0].Enabled := False; lCron.RestoreScheduleState;
+    lStoreObject.fStates[0].Enabled := False; lCron.RestoreScheduleState;
     lEvent := lCron.Snapshot[0]; Assert.IsFalse(lEvent.Enabled);
     Assert.AreEqual<TDateTime>(0,lEvent.NextSchedule);
   finally
@@ -221,7 +234,324 @@ begin
   end;
 end;
 
+procedure TTestIntervalEvents.FixedDelayCompletion;
+const cWall: Int64 = 4000000000000000;
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lMono,lWall: Int64;
+  lCount: Integer;
+begin
+  lMono := 100000000; lWall := cWall; lCount := 0;
+  SetMaxCronMonotonicClockHook(function: Int64 begin Result := lMono; end);
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWall; end);
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lEvent := lCron.AddInterval('delay',100,
+      procedure(aSender: IMaxCronEvent)
+      begin
+        Assert.AreEqual<TDateTime>(0,aSender.NextSchedule,'awaiting completion');
+        Inc(lCount); Inc(lMono,30000); Inc(lWall,30000);
+      end,ivFixedDelay);
+    lEvent.InvokeMode := imMainThread; lEvent.Run;
+    Inc(lMono,100300); Inc(lWall,100300); lCron.TickAtUs(lWall);
+    Assert.AreEqual(1,lCount);
+    Assert.AreEqual<Int64>((cWall+230300) div 1000,CronDateTimeToMs(lEvent.NextSchedule));
+  finally
+    lEvent := nil; lCron.Free;
+    SetMaxCronMonotonicClockHook(nil); SetMaxCronWallClockHook(nil);
+  end;
+end;
 
+procedure TTestIntervalEvents.FixedDelayExitPaths;
+const cWall: Int64 = 4000000000000000;
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lMono,lWall: Int64;
+  lMode: TmaxCronOverlapMode;
+  lCount,lAttempt: Integer;
+begin
+  lMono := 100000000; lWall := cWall;
+  SetMaxCronMonotonicClockHook(function: Int64 begin Result := lMono; end);
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWall; end);
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lCount := 0;
+    lEvent := lCron.AddInterval('exit',100,
+      procedure(aSender: IMaxCronEvent) begin Inc(lCount); end,ivFixedDelay);
+    lEvent.InvokeMode := imMainThread;
+    for lMode := omAllowOverlap to omSerializeCoalesce do
+    begin
+      lEvent.OverlapMode := lMode; lEvent.Run;
+      SetMaxCronBeforeDispatchHook(procedure(const aMode: TmaxCronInvokeMode)
+        begin raise Exception.Create('dispatch-start'); end);
+      Inc(lMono,100000); Inc(lWall,100000);
+      Assert.WillRaiseWithMessage(procedure begin lCron.TickAtUs(lWall); end,Exception,'dispatch-start');
+      Assert.AreEqual<Int64>((lWall+100000) div 1000,CronDateTimeToMs(lEvent.NextSchedule),'rollback rearm');
+      SetMaxCronBeforeDispatchHook(nil);
+      Inc(lMono,99999); Inc(lWall,99999); lCron.TickAtUs(lWall);
+      Assert.AreEqual(0,lCount,'never early');
+      Inc(lMono); Inc(lWall); lCron.TickAtUs(lWall);
+      Assert.AreEqual(1,lCount); lCount := 0;
+    end;
+    lEvent.OnScheduleProc := nil; lEvent.Run;
+    Inc(lMono,100000); Inc(lWall,100000); lCron.TickAtUs(lWall);
+    Assert.AreEqual<Int64>((lWall+100000) div 1000,CronDateTimeToMs(lEvent.NextSchedule),'no callbacks');
+    lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent)
+      begin Inc(lCount); raise Exception.Create('callback'); end;
+    lEvent.RetryMaxAttempts := 2; lEvent.Run;
+    Inc(lMono,100000); Inc(lWall,100000); lCron.TickAtUs(lWall);
+    Assert.AreEqual(3,lCount,'retry policy');
+    Assert.AreEqual<Int64>((lWall+100000) div 1000,CronDateTimeToMs(lEvent.NextSchedule),'exception rearm');
+    lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin aSender.Stop; end;
+    Inc(lMono,100000); Inc(lWall,100000); lCron.TickAtUs(lWall);
+    Assert.AreEqual<TDateTime>(0,lEvent.NextSchedule,'Stop during dispatch');
+    // Restart while a skip-if-running callback is in flight. The synchronous nested tick is refused.
+    lAttempt := 0; lEvent.RetryMaxAttempts := 0; lEvent.OverlapMode := omSkipIfRunning;
+    lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent)
+      begin
+        Inc(lAttempt);
+        if lAttempt=1 then
+        begin
+          aSender.Run;
+          Inc(lMono,100000); Inc(lWall,100000); lCron.TickAtUs(lWall);
+          Assert.AreEqual<Int64>((lWall+100000) div 1000,CronDateTimeToMs(aSender.NextSchedule),'overlap skip rearm');
+        end;
+      end;
+    lEvent.Run; Inc(lMono,100000); Inc(lWall,100000); lCron.TickAtUs(lWall);
+    Assert.AreEqual(1,lAttempt);
+    Assert.AreEqual<Int64>((lWall+100000) div 1000,CronDateTimeToMs(lEvent.NextSchedule));
+    // A reserved run rejected by the existing global permit path still completes.
+    lCron.GlobalMaxConcurrentCallbacks := 1;
+    lEvent.Run;
+    SetMaxCronBeforeDispatchHook(procedure(const aMode: TmaxCronInvokeMode)
+      begin lCron.Shutdown(0,spWait); end);
+    Inc(lMono,100000); Inc(lWall,100000); lCron.TickAtUs(lWall);
+    Assert.AreEqual(1,lAttempt,'shutdown/global permit rejection');
+    Assert.AreEqual<Int64>((lWall+100000) div 1000,CronDateTimeToMs(lEvent.NextSchedule),'completion after rejected permit');
+  finally
+    SetMaxCronBeforeDispatchHook(nil);
+    lEvent := nil; lCron.Free;
+    SetMaxCronMonotonicClockHook(nil); SetMaxCronWallClockHook(nil);
+  end;
+end;
+
+procedure TTestIntervalEvents.FixedDelayQueuedFailure;
+const cWall: Int64 = 4000000000000000;
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lMono,lWall: Int64;
+  lThread: TThread;
+  lCount: Integer;
+begin
+  lMono := 100000000; lWall := cWall; lCount := 0;
+  SetMaxCronMonotonicClockHook(function: Int64 begin Result := lMono; end);
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWall; end);
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lEvent := lCron.AddInterval('queued',100,
+      procedure(aSender: IMaxCronEvent) begin Inc(lCount); end,ivFixedDelay);
+    lEvent.InvokeMode := imMainThread; lEvent.Run;
+    SetMaxCronBeforeQueuedAcquireHook(procedure(const aEvent: IMaxCronEvent)
+      begin raise Exception.Create('queued acquire'); end);
+    Inc(lMono,100000); Inc(lWall,100000);
+    lThread := TThread.CreateAnonymousThread(procedure begin lCron.TickAtUs(lWall); end);
+    lThread.FreeOnTerminate := False;
+    try
+      lThread.Start; lThread.WaitFor;
+      CheckSynchronize(0);
+    finally lThread.Free; end;
+    Assert.AreEqual(0,lCount);
+    Assert.AreEqual<Int64>((lWall+100000) div 1000,CronDateTimeToMs(lEvent.NextSchedule),'queued failure rearm');
+    SetMaxCronBeforeQueuedAcquireHook(nil);
+    Inc(lMono,100000); Inc(lWall,100000); lCron.TickAtUs(lWall);
+    Assert.AreEqual(1,lCount);
+  finally
+    SetMaxCronBeforeQueuedAcquireHook(nil);
+    lEvent := nil; lCron.Free;
+    SetMaxCronMonotonicClockHook(nil); SetMaxCronWallClockHook(nil);
+  end;
+end;
+
+procedure TTestIntervalEvents.DueBatchSurvivesDispatchFailure;
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lMono,lWall: Int64;
+  lCount: Integer;
+begin
+  lMono := 100000000; lWall := 4000000000000000; lCount := 0;
+  SetMaxCronMonotonicClockHook(function: Int64 begin Result := lMono; end);
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWall; end);
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lCron.DefaultInvokeMode := imMainThread;
+    lCron.AddInterval('first',100,procedure(aSender: IMaxCronEvent) begin end,ivFixedDelay).Run;
+    lEvent := lCron.AddInterval('second',100,
+      procedure(aSender: IMaxCronEvent) begin Inc(lCount); end);
+    lEvent.Run;
+    SetMaxCronBeforeDispatchHook(procedure(const aMode: TmaxCronInvokeMode)
+      begin raise Exception.Create('batch failure'); end);
+    Inc(lMono,100000); Inc(lWall,100000);
+    Assert.WillRaiseWithMessage(procedure begin lCron.TickAtUs(lWall); end,Exception,'batch failure');
+    SetMaxCronBeforeDispatchHook(nil);
+    lCron.TickAtUs(lWall);
+    Assert.AreEqual(1,lCount,'second popped event must remain scheduled');
+  finally
+    SetMaxCronBeforeDispatchHook(nil);
+    lEvent := nil; lCron.Free;
+    SetMaxCronMonotonicClockHook(nil); SetMaxCronWallClockHook(nil);
+  end;
+end;
+
+procedure TTestIntervalEvents.FixedDelayIntegerModel;
+const
+  cWall: Int64 = 4000000000000000;
+  cOffsets: array[0..7] of Int64 = (-1,0,1,99999,100000,100001,319999,320000);
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lMono,lWall,lNext: Int64;
+  lCount,lExpected,i: Integer;
+  lPolicy: TmaxCronMisfirePolicy;
+begin
+  lMono := 100000000; lWall := cWall;
+  SetMaxCronMonotonicClockHook(function: Int64 begin Result := lMono; end);
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWall; end);
+  try
+    for lPolicy := mpSkip to mpCatchUpAll do
+      for i := Low(cOffsets) to High(cOffsets) do
+      begin
+        lMono := 100000000; lWall := cWall; lCount := 0;
+        lCron := TmaxCron.Create(ctPortable);
+        try
+          lEvent := lCron.AddInterval('delay model',100,
+            procedure(aSender: IMaxCronEvent)
+            begin Inc(lCount); Inc(lMono,30000); Inc(lWall,30000); end,ivFixedDelay);
+          lEvent.InvokeMode := imMainThread; lEvent.MisfirePolicy := lPolicy; lEvent.Run;
+          Inc(lMono,100000+cOffsets[i]); Inc(lWall,100000+cOffsets[i]);
+          lExpected := 0; lNext := cWall+100000;
+          if cOffsets[i]>=0 then
+          begin
+            lNext := lWall+100000;
+            if (lPolicy<>mpSkip) or (cOffsets[i]<100000) then
+            begin lExpected := 1; Inc(lNext,30000); end;
+          end;
+          lCron.TickAtUs(lWall);
+          Assert.AreEqual(lExpected,lCount,'delay offset '+IntToStr(cOffsets[i]));
+          Assert.AreEqual<Int64>(lNext div 1000,CronDateTimeToMs(lEvent.NextSchedule),'delay next');
+        finally lEvent := nil; lCron.Free; end;
+      end;
+  finally SetMaxCronMonotonicClockHook(nil); SetMaxCronWallClockHook(nil); end;
+end;
+
+procedure TTestIntervalEvents.CatchUpPacing;
+const cWall: Int64 = 4000000000000000;
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lMono,lWall: Int64;
+  lCount: Integer;
+begin
+  lMono := 100000000; lWall := cWall; lCount := 0;
+  SetMaxCronMonotonicClockHook(function: Int64 begin Result := lMono; end);
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWall; end);
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lCron.DefaultMisfirePolicy := mpCatchUpAll; lCron.DefaultMisfireCatchUpLimit := 3;
+    lEvent := lCron.AddInterval('pace',100,
+      procedure(aSender: IMaxCronEvent) begin Inc(lCount); end);
+    lEvent.InvokeMode := imMainThread; lEvent.Run;
+    Inc(lMono,420000); Inc(lWall,420000); lCron.TickAtUs(lWall); Assert.AreEqual(3,lCount);
+    Assert.AreEqual<Int64>((cWall+400000) div 1000,CronDateTimeToMs(lEvent.NextSchedule));
+    Inc(lMono,99999); Inc(lWall,99999); lCron.TickAtUs(lWall); Assert.AreEqual(3,lCount,'paced wake');
+    Inc(lMono); Inc(lWall); lCron.TickAtUs(lWall); Assert.AreEqual(5,lCount);
+    Assert.AreEqual<Int64>((cWall+600000) div 1000,CronDateTimeToMs(lEvent.NextSchedule));
+  finally
+    lEvent := nil; lCron.Free;
+    SetMaxCronMonotonicClockHook(nil); SetMaxCronWallClockHook(nil);
+  end;
+end;
+
+procedure TTestIntervalEvents.PlanSwitchEngines;
+const cEngines: array[0..1] of string = ('heap','shadow');
+var
+  lPrevious,lEngine: string;
+begin
+  lPrevious := GetEnvironmentVariable('MAXCRON_ENGINE');
+  try
+    for lEngine in cEngines do
+    begin
+      Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE',PChar(lEngine));
+      ViewsLimitsAndPlanSwitch;
+    end;
+  finally Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE',PChar(lPrevious)); end;
+end;
+
+procedure TTestIntervalEvents.RestoreOverduePolicies;
+const cWall: Int64 = 4000000000000000;
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lStoreObject: TIntervalMemoryStore;
+  lStore: IMaxCronScheduleStore;
+  lMono,lWall,lExpectedNext,lExpectedLast: Int64;
+  lPolicy: TmaxCronMisfirePolicy;
+  lCount,lExpected,i: Integer;
+begin
+  lMono := 100000000; lWall := cWall;
+  SetMaxCronMonotonicClockHook(function: Int64 begin Result := lMono; end);
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWall; end);
+  try
+    for lPolicy := mpSkip to mpCatchUpAll do
+      for i := 0 to 1 do
+      begin
+        lStoreObject := TIntervalMemoryStore.Create; lStore := lStoreObject;
+        lCron := TmaxCron.Create(ctPortable); lCount := 0;
+        try
+          SetLength(lStoreObject.fStates,1);
+          lStoreObject.fStates[0] := Default(TMaxCronPersistedEvent);
+          lStoreObject.fStates[0].Name := 'restored overdue';
+          if i=0 then lStoreObject.fStates[0].EventPlan := '@every 5s limit 3'
+          else lStoreObject.fStates[0].EventPlan := '@every 5s fixed-delay limit 3';
+          lStoreObject.fStates[0].Enabled := True;
+          lStoreObject.fStates[0].InvokeMode := imMainThread;
+          lStoreObject.fStates[0].Dialect := cdMaxCron;
+          lStoreObject.fStates[0].TimeZoneId := 'LOCAL';
+          lStoreObject.fStates[0].NextSchedule := CronMsToDateTime(cWall div 1000-12000);
+          lStoreObject.fStates[0].NumOfExecutionsPerformed := 2;
+          lCron.DefaultMisfirePolicy := lPolicy;
+          lCron.DefaultMisfireCatchUpLimit := 3;
+          lCron.ScheduleStore := lStore;
+          Assert.AreEqual(1,lCron.RestoreScheduleState);
+          lEvent := lCron.Snapshot[0];
+          lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lCount); end;
+          lCron.TickAtUs(lWall);
+          if lPolicy=mpSkip then lExpected := 0 else lExpected := 1;
+          Assert.AreEqual(lExpected,lCount,'restored policy');
+          Assert.AreEqual<UInt64>(UInt64(2+lExpected),lEvent.NumOfExecutionsPerformed);
+          if i=1 then lExpectedNext := cWall+5000000
+          else if lPolicy=mpCatchUpAll then lExpectedNext := cWall+3000000
+          else lExpectedNext := cWall+3000000;
+          if (i=0) and (lPolicy=mpCatchUpAll) then
+          begin
+            // Three oldest occurrences were scheduled, but the unchanged limit admits only one.
+            Assert.IsFalse(lEvent.Enabled);
+            Assert.AreEqual<TDateTime>(0,lEvent.NextSchedule);
+          end else
+            Assert.AreEqual<Int64>(lExpectedNext div 1000,CronDateTimeToMs(lEvent.NextSchedule));
+          if lExpected>0 then
+          begin
+            if (i=0) then lExpectedLast := cWall-2000000
+            else lExpectedLast := cWall-12000000;
+            Assert.AreEqual<Int64>(lExpectedLast div 1000,CronDateTimeToMs(lEvent.LastExecution));
+          end;
+        finally lEvent := nil; lCron.Free; lStore := nil; end;
+      end;
+  finally SetMaxCronMonotonicClockHook(nil); SetMaxCronWallClockHook(nil); end;
+end;
 
 procedure TTestIntervalEvents.IntervalDialectAfterCron;
 const
@@ -242,7 +572,7 @@ begin
   try
     for lSource := Low(TmaxCronDialect) to High(TmaxCronDialect) do
       for lTarget := Low(TmaxCronDialect) to High(TmaxCronDialect) do
-        for i := 0 to 0 do
+        for i := 0 to 1 do
         begin
           lCron := TmaxCron.Create(ctPortable);
           try
@@ -283,6 +613,49 @@ begin
   end;
 end;
 
+
+procedure TTestIntervalEvents.SerializedRestartOwnsCompletion;
+const cWall: Int64 = 4000000000000000;
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lMono, lWall, lObserved: Int64;
+  lCount: Integer;
+begin
+  lMono := 100000000; lWall := cWall; lCount := 0; lObserved := -1;
+  SetMaxCronMonotonicClockHook(function: Int64 begin Result := lMono; end);
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWall; end);
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lEvent := lCron.AddInterval('serialized restart',100,
+      procedure(aSender: IMaxCronEvent)
+      begin
+        Inc(lCount);
+        if lCount=1 then
+        begin
+          aSender.Run;
+          Inc(lMono,100000); Inc(lWall,100000); lCron.TickAtUs(lWall);
+        end else begin
+          lObserved := CronDateTimeToMs(aSender.NextSchedule);
+          Inc(lMono,30000); Inc(lWall,30000);
+        end;
+      end,ivFixedDelay);
+    lEvent.InvokeMode := imMainThread; lEvent.OverlapMode := omSerialize; lEvent.Run;
+    Inc(lMono,100000); Inc(lWall,100000); lCron.TickAtUs(lWall);
+    Assert.AreEqual<TDateTime>(0,lEvent.NextSchedule,'older completion armed pending owner');
+    CheckSynchronize(0);
+    Assert.AreEqual(2,lCount);
+    Assert.AreEqual<Int64>(0,lObserved,'new owner must remain awaiting during callback');
+    Assert.AreEqual<Int64>((lWall+100000) div 1000,CronDateTimeToMs(lEvent.NextSchedule));
+    Inc(lMono,70000); Inc(lWall,70000); lCron.TickAtUs(lWall);
+    Assert.AreEqual(2,lCount,'100ms delay must not fire 70ms after owning completion');
+  finally
+    CheckSynchronize(0);
+    lEvent := nil; lCron.Free;
+    SetMaxCronMonotonicClockHook(nil); SetMaxCronWallClockHook(nil);
+  end;
+end;
+
 procedure TTestIntervalEvents.RestoreOriginShiftInvariant;
 const
   cWall: Int64 = 4000000000000000;
@@ -304,7 +677,7 @@ begin
   SetMaxCronMonotonicClockHook(function: Int64 begin Result := lMono; end);
   SetMaxCronWallClockHook(function: Int64 begin Result := lWall; end);
   try
-    for lMode := ivFixedRate to ivFixedRate do
+    for lMode := ivFixedRate to ivFixedDelay do
       for lPolicy := mpSkip to mpCatchUpAll do
         for lLimit := 1 to 3 do
           for lOrigin := Low(cOrigins) to High(cOrigins) do
@@ -315,17 +688,17 @@ begin
             try
               lCron.DefaultMisfirePolicy := lPolicy;
               lCron.DefaultMisfireCatchUpLimit := lLimit;
-              SetLength(lStoreObject.States,1);
-              lStoreObject.States[0] := Default(TMaxCronPersistedEvent);
-              lStoreObject.States[0].Name := 'origin invariant';
+              SetLength(lStoreObject.fStates,1);
+              lStoreObject.fStates[0] := Default(TMaxCronPersistedEvent);
+              lStoreObject.fStates[0].Name := 'origin invariant';
               if lMode=ivFixedDelay then
-                lStoreObject.States[0].EventPlan := '@every 5s fixed-delay'
-              else lStoreObject.States[0].EventPlan := '@every 5s';
-              lStoreObject.States[0].Enabled := True;
-              lStoreObject.States[0].InvokeMode := imMainThread;
-              lStoreObject.States[0].Dialect := cdMaxCron;
-              lStoreObject.States[0].TimeZoneId := 'LOCAL';
-              lStoreObject.States[0].NextSchedule := CronMsToDateTime((cWall-12000000) div 1000);
+                lStoreObject.fStates[0].EventPlan := '@every 5s fixed-delay'
+              else lStoreObject.fStates[0].EventPlan := '@every 5s';
+              lStoreObject.fStates[0].Enabled := True;
+              lStoreObject.fStates[0].InvokeMode := imMainThread;
+              lStoreObject.fStates[0].Dialect := cdMaxCron;
+              lStoreObject.fStates[0].TimeZoneId := 'LOCAL';
+              lStoreObject.fStates[0].NextSchedule := CronMsToDateTime((cWall-12000000) div 1000);
               lCron.ScheduleStore := lStore; lCron.RestoreScheduleState;
               lEvent := lCron.Snapshot[0];
               lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lCount); end;
@@ -356,5 +729,160 @@ begin
   end;
 end;
 
+procedure TTestIntervalEvents.CheckCompletionOwnership(const aRoute, aMutation, aOrder,
+  aIntervalMs: Integer; const aOverlap: TmaxCronOverlapMode);
+const cWall: Int64 = 4000000000000000;
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lThread: TThread;
+  lAStarted, lARelease, lAExited, lBStarted, lBRelease, lBExited: TEvent;
+  lMono, lOrigin, lIntervalUs, lOwningEndUs, lDeadlineUs, lExpectedNext: Int64;
+  lCount, lBadAwaiting, lIndex: Integer;
+  lUntil: UInt64;
+  lContext: string;
+begin
+  lOrigin := 100000000; lMono := lOrigin; lCount := 0; lBadAwaiting := 0;
+  lIntervalUs := Int64(aIntervalMs)*1000; lOwningEndUs := 0;
+  lContext := Format('route=%d mutation=%d order=%d interval=%d overlap=%d',
+    [aRoute,aMutation,aOrder,aIntervalMs,Ord(aOverlap)]);
+  lAStarted := TEvent.Create(nil,True,False,''); lARelease := TEvent.Create(nil,True,False,'');
+  lAExited := TEvent.Create(nil,True,False,''); lBStarted := TEvent.Create(nil,True,False,'');
+  lBRelease := TEvent.Create(nil,True,False,''); lBExited := TEvent.Create(nil,True,False,'');
+  SetMaxCronMonotonicClockHook(function: Int64 begin Result := TInterlocked.Read(lMono); end);
+  SetMaxCronWallClockHook(function: Int64 begin Result := cWall+TInterlocked.Read(lMono)-lOrigin; end);
+  if aRoute=1 then lCron := TmaxCron.Create(ctVcl) else lCron := TmaxCron.Create(ctPortable);
+  try
+    lEvent := lCron.AddInterval('ownership generator',aIntervalMs,
+      procedure(aSender: IMaxCronEvent)
+      var lRun: Integer;
+      begin
+        lRun := TInterlocked.Increment(lCount);
+        if (lRun=2) and (aSender.NextSchedule<>0) then TInterlocked.Increment(lBadAwaiting);
+        if lRun=1 then
+        begin
+          lAStarted.SetEvent;
+          if aRoute<2 then
+          begin
+            case aMutation of
+              0: aSender.Run;
+              1: begin aSender.EventPlan := '* * * * * * *'; aSender.EventPlan := '@every '+IntToStr(aIntervalMs)+'ms fixed-delay'; end;
+              2: begin aSender.Enabled := False; aSender.Enabled := True; end;
+            end;
+            TInterlocked.Add(lMono,lIntervalUs);
+            lCron.TickAtUs(cWall+TInterlocked.Read(lMono)-lOrigin);
+          end else lARelease.WaitFor(5000);
+          if aOrder=1 then TInterlocked.Add(lMono,lIntervalUs div 3);
+          lAExited.SetEvent;
+        end else if lRun=2 then
+        begin
+          lBStarted.SetEvent;
+          if aRoute>=2 then lBRelease.WaitFor(5000);
+          TInterlocked.Add(lMono,lIntervalUs div 3);
+          TInterlocked.Exchange(lOwningEndUs,TInterlocked.Read(lMono));
+          lBExited.SetEvent;
+        end;
+      end,ivFixedDelay);
+    if aRoute=2 then lEvent.InvokeMode := imTTask
+    else if aRoute=3 then lEvent.InvokeMode := imThread
+    else lEvent.InvokeMode := imMainThread;
+    lEvent.OverlapMode := aOverlap; lEvent.Run;
+    TInterlocked.Add(lMono,lIntervalUs);
+    if aRoute=1 then
+    begin
+      lThread := TThread.CreateAnonymousThread(procedure begin lCron.TickAtUs(cWall+TInterlocked.Read(lMono)-lOrigin); end);
+      lThread.FreeOnTerminate := False;
+      try lThread.Start; lThread.WaitFor; finally lThread.Free; end;
+    end else lCron.TickAtUs(cWall+TInterlocked.Read(lMono)-lOrigin);
+    if aRoute>=2 then
+    begin
+      Assert.IsTrue(lAStarted.WaitFor(5000)=wrSignaled,lContext+' A start');
+      case aMutation of
+        0: lEvent.Run;
+        1: begin lEvent.EventPlan := '* * * * * * *'; lEvent.EventPlan := '@every '+IntToStr(aIntervalMs)+'ms fixed-delay'; end;
+        2: begin lEvent.Enabled := False; lEvent.Enabled := True; end;
+      end;
+      TInterlocked.Add(lMono,lIntervalUs); lCron.TickAtUs(cWall+TInterlocked.Read(lMono)-lOrigin);
+      if (aOverlap=omAllowOverlap) and (aOrder=1) then
+      begin
+        Assert.IsTrue(lBStarted.WaitFor(5000)=wrSignaled,lContext+' B start');
+        lBRelease.SetEvent;
+        Assert.IsTrue(lBExited.WaitFor(5000)=wrSignaled,lContext+' B end');
+        lUntil := GetTickCount64+5000;
+        while (lEvent.NextSchedule=0) and (GetTickCount64<lUntil) do TThread.Sleep(1);
+        lExpectedNext := CronDateTimeToMs(lEvent.NextSchedule);
+        Assert.IsTrue(lExpectedNext<>0,lContext+' B completion stalled');
+        lARelease.SetEvent;
+        Assert.IsTrue(lAExited.WaitFor(5000)=wrSignaled,lContext+' A end');
+        TThread.Sleep(2);
+        Assert.AreEqual<Int64>(lExpectedNext,CronDateTimeToMs(lEvent.NextSchedule),lContext+' stale A changed B deadline');
+      end else begin
+        lARelease.SetEvent;
+        Assert.IsTrue(lAExited.WaitFor(5000)=wrSignaled,lContext+' A end');
+        if aOverlap<>omSkipIfRunning then
+        begin
+          Assert.IsTrue(lBStarted.WaitFor(5000)=wrSignaled,lContext+' B start');
+          TThread.Sleep(2);
+          Assert.AreEqual<TDateTime>(0,lEvent.NextSchedule,lContext+' stale A armed blocked B');
+          lBRelease.SetEvent;
+          Assert.IsTrue(lBExited.WaitFor(5000)=wrSignaled,lContext+' B end');
+        end;
+      end;
+    end;
+    lIndex := 2;
+    if aOverlap=omSkipIfRunning then lIndex := 1;
+    lUntil := GetTickCount64+5000;
+    repeat
+      CheckSynchronize(0);
+      if (TInterlocked.CompareExchange(lCount,0,0)>=lIndex) and (lEvent.NextSchedule<>0) then Break;
+      TThread.Sleep(1);
+    until GetTickCount64>=lUntil;
+    Assert.AreEqual(lIndex,TInterlocked.CompareExchange(lCount,0,0),lContext+' no stall or double-arm');
+    Assert.AreEqual(0,lBadAwaiting,lContext+' B entered with deadline');
+    lDeadlineUs := TInterlocked.Read(lOwningEndUs)+lIntervalUs;
+    if aOverlap=omSkipIfRunning then lDeadlineUs := lOrigin+3*lIntervalUs;
+    lExpectedNext := CronDateTimeToMs(lEvent.NextSchedule);
+    Assert.IsTrue(lExpectedNext<>0,lContext+' missing rearm');
+    Assert.AreEqual<Int64>((cWall+lDeadlineUs-lOrigin) div 1000,lExpectedNext,
+      lContext+' owning completion deadline');
+    // Advance to one microsecond before the owning deadline, then exactly to it.
+    TInterlocked.Exchange(lMono,lDeadlineUs-1);
+    lCron.TickAtUs(cWall+TInterlocked.Read(lMono)-lOrigin); CheckSynchronize(0);
+    Assert.AreEqual(lIndex,TInterlocked.CompareExchange(lCount,0,0),lContext+' early start');
+    lBRelease.SetEvent;
+    TInterlocked.Increment(lMono); lCron.TickAtUs(cWall+TInterlocked.Read(lMono)-lOrigin);
+    lUntil := GetTickCount64+5000;
+    while (TInterlocked.CompareExchange(lCount,0,0)=lIndex) and (GetTickCount64<lUntil) do
+    begin CheckSynchronize(0); TThread.Sleep(1); end;
+    Assert.AreEqual(lIndex+1,TInterlocked.CompareExchange(lCount,0,0),lContext+' did not rearm exactly once');
+  finally
+    lARelease.SetEvent; lBRelease.SetEvent;
+    lCron.Shutdown(5000,spWait); CheckSynchronize(0);
+    lEvent := nil; lCron.Free;
+    SetMaxCronMonotonicClockHook(nil); SetMaxCronWallClockHook(nil);
+    lBExited.Free; lBRelease.Free; lBStarted.Free; lAExited.Free; lARelease.Free; lAStarted.Free;
+  end;
+end;
+
+procedure TTestIntervalEvents.CompletionOwnershipInvariant;
+var
+  lRoute, lMutation, lOrder, lInterval: Integer;
+  lOverlap: TmaxCronOverlapMode;
+  lOldPool: string;
+begin
+  // Exhaustive bounded Cartesian generator. There is no random seed.
+  lOldPool := GetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL');
+  SetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL','1');
+  try
+    for lRoute := 0 to 3 do
+      for lOverlap := omAllowOverlap to omSerializeCoalesce do
+        for lMutation := 0 to 2 do
+          for lOrder := 0 to 1 do
+            for lInterval in [10,100] do
+              CheckCompletionOwnership(lRoute,lMutation,lOrder,lInterval,lOverlap);
+  finally
+    SetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL',PChar(lOldPool));
+  end;
+end;
 
 end.

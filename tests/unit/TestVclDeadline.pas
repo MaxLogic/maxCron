@@ -14,6 +14,7 @@ type
   TTestVclDeadline = class
   public
     [Test] procedure AlignedMainThread;
+    [Test] procedure IntervalMainThread;
     [Test] procedure BlockedMainThreadDoesNotSpin;
   end;
 
@@ -85,6 +86,39 @@ begin
     Assert.IsTrue(lCount > 0, 'Queued tick delivered when pumping resumes');
   finally lCron.Free;
     end;
+end;
+
+procedure TTestVclDeadline.IntervalMainThread;
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lCount: Integer;
+  lBad: Boolean;
+  lWatch: TStopwatch;
+  lCpu: Int64;
+begin
+  lCron := TmaxCron.Create(ctVcl); lCount := 0; lBad := False;
+  try
+    lEvent := lCron.AddInterval('interval vcl',50,
+      procedure(aSender: IMaxCronEvent)
+      begin
+        Inc(lCount);
+        if TThread.CurrentThread.ThreadID<>MainThreadID then lBad := True;
+      end);
+    lEvent.InvokeMode := imMainThread; lEvent.Run;
+    lWatch := TStopwatch.StartNew;
+    while lWatch.ElapsedMilliseconds<1000 do
+    begin
+      Application.ProcessMessages; CheckSynchronize(0); TThread.Sleep(1);
+    end;
+    lEvent.Stop;
+    Assert.IsFalse(lBad);
+    Assert.IsTrue((lCount>=15) and (lCount<=21),'VCL interval count '+IntToStr(lCount));
+    lEvent.Run; TThread.Sleep(100); lCpu := CpuUs;
+    TThread.Sleep(500); lCpu := CpuUs-lCpu;
+    Assert.IsTrue(lCpu<50000,'due interval must not spin behind queued VCL tick');
+    lEvent.Stop;
+  finally lEvent := nil; lCron.Free; end;
 end;
 
 end.

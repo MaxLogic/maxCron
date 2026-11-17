@@ -85,6 +85,7 @@ type
     EventCount: Integer;
     Seconds: Integer;
     Fires: Integer;
+    IntervalMs: Integer;
   end;
 
 const
@@ -163,6 +164,7 @@ begin
   aOptions.EventCount := 1000;
   aOptions.Seconds := 60;
   aOptions.Fires := 60;
+  aOptions.IntervalMs := 10;
 
   for lIndex := 1 to ParamCount do
   begin
@@ -173,6 +175,8 @@ begin
       aOptions.EventCount := ParseIntOption('events', Copy(lArg, 10, MaxInt), 1)
     else if StartsText('--seconds=', lArg) then
       aOptions.Seconds := ParseIntOption('seconds', Copy(lArg, 11, MaxInt), 1)
+    else if StartsText('--interval-ms=', lArg) then
+      aOptions.IntervalMs := ParseIntOption('interval-ms', Copy(lArg, 15, MaxInt), 1)
     else if StartsText('--fires=', lArg) then
       aOptions.Fires := ParseIntOption('fires', Copy(lArg, 9, MaxInt), 1)
     else if SameText(lArg, '--quiet') then
@@ -192,12 +196,12 @@ begin
     else if SameText(lArg, '--help') or SameText(lArg, '-h') or SameText(lArg, '/?') then
       raise Exception.Create(
         'Usage: maxCronBenchmarks.exe [--iterations=N] [--warmup=N] [--out-dir=PATH] [--csv=FILE] [--md=FILE] ' +
-        '[--compare=FILE] [--quiet] [--mode=ticks|idle|latency] [--events=N] [--seconds=N] [--fires=N]')
+        '[--compare=FILE] [--quiet] [--mode=ticks|idle|latency|interval] [--interval-ms=N] [--events=N] [--seconds=N] [--fires=N]')
     else
       raise Exception.CreateFmt('Unknown option: %s', [lArg]);
   end;
-  if not MatchText(aOptions.Mode, ['ticks', 'idle', 'latency']) then
-    raise Exception.Create('mode must be ticks, idle or latency');
+  if not MatchText(aOptions.Mode, ['ticks', 'idle', 'latency', 'interval']) then
+    raise Exception.Create('mode must be ticks, idle, latency or interval');
   if (aOptions.Seconds > 86400) or (aOptions.Fires > 86400) then
     raise Exception.Create('seconds and fires must be <= 86400');
   if (aOptions.Mode <> 'ticks') and (aOptions.CompareCsvPath <> '') then
@@ -1249,12 +1253,120 @@ begin
   end;
 end;
 
+type
+  TIntervalRecorder = class
+  public
+    fLock: TCriticalSection;
+    fDone: TEvent;
+    fSamples: TList<Int64>;
+    fRaw: TStringList;
+    fStartUs, fIntervalUs, fLastUs: Int64;
+    fTarget: Integer;
+    constructor Create(const aTarget, aIntervalMs: Integer);
+    destructor Destroy; override;
+    procedure Capture(aSender: IMaxCronEvent);
+  end;
+
+constructor TIntervalRecorder.Create(const aTarget, aIntervalMs: Integer);
+begin
+  inherited Create;
+  fLock := TCriticalSection.Create;
+  fDone := TEvent.Create(nil,True,False,'');
+  fSamples := TList<Int64>.Create;
+  fRaw := TStringList.Create;
+  fRaw.Add('iteration,callback_mono_us,elapsed_us,lateness_us');
+  fIntervalUs := Int64(aIntervalMs)*1000; fTarget := aTarget;
+end;
+
+destructor TIntervalRecorder.Destroy;
+begin
+  fRaw.Free; fSamples.Free; fDone.Free; fLock.Free;
+  inherited;
+end;
+
+procedure TIntervalRecorder.Capture(aSender: IMaxCronEvent);
+var
+  lNowUs,lElapsedUs: Int64;
+begin
+  lNowUs := CronMonotonicNowUs;
+  fLock.Acquire;
+  try
+    if fSamples.Count>=fTarget then Exit;
+    lElapsedUs := lNowUs-fStartUs;
+    fSamples.Add(lElapsedUs mod fIntervalUs);
+    if lNowUs>fLastUs then fLastUs := lNowUs;
+    fRaw.Add(Format('%d,%d,%d,%d',[fSamples.Count,lNowUs,lElapsedUs,lElapsedUs mod fIntervalUs]));
+    if fSamples.Count=fTarget then fDone.SetEvent;
+  finally fLock.Release; end;
+end;
+
+procedure RunIntervalBenchmark(const aOptions: TBenchmarkOptions);
+var
+  g,lIterationGarbo: TGarbos;
+  lOptions: TBenchmarkOptions;
+  lLines: TStringList;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lRecorder: TIntervalRecorder;
+  lValues: TArray<Int64>;
+  lCpuStart,lCpuMs,lElapsedMs: Double;
+  lMissing: Int64;
+  lStamp: string;
+  lTicks,lSpin,lExceptions: UInt64;
+begin
+  lOptions := aOptions;
+  if lOptions.CsvPath='' then
+    lOptions.CsvPath := TPath.Combine(lOptions.OutDir,'maxcron-interval-'+FormatDateTime('yyyymmdd-hhnnss',Now)+'.csv');
+  if lOptions.MdPath='' then lOptions.MdPath := ChangeFileExt(lOptions.CsvPath,'.md');
+  EnsureOutputPaths(lOptions,lStamp);
+  GC(lLines,TStringList.Create,g);
+  lLines.Add('iteration,interval_ms,fires,median_ms,p95_ms,p99_ms,max_ms,missed,elapsed_ms,cpu_ms,cpu_one_core_pct');
+  for var i := 1 to lOptions.Iterations do
+  begin
+    GC(lRecorder,TIntervalRecorder.Create(lOptions.Fires,lOptions.IntervalMs),lIterationGarbo);
+    GC(lCron,TmaxCron.Create(ctPortable),lIterationGarbo);
+    try
+      lCron.DefaultInvokeMode := imTTask;
+      lEvent := lCron.AddInterval('interval benchmark',Cardinal(lOptions.IntervalMs),lRecorder.Capture);
+      // Keep task-pool initialization outside the measurement, as in latency mode.
+      TThread.Sleep(2000);
+      lRecorder.fStartUs := CronMonotonicNowUs;
+      lCpuStart := ProcessCpuMs;
+      lEvent.Run; lCron.StartTimerForTests(1000);
+      if lRecorder.fDone.WaitFor(Cardinal((Int64(lOptions.Fires)*lOptions.IntervalMs) div 1000+15)*1000)<>wrSignaled then
+        raise Exception.Create('Interval benchmark did not receive all callbacks');
+      lEvent.Stop;
+      if not lCron.Shutdown(10000) then raise Exception.Create('Interval benchmark shutdown timed out');
+      lCpuMs := ProcessCpuMs-lCpuStart;
+      lElapsedMs := (lRecorder.fLastUs-lRecorder.fStartUs)/1000.0;
+      lValues := lRecorder.fSamples.ToArray; SortInt64Array(lValues);
+      lMissing := (lRecorder.fLastUs-lRecorder.fStartUs) div lRecorder.fIntervalUs-Length(lValues);
+      if lMissing<0 then lMissing := 0;
+      lCron.GetTimerDiagnosticsForTests(lTicks,lSpin,lExceptions);
+      if (lSpin<>0) or (lExceptions<>0) then raise Exception.Create('Interval timer spin or exception');
+      lLines.Add(Format('%d,%d,%d,%s,%s,%s,%s,%d,%s,%s,%s',[i,lOptions.IntervalMs,Length(lValues),
+        ToInvariantFloat(CalculateMedianFromSorted(lValues)/1000.0),
+        ToInvariantFloat(CalculateNearestRankPercentile(lValues,95.0)/1000.0),
+        ToInvariantFloat(CalculateNearestRankPercentile(lValues,99.0)/1000.0),
+        ToInvariantFloat(lValues[High(lValues)]/1000.0),lMissing,
+        ToInvariantFloat(lElapsedMs),ToInvariantFloat(lCpuMs),ToInvariantFloat(lCpuMs/lElapsedMs*100)]));
+      lRecorder.fRaw.SaveToFile(ChangeFileExt(lOptions.CsvPath,'')+'-fires-'+IntToStr(i)+'.csv',TEncoding.UTF8);
+      Writeln(lLines[lLines.Count-1]);
+      lLines.SaveToFile(lOptions.CsvPath,TEncoding.UTF8);
+    finally
+      lEvent := nil; lIterationGarbo.Clear;
+    end;
+  end;
+end;
+
 var
   lOptions: TBenchmarkOptions;
 begin
   try
     ParseOptions(lOptions);
-    if lOptions.Mode = 'ticks' then
+    if lOptions.Mode = 'interval' then
+      RunIntervalBenchmark(lOptions)
+    else if lOptions.Mode = 'ticks' then
       RunBenchmarks(lOptions)
     else
       RunRealtimeBenchmark(lOptions);

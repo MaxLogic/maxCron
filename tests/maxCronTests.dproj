@@ -207,6 +207,7 @@
         <DCCReference Include="unit\TestCronInstant.pas"/>
         <DCCReference Include="unit\TestTimeBoundaries.pas"/>
         <DCCReference Include="unit\TestDeadlineTimer.pas"/>
+        <DCCReference Include="unit\TestIntervalTiming.pas"/>
         <DCCReference Include="unit\TestIntervalPlan.pas"/>
         <DCCReference Include="unit\TestDeadlineQueue.pas"/>
         <DCCReference Include="unit\TestIntervalEvents.pas"/>

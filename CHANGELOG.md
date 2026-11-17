@@ -5,6 +5,8 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- Added monotonic interval events with `AddInterval`, `@every` plans, fixed-rate and fixed-delay modes, read-only interval metadata, wake-on-change, and persistence through the existing schedule store. Existing overlap, retry, execution-limit, and global-cap policies apply.
+- Added interval accuracy and CPU benchmarking with `--mode=interval --interval-ms=N`.
 - Added previous-occurrence and range queries to `TCronSchedulePlan`: `FindPreviousScheduleDate`, `GetPreviousOccurrences`, `GetOccurrencesBetween`, `CountBetween` and `HasOccurrenceBetween` over `[start, end)` with a result limit (`cCronQueryDefaultLimit`, 10,000). Queries use the plan's wall-clock time and ignore the execution limit. Fuzz-oracle coverage now checks previous and range results, and DOM/DOW modifier plans in both directions, against brute force.
 - Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
 
@@ -15,6 +17,8 @@ All notable user-visible changes to this project will be documented in this file
 - Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
 
 ### Fixed
+- Preserve fixed-delay completion ownership across restarts, plan changes, and serialized handoffs; ignore completions from older runs.
+- Process restored interval deadlines at zero and negative monotonic instants through the misfire policy.
 - Fixed WeekdaysOnly previously excluding Monday and Sunday instead of Saturday and Sunday.
 - Fixed blackout boundaries so the start is inclusive and the end is exclusive, including overnight windows and fractional-millisecond inputs.
 - Use one nearest-millisecond, ties-to-even conversion for next, previous and range queries, including validity comparisons; this fixes platform-dependent results near half-millisecond inputs without changing the validity-window rules. `CronDateTimeToMs` now rounds the exact stored value with integer arithmetic, so inputs within a rounding error of a half millisecond no longer round the wrong way.

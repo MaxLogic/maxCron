@@ -12,6 +12,7 @@ type
   TTestDeadlineTimerStress = class
   public
     [Test] procedure ShutdownAndLifetime;
+    [Test] procedure IntervalLifetime;
   end;
 
 implementation
@@ -96,6 +97,46 @@ begin
     Assert.IsTrue(CronMonotonicNowUs - lStartedUs < 2000000, 'Bounded join');
   end;
   Writeln('R1-02: 200 barrier-held in-flight ticks, completion +1, no new ticks/callbacks, bounded joins');
+end;
+
+procedure TTestDeadlineTimerStress.IntervalLifetime;
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lStart: Int64;
+  lSeed: UInt64;
+  lTicks,lAfter,lSpin,lExceptions: UInt64;
+  lCount: Integer;
+begin
+  lSeed := 20261115;
+  for var i := 1 to 200 do
+  begin
+    lStart := CronMonotonicNowUs;
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      lEvent := lCron.AddInterval('interval lifetime',1,
+        procedure(aSender: IMaxCronEvent) begin end);
+      lEvent.InvokeMode := imTTask; lEvent.Run; lCron.StartTimerForTests(1);
+      lSeed := (lSeed*1664525+1013904223) and $FFFFFFFF;
+      TThread.Sleep(Cardinal(lSeed mod 6));
+    finally lEvent := nil; lCron.Free; end;
+    Assert.IsTrue(CronMonotonicNowUs-lStart<2000000,'interval lifetime bounded join');
+  end;
+  lCron := TmaxCron.Create(ctPortable); lCount := 0;
+  try
+    lEvent := lCron.AddInterval('delete self',1,
+      procedure(aSender: IMaxCronEvent)
+      begin TInterlocked.Increment(lCount); lCron.Delete(aSender); end,ivFixedDelay);
+    lEvent.InvokeMode := imTTask; lEvent.Run; lCron.StartTimerForTests(1);
+    TThread.Sleep(50); Assert.IsTrue(lCron.Shutdown(2000,spWait));
+    Assert.AreEqual(1,lCount); Assert.AreEqual(0,Length(lCron.Snapshot));
+    Assert.AreEqual<TDateTime>(0,lEvent.NextSchedule);
+    lCron.GetTimerDiagnosticsForTests(lTicks,lSpin,lExceptions);
+    lEvent.EventPlan := '@every 2ms'; lEvent.Run; lEvent.Enabled := False;
+    TThread.Sleep(20); lCron.GetTimerDiagnosticsForTests(lAfter,lSpin,lExceptions);
+    Assert.AreEqual<UInt64>(lTicks,lAfter,'no ticks after shutdown');
+    Assert.AreEqual<UInt64>(0,lSpin); Assert.AreEqual<UInt64>(0,lExceptions);
+  finally lEvent := nil; lCron.Free; end;
 end;
 
 end.
