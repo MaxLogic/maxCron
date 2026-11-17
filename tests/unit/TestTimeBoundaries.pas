@@ -6,7 +6,7 @@ uses
   System.DateUtils, System.Math, System.SysUtils,
   Winapi.Windows,
   AutoFree, DUnitX.TestFramework,
-  maxCron;
+  maxCron, maxCron.Internal.TimeZone;
 
 type
   [TestFixture]
@@ -58,6 +58,14 @@ type
     [Test] procedure ExactMsReference;
     [Test] procedure ExactMsQueries;
     [Test] procedure WeekdaysDocumentedContract;
+    [Test] procedure HistoricalBlackoutStart;
+    [Test] procedure HistoricalBlackoutEnd;
+    [Test] procedure GeneratedBlackoutWindows;
+    [Test] procedure BlackoutPreciseTicks;
+    [Test] procedure GeneratedExcludedDates;
+    [Test] procedure FakeDstPolicies;
+    [Test] procedure GeneratedUtcOffsetHours;
+    [Test] procedure GeneratedDstSearchEdges;
   end;
 
 implementation
@@ -734,6 +742,522 @@ begin
   finally
     g.Clear;
     SetMaxCronWallClockHook(nil);
+  end;
+end;
+
+// All references below use integer calendar arithmetic and CarrierMs, independently
+// checked against Python Fraction fixtures by ExactMsReference. No production helper
+// participates in the expected blackout, exclusion or timezone decisions.
+function PolicyGrid(const aMs: Int64): TDateTime;
+begin
+  Result := IncMilliSecond(EncodeDate(1899, 12, 30), aMs);
+end;
+
+function ModelBlocked(const aMs, aStart, aEnd: Int64): Boolean;
+var
+  lTime: Int64;
+begin
+  if aStart = aEnd then
+    Exit(False);
+  lTime := aMs mod MSecsPerDay;
+  if aStart < aEnd then
+    Exit((lTime >= aStart) and (lTime < aEnd));
+  Result := (lTime >= aStart) or (lTime < aEnd);
+end;
+
+function ModelBlackoutNext(const aBaseUs, aStart, aEnd, aPeriodSeconds: Int64): Int64;
+var
+  lSecond: Int64;
+begin
+  lSecond := (aBaseUs div (aPeriodSeconds * 1000000) + 1) * aPeriodSeconds;
+  while ModelBlocked(lSecond * 1000, aStart, aEnd) do
+    Inc(lSecond, aPeriodSeconds);
+  Result := lSecond * 1000;
+end;
+
+type
+  TBoundaryZone = class(TInterfacedObject, ICronTimeZone)
+  private
+    fSpringMs, fFallMs: Int64;
+  public
+    constructor Create;
+    function ToUniversalTime(const aLocal: TDateTime; const aForceDaylight: Boolean): TDateTime;
+    function ToLocalTime(const aUtc: TDateTime): TDateTime;
+    function IsAmbiguousTime(const aLocal: TDateTime): Boolean;
+    function IsInvalidTime(const aLocal: TDateTime): Boolean;
+  end;
+
+constructor TBoundaryZone.Create;
+begin
+  inherited;
+  fSpringMs := GridMs(EncodeDate(2075, 3, 31));
+  fFallMs := GridMs(EncodeDate(2075, 10, 27));
+end;
+
+function TBoundaryZone.ToUniversalTime(const aLocal: TDateTime;
+  const aForceDaylight: Boolean): TDateTime;
+var
+  lMs, lOffset: Int64;
+begin
+  lMs := CarrierMs(aLocal);
+  lOffset := 3600000;
+  if (lMs >= fSpringMs + 10800000) and (lMs < fFallMs + 7200000) then
+    lOffset := 7200000;
+  if IsAmbiguousTime(aLocal) and aForceDaylight then
+    lOffset := 7200000;
+  Result := PolicyGrid(lMs - lOffset);
+end;
+
+function TBoundaryZone.ToLocalTime(const aUtc: TDateTime): TDateTime;
+var
+  lMs, lOffset: Int64;
+begin
+  lMs := CarrierMs(aUtc);
+  lOffset := 3600000;
+  if (lMs >= fSpringMs + 3600000) and (lMs < fFallMs + 3600000) then
+    lOffset := 7200000;
+  Result := PolicyGrid(lMs + lOffset);
+end;
+
+function TBoundaryZone.IsAmbiguousTime(const aLocal: TDateTime): Boolean;
+var
+  lMs: Int64;
+begin
+  lMs := CarrierMs(aLocal);
+  Result := (lMs >= fFallMs + 7200000) and (lMs < fFallMs + 10800000);
+end;
+
+function TBoundaryZone.IsInvalidTime(const aLocal: TDateTime): Boolean;
+var
+  lMs: Int64;
+begin
+  lMs := CarrierMs(aLocal);
+  Result := (lMs >= fSpringMs + 7200000) and (lMs < fSpringMs + 10800000);
+end;
+
+procedure CheckHistoricalBlackout(const aStart: Boolean);
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lWallUs, lDayMs, lExpectedMs: Int64;
+begin
+  lDayMs := GridMs(EncodeDate(2075, 1, 2));
+  lWallUs := (lDayMs + 21 * 3600000) * 1000;
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('blackout-22-regression');
+    lEvent.EventPlan := '0 22 * * *';
+    if aStart then
+    begin
+      lEvent.BlackoutStartTime := EncodeTime(22, 0, 0, 0);
+      lEvent.BlackoutEndTime := EncodeTime(23, 0, 0, 0);
+      // Every 22:00 is excluded, use every hour to observe the first allowed time.
+      lEvent.EventPlan := '0 * * * *';
+      lExpectedMs := lDayMs + 23 * 3600000;
+    end else begin
+      lEvent.BlackoutStartTime := EncodeTime(21, 0, 0, 0);
+      lEvent.BlackoutEndTime := EncodeTime(22, 0, 0, 0);
+      lExpectedMs := lDayMs + 22 * 3600000;
+    end;
+    lEvent.Run;
+    Assert.AreEqual(lExpectedMs, CarrierMs(lEvent.NextSchedule), '22:00 inclusive start/exclusive end');
+  finally
+    g.Clear;
+    SetMaxCronWallClockHook(nil);
+  end;
+end;
+
+procedure TTestTimeBoundaries.HistoricalBlackoutStart;
+begin
+  CheckHistoricalBlackout(True);
+end;
+
+procedure TTestTimeBoundaries.HistoricalBlackoutEnd;
+begin
+  CheckHistoricalBlackout(False);
+end;
+
+procedure TTestTimeBoundaries.GeneratedBlackoutWindows;
+const
+  cYears: array[0..2] of Word = (2026, 2075, 2500);
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lWallUs, lDayMs, lStart, lEnd, lExpected, lBaseMs: Int64;
+  lFailures, lChecks: Integer;
+  lSeed: Cardinal;
+  lFirst: string;
+begin
+  lSeed := 20261116;
+  lWallUs := 0;
+  lFailures := 0;
+  lChecks := 0;
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('generated-blackout');
+    lEvent.EventPlan := '* * * * * * */15';
+    for var y := 0 to High(cYears) do
+    begin
+      lDayMs := GridMs(EncodeDate(cYears[y], 6, 5));
+      for var i := 0 to 47 do
+        for var d := -1 to 1 do
+          for var k := -4 to 4 do
+          begin
+            lEvent.Stop;
+            lStart := Int64(i) * 1800000;
+            lEnd := (lStart + 3600000) mod MSecsPerDay;
+            if d = 1 then
+              lEnd := (lStart + 3600500) mod MSecsPerDay;
+            // d=-1 tests the end-at-T form, including wrapping across midnight.
+            if d = -1 then
+            begin
+              lEnd := lStart;
+              lStart := (lEnd + MSecsPerDay - 3600000) mod MSecsPerDay;
+            end;
+            // Zero has no negative finite neighbour in the allowed time-of-day domain.
+            if lStart = 0 then
+              lEvent.BlackoutStartTime := 0
+            else
+              lEvent.BlackoutStartTime := Neighbour(PolicyGrid(lStart), k);
+            if lEnd = 0 then
+              lEvent.BlackoutEndTime := 0
+            else
+              lEvent.BlackoutEndTime := Neighbour(PolicyGrid(lEnd), -k);
+            lStart := CarrierMs(lEvent.BlackoutStartTime);
+            lEnd := CarrierMs(lEvent.BlackoutEndTime);
+            lBaseMs := lDayMs + lStart - 1;
+            lWallUs := lBaseMs * 1000;
+            lExpected := ModelBlackoutNext(lWallUs, lStart, lEnd, 15);
+            lEvent.Run;
+            Inc(lChecks);
+            if CarrierMs(lEvent.NextSchedule) <> lExpected then
+            begin
+              Inc(lFailures);
+              if lFirst = '' then
+                lFirst := Format('year=%d T=%d form=%d ulp=%d baseMs=%d start=%d end=%d observed=%d expected=%d',
+                  [cYears[y], i, d, k, lBaseMs, lStart, lEnd, CarrierMs(lEvent.NextSchedule), lExpected]);
+            end;
+          end;
+    end;
+    for var i := 0 to 511 do
+    begin
+      lEvent.Stop;
+      lSeed := (UInt64(lSeed) * 1664525 + 1013904223) and $FFFFFFFF;
+      lStart := lSeed mod MSecsPerDay;
+      lSeed := (UInt64(lSeed) * 1664525 + 1013904223) and $FFFFFFFF;
+      lEnd := (lStart + 1 + lSeed mod (MSecsPerDay - 1)) mod MSecsPerDay;
+      lEvent.BlackoutStartTime := PolicyGrid(lStart);
+      lEvent.BlackoutEndTime := PolicyGrid(lEnd);
+      lDayMs := GridMs(EncodeDate(cYears[i mod 3], 6, 5));
+      lWallUs := (lDayMs + lStart - 1) * 1000;
+      lExpected := ModelBlackoutNext(lWallUs, lStart, lEnd, 15);
+      lEvent.Run;
+      Inc(lChecks);
+      if CarrierMs(lEvent.NextSchedule) <> lExpected then
+      begin
+        Inc(lFailures);
+        if lFirst = '' then
+          lFirst := Format('random=%d start=%d end=%d observed=%d expected=%d',
+            [i, lStart, lEnd, CarrierMs(lEvent.NextSchedule), lExpected]);
+      end;
+    end;
+    Assert.AreEqual(0, lFailures, Format('seed=20261116 checks=%d failures=%d first=%s',
+      [lChecks, lFailures, lFirst]));
+  finally
+    g.Clear;
+    SetMaxCronWallClockHook(nil);
+  end;
+end;
+
+procedure TTestTimeBoundaries.BlackoutPreciseTicks;
+const
+  cEdges: array[0..3] of Integer = (6, 9, 17, 22);
+  cDelta: array[0..8] of Integer = (-1000001, -1000, -400, -1, 0, 1, 400, 1000, 999999);
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lWallUs, lTickUs, lDueMs, lDayMs, lStart, lEnd, lExpectedMs: Int64;
+  lFires, lExpectedFires: Integer;
+begin
+  lDayMs := GridMs(EncodeDate(2500, 12, 31));
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('precise-blackout');
+    lEvent.EventPlan := '* * * * * * *';
+    lEvent.InvokeMode := imMainThread;
+    lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lFires); end;
+    for var w := 0 to 1 do
+    begin
+      if w = 0 then
+      begin
+        lStart := 9 * 3600000;
+        lEnd := 17 * 3600000;
+      end else begin
+        lStart := 22 * 3600000;
+        lEnd := 6 * 3600000;
+      end;
+      for var i := 0 to High(cEdges) do
+        for var j := 0 to High(cDelta) do
+        begin
+          lEvent.Stop;
+          lEvent.BlackoutStartTime := PolicyGrid(lStart);
+          lEvent.BlackoutEndTime := PolicyGrid(lEnd);
+          lTickUs := (lDayMs + Int64(cEdges[i]) * 3600000) * 1000 + cDelta[j];
+          lDueMs := (lTickUs div 1000000) * 1000;
+          lWallUs := lDueMs * 1000 - 1;
+          lEvent.Run;
+          lFires := 0;
+          lCron.TickAtUs(lTickUs);
+          lExpectedFires := 1;
+          if ModelBlocked(lDueMs, lStart, lEnd) then
+            lExpectedFires := 0;
+          Assert.AreEqual(lExpectedFires, lFires, Format('window=%d edge=%d deltaUs=%d', [w, cEdges[i], cDelta[j]]));
+          lExpectedMs := ModelBlackoutNext(lTickUs, lStart, lEnd, 1);
+          Assert.AreEqual(lExpectedMs, CarrierMs(lEvent.NextSchedule));
+        end;
+    end;
+  finally
+    g.Clear;
+    SetMaxCronWallClockHook(nil);
+  end;
+end;
+
+procedure TTestTimeBoundaries.GeneratedExcludedDates;
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lWallUs, lDayMs: Int64;
+  lFires: Integer;
+  lDate: TDateTime;
+begin
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('excluded-midnights');
+    lEvent.EventPlan := '* * * * * * *';
+    lEvent.InvokeMode := imMainThread;
+    lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lFires); end;
+    for var i := 0 to 63 do
+    begin
+      lEvent.Stop;
+      lDate := EncodeDate(2026 + i * 7, 1 + i mod 12, 1 + i mod 28);
+      lDayMs := GridMs(lDate);
+      lEvent.ExcludedDatesCsv := FormatDateTime('yyyy-mm-dd', lDate);
+      lWallUs := lDayMs * 1000 - 1000001;
+      lEvent.Run;
+      lFires := 0;
+      lCron.TickAtUs(lDayMs * 1000 - 1000);
+      Assert.AreEqual(1, lFires, '23:59:59.999 of previous date runs');
+      lCron.TickAtUs(lDayMs * 1000);
+      Assert.AreEqual(1, lFires, '00:00:00 of excluded date does not run');
+      Assert.AreEqual(lDayMs + MSecsPerDay, CarrierMs(lEvent.NextSchedule));
+    end;
+  finally
+    g.Clear;
+    SetMaxCronWallClockHook(nil);
+  end;
+end;
+
+procedure TTestTimeBoundaries.FakeDstPolicies;
+const
+  cDelta: array[0..8] of Integer = (-999999, -500, -499, -1, 0, 1, 499, 500, 999999);
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lZone: ICronTimeZone;
+  lWallUs, lSpringMs, lFallMs, lDueUs, lExpectedMs: Int64;
+  lFires, lExpectedFirst, lExpectedSecond: Integer;
+begin
+  lZone := TBoundaryZone.Create;
+  lSpringMs := GridMs(EncodeDate(2075, 3, 31));
+  lFallMs := GridMs(EncodeDate(2075, 10, 27));
+  SetCronSystemTimeZoneForTests(lZone);
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('fake-dst');
+    lEvent.EventPlan := '0 2 * * *';
+    lEvent.InvokeMode := imMainThread;
+    lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lFires); end;
+    for var p := 0 to 1 do
+      for var i := 0 to High(cDelta) do
+      begin
+        lEvent.Stop;
+        lEvent.DstSpringPolicy := TmaxCronDstSpringPolicy(p);
+        lWallUs := (lSpringMs + 7200000) * 1000 - 1000000;
+        lEvent.Run;
+        lExpectedMs := lSpringMs + MSecsPerDay + 7200000;
+        if p = Ord(TmaxCronDstSpringPolicy.dspRunAtNextValidTime) then
+          lExpectedMs := lSpringMs + 10800000;
+        Assert.AreEqual(lExpectedMs, CarrierMs(lEvent.NextSchedule), 'spring policy=' + IntToStr(p));
+        lFires := 0;
+        lCron.TickAtUs((lSpringMs + 10800000) * 1000 + cDelta[i]);
+        lExpectedFirst := 0;
+        if (p = Ord(TmaxCronDstSpringPolicy.dspRunAtNextValidTime)) and (cDelta[i] >= 0) then
+          lExpectedFirst := 1;
+        Assert.AreEqual(lExpectedFirst, lFires, 'spring precise edge');
+      end;
+    for var p := Ord(Low(TmaxCronDstFallPolicy)) to Ord(High(TmaxCronDstFallPolicy)) do
+      for var i := 0 to High(cDelta) do
+      begin
+        lEvent.Stop;
+        lEvent.DstFallPolicy := TmaxCronDstFallPolicy(p);
+        lDueUs := (lFallMs + 7200000) * 1000;
+        lWallUs := lDueUs - 1000000;
+        lEvent.Run;
+        lFires := 0;
+        lCron.TickAtUs(lDueUs + cDelta[i]);
+        lExpectedFirst := 0;
+        if (cDelta[i] >= 0) and (p <> Ord(TmaxCronDstFallPolicy.dfpRunOncePreferSecondInstance)) then
+          lExpectedFirst := 1;
+        Assert.AreEqual(lExpectedFirst, lFires, 'fall first instance');
+        // Ensure target reached, then simulate rollback and the repeated instant.
+        lCron.TickAtUs(lDueUs + 999999);
+        lCron.TickAtUs(lDueUs - 1);
+        lCron.TickAtUs(lDueUs + cDelta[i]);
+        lExpectedSecond := 1;
+        if p = Ord(TmaxCronDstFallPolicy.dfpRunOncePreferSecondInstance) then
+          lExpectedSecond := 0;
+        if cDelta[i] >= 0 then
+        begin
+          lExpectedSecond := 1;
+          if p = Ord(TmaxCronDstFallPolicy.dfpRunTwice) then
+            lExpectedSecond := 2;
+        end;
+        Assert.AreEqual(lExpectedSecond, lFires, 'fall repeated instance');
+      end;
+    // The fake-zone boundary classifier itself follows exact-ms carrier semantics at ulp neighbours.
+    for var k := -8 to 8 do
+      for var i := 0 to 3 do
+      begin
+        lExpectedMs := lSpringMs + 7200000;
+        case i of
+          1: lExpectedMs := lSpringMs + 10800000;
+          2: lExpectedMs := lFallMs + 7200000;
+          3: lExpectedMs := lFallMs + 10800000;
+        end;
+        Assert.AreEqual(i = 0, lZone.IsInvalidTime(Neighbour(PolicyGrid(lExpectedMs), k)));
+        Assert.AreEqual(i = 2, lZone.IsAmbiguousTime(Neighbour(PolicyGrid(lExpectedMs), k)));
+      end;
+  finally
+    g.Clear;
+    SetMaxCronWallClockHook(nil);
+    SetCronSystemTimeZoneForTests(nil);
+  end;
+end;
+
+procedure TTestTimeBoundaries.GeneratedUtcOffsetHours;
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lZone: ICronTimeZone;
+  lWallUs, lDayMs, lUtcMs, lExpectedMs, lOffset, lEventMs: Int64;
+begin
+  lZone := TBoundaryZone.Create;
+  SetCronSystemTimeZoneForTests(lZone);
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('utc-offset-hours');
+    for var d := 0 to 1 do
+    begin
+      lDayMs := GridMs(EncodeDate(2075, 3, 31));
+      if d = 1 then
+        lDayMs := GridMs(EncodeDate(2075, 10, 27));
+      for var z := 0 to 1 do
+      begin
+        lOffset := 0;
+        if z = 1 then
+          lOffset := 19800000;
+        for var h := -24 to 47 do
+          for var k := -4 to 4 do
+          begin
+            lEvent.Stop;
+            lEvent.TimeZoneId := 'UTC';
+            if z = 1 then
+              lEvent.TimeZoneId := 'UTC+05:30';
+            lUtcMs := lDayMs + Int64(h) * 3600000;
+            lEventMs := lUtcMs + lOffset;
+            lEvent.EventPlan := Format('%d %d * * *', [MinuteOf(PolicyGrid(lEventMs)), HourOf(PolicyGrid(lEventMs))]);
+            // Begin two system-local days earlier to avoid ambiguity when deriving the search base.
+            lWallUs := (lDayMs - 2 * MSecsPerDay) * 1000;
+            lEvent.ValidFrom := Neighbour(lZone.ToLocalTime(PolicyGrid(lUtcMs - 1000)), k);
+            lEvent.Run;
+            lExpectedMs := lUtcMs + 3600000;
+            if ((d = 0) and (h >= 1)) or ((d = 1) and (h < 1)) then
+              lExpectedMs := lUtcMs + 7200000;
+            // ValidFrom in the repeated system hour maps to standard time by the preserved policy.
+            if (d = 1) and (h = 1) then
+              lExpectedMs := lUtcMs + MSecsPerDay + 3600000;
+            Assert.AreEqual(lExpectedMs, CarrierMs(lEvent.NextSchedule),
+              Format('transition=%d zone=%d utcHour=%d ulp=%d', [d, z, h, k]));
+          end;
+      end;
+    end;
+  finally
+    g.Clear;
+    SetMaxCronWallClockHook(nil);
+    SetCronSystemTimeZoneForTests(nil);
+  end;
+end;
+
+procedure TTestTimeBoundaries.GeneratedDstSearchEdges;
+const
+  cDelta: array[0..8] of Integer = (-999999, -501, -500, -499, -1, 0, 1, 500, 999999);
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lZone: ICronTimeZone;
+  lWallUs, lDayMs, lEdgeUs, lExpectedMs: Int64;
+begin
+  lZone := TBoundaryZone.Create;
+  SetCronSystemTimeZoneForTests(lZone);
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('dst-search-edges');
+    lEvent.EventPlan := '* * * * * * *';
+    for var d := 0 to 1 do
+      for var e := 2 to 3 do
+        for var p := 0 to 1 do
+          for var i := 0 to High(cDelta) + 17 do
+          begin
+            lEvent.Stop;
+            lEvent.DstSpringPolicy := TmaxCronDstSpringPolicy(p);
+            lDayMs := GridMs(EncodeDate(2075, 3, 31));
+            if d = 1 then
+              lDayMs := GridMs(EncodeDate(2075, 10, 27));
+            lEdgeUs := (lDayMs + Int64(e) * 3600000) * 1000;
+            if i <= High(cDelta) then
+              lWallUs := lEdgeUs + cDelta[i]
+            else
+              lWallUs := CarrierUs(Neighbour(PolicyGrid(lEdgeUs div 1000), i - High(cDelta) - 9));
+            lExpectedMs := (lWallUs div 1000000 + 1) * 1000;
+            if (d = 0) and (lExpectedMs >= lDayMs + 7200000) and (lExpectedMs < lDayMs + 10800000) then
+            begin
+              if p = Ord(TmaxCronDstSpringPolicy.dspSkip) then
+                lExpectedMs := lDayMs + 10800000
+              else
+                Inc(lExpectedMs, 3600000);
+            end;
+            lEvent.Run;
+            Assert.AreEqual(lExpectedMs, CarrierMs(lEvent.NextSchedule),
+              Format('transition=%d edge=%d policy=%d variant=%d nowUs=%d', [d, e, p, i, lWallUs]));
+          end;
+  finally
+    g.Clear;
+    SetMaxCronWallClockHook(nil);
+    SetCronSystemTimeZoneForTests(nil);
   end;
 end;
 

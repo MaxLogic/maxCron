@@ -718,6 +718,8 @@ NewSchedule.BlackoutEndTime := EncodeTime(17, 0, 0, 0);       // ..until 17:00
 
 These exclusions are applied after cron matching and before callback dispatch.
 
+Blackout windows include the start time and exclude the end time: `[09:00, 17:00)` skips 09:00 and permits 17:00. Windows can cross midnight, such as `[22:00, 06:00)`. Equal start and end times disable the window. Times are interpreted at the nearest millisecond, ties to even.
+
 ## Hash / jitter tokens
 
 `H` picks deterministic values from a stable hash seed (event name).

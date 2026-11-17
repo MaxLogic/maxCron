@@ -965,7 +965,7 @@ const
   OneMinute = 1 / 24 / 60;
   OneSecond = OneMinute / 60;
   OneHour = 1 / 24;
-  cTickUnitsPerDay = 24.0 * 60.0 * 60.0 * 1000.0;
+
 procedure Log(const msg: string);
 begin
   // pawel1.AddToLogFile(msg, 's:\tmp\te.log');
@@ -4425,7 +4425,7 @@ begin
       lMonth := StrToInt(Copy(lToken, 6, 2));
       lDay := StrToInt(Copy(lToken, 9, 2));
       lDate := EncodeDate(lYear, lMonth, lDay);
-      lSerial := Trunc(lDate);
+      lSerial := CronFloorDiv(CronDateTimeToMs(lDate), cCronMsPerDay);
       if lDates.IndexOf(lSerial) < 0 then
         lDates.Add(lSerial);
     end;
@@ -4673,7 +4673,7 @@ begin
     raise Exception.Create('BlackoutStartTime must be in [00:00, 23:59:59]');
   fLock.Acquire;
   try
-    fBlackoutStartTime := Frac(Value);
+    fBlackoutStartTime := Value;
     if FEnabled then
       ResetSchedule;
   finally
@@ -4687,7 +4687,7 @@ begin
     raise Exception.Create('BlackoutEndTime must be in [00:00, 23:59:59]');
   fLock.Acquire;
   try
-    fBlackoutEndTime := Frac(Value);
+    fBlackoutEndTime := Value;
     if FEnabled then
       ResetSchedule;
   finally
@@ -4700,12 +4700,12 @@ var
   lHourKey: Int64;
   lHourStartUtc: TDateTime;
   lHourEndUtc: TDateTime;
-  lStartOffsetDays: Double;
-  lEndOffsetDays: Double;
+  lStartOffsetMs: Int64;
+  lEndOffsetMs: Int64;
 begin
   Result := False;
   aOffsetDays := 0;
-  lHourKey := Trunc(aUtc * 24.0);
+  lHourKey := CronFloorDiv(CronDateTimeToMs(aUtc), 3600000);
 
   if fUtcToLocalCacheStable and (fUtcToLocalCacheHourKey = lHourKey) then
   begin
@@ -4713,17 +4713,17 @@ begin
     Exit(True);
   end;
 
-  lHourStartUtc := lHourKey / 24.0;
-  lHourEndUtc := lHourStartUtc + OneHour - OneSecond;
-  lStartOffsetDays := fSystemTimeZone.ToLocalTime(lHourStartUtc) - lHourStartUtc;
-  lEndOffsetDays := fSystemTimeZone.ToLocalTime(lHourEndUtc) - lHourEndUtc;
+  lHourStartUtc := CronMsToDateTime(lHourKey * 3600000);
+  lHourEndUtc := CronMsToDateTime((lHourKey + 1) * 3600000 - cCronMsPerSecond);
+  lStartOffsetMs := CronDateTimeToMs(fSystemTimeZone.ToLocalTime(lHourStartUtc)) - CronDateTimeToMs(lHourStartUtc);
+  lEndOffsetMs := CronDateTimeToMs(fSystemTimeZone.ToLocalTime(lHourEndUtc)) - CronDateTimeToMs(lHourEndUtc);
 
   fUtcToLocalCacheHourKey := lHourKey;
-  if Abs(lStartOffsetDays - lEndOffsetDays) <= (1 / cTickUnitsPerDay) then
+  if lStartOffsetMs = lEndOffsetMs then
   begin
-    fUtcToLocalCacheOffsetDays := lStartOffsetDays;
+    fUtcToLocalCacheOffsetDays := lStartOffsetMs / cCronMsPerDay;
     fUtcToLocalCacheStable := True;
-    aOffsetDays := lStartOffsetDays;
+    aOffsetDays := fUtcToLocalCacheOffsetDays;
     Result := True;
   end else begin
     fUtcToLocalCacheStable := False;
@@ -4809,16 +4809,16 @@ end;
 
 function TmaxCronEvent.IsTimeInBlackout(const aEventLocalDateTime: TDateTime): Boolean;
 var
-  lTimeOnly: TDateTime;
+  lTimeMs, lStartMs, lEndMs: Int64;
 begin
-  if (fBlackoutStartTime = 0) and (fBlackoutEndTime = 0) then
+  lStartMs := CronDateTimeToMs(fBlackoutStartTime);
+  lEndMs := CronDateTimeToMs(fBlackoutEndTime);
+  if lStartMs = lEndMs then
     Exit(False);
-  if fBlackoutStartTime = fBlackoutEndTime then
-    Exit(False);
-  lTimeOnly := Frac(aEventLocalDateTime);
-  if fBlackoutStartTime < fBlackoutEndTime then
-    Exit((lTimeOnly >= fBlackoutStartTime) and (lTimeOnly < fBlackoutEndTime));
-  Result := (lTimeOnly >= fBlackoutStartTime) or (lTimeOnly < fBlackoutEndTime);
+  lTimeMs := CronDateTimeToMs(aEventLocalDateTime) mod cCronMsPerDay;
+  if lStartMs < lEndMs then
+    Exit((lTimeMs >= lStartMs) and (lTimeMs < lEndMs));
+  Result := (lTimeMs >= lStartMs) or (lTimeMs < lEndMs);
 end;
 
 
@@ -4840,10 +4840,8 @@ var
   lWeekendExcluded: Boolean;
   lDateExcluded: Boolean;
   lBlackoutExcluded: Boolean;
-  lAdvanceCursor: TDateTime;
-  lDateBase: TDateTime;
-  lTimeOnly: TDateTime;
-  lBlackoutEnd: TDateTime;
+  lEventNextMs, lDay, lAdvanceSecond, lNextSecond: Int64;
+  lTimeMs, lStartMs, lEndMs, lBlackoutEndMs: Int64;
 begin
   if fPendingDstSecondSchedule > 0 then
   begin
@@ -4881,17 +4879,19 @@ begin
     if not fScheduler.FindNextScheduleDate(lEventCursor, lEventNext, lEventValidFrom, lEventValidTo) then
       Exit(TFindNextScheduleResult.fnsNotFound);
 
+    lEventNextMs := CronDateTimeToMs(lEventNext);
+    lDay := CronFloorDiv(lEventNextMs, cCronMsPerDay);
     lWeekendExcluded := False;
     if fWeekdaysOnly then
     begin
-      lDow := DayOfTheWeek(lEventNext);
+      lDow := ((lDay + 5) mod 7) + 1; // ISO Monday=1, epoch Saturday=6.
       lWeekendExcluded := (lDow = 6) or (lDow = 7);
     end;
 
     lDateExcluded := False;
     if not lWeekendExcluded then
     begin
-      lDateSerial := Trunc(lEventNext);
+      lDateSerial := lDay;
       lLow := 0;
       lHigh := Length(fExcludedDateSerials) - 1;
       while lLow <= lHigh do
@@ -4915,29 +4915,28 @@ begin
 
     if lWeekendExcluded or lDateExcluded or lBlackoutExcluded then
     begin
-      lAdvanceCursor := lEventNext;
+      lNextSecond := CronFloorDiv(lEventNextMs, cCronMsPerSecond);
+      lAdvanceSecond := lNextSecond;
 
       if lWeekendExcluded or lDateExcluded then
-        lAdvanceCursor := Trunc(lEventNext) + 1 - OneSecond
+        lAdvanceSecond := (lDay + 1) * cCronSecondsPerDay - 1
       else if lBlackoutExcluded then
       begin
-        lDateBase := Trunc(lEventNext);
-        if fBlackoutStartTime < fBlackoutEndTime then
-          lBlackoutEnd := lDateBase + fBlackoutEndTime
-        else begin
-          lTimeOnly := Frac(lEventNext);
-          if lTimeOnly >= fBlackoutStartTime then
-            lBlackoutEnd := lDateBase + 1 + fBlackoutEndTime
-          else
-            lBlackoutEnd := lDateBase + fBlackoutEndTime;
-        end;
-        lAdvanceCursor := lBlackoutEnd - OneSecond;
+        lStartMs := CronDateTimeToMs(fBlackoutStartTime);
+        lEndMs := CronDateTimeToMs(fBlackoutEndTime);
+        lTimeMs := lEventNextMs mod cCronMsPerDay;
+        lBlackoutEndMs := lDay * cCronMsPerDay + lEndMs;
+        if (lStartMs > lEndMs) and (lTimeMs >= lStartMs) then
+          Inc(lBlackoutEndMs, cCronMsPerDay);
+        // Search is strict-after: start at the second before the first allowed
+        // occurrence, including a fractional-ms end such as 06:00:00.500.
+        lAdvanceSecond := CronCeilDiv(lBlackoutEndMs, cCronMsPerSecond) - 1;
       end;
 
-      if lAdvanceCursor <= lEventNext then
-        lAdvanceCursor := lEventNext;
+      if lAdvanceSecond < lNextSecond then
+        lAdvanceSecond := lNextSecond;
 
-      lEventCursor := lAdvanceCursor;
+      lEventCursor := CronSecondToDateTime(lAdvanceSecond);
       Continue;
     end;
 

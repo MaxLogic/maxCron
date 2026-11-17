@@ -17,6 +17,10 @@ type
 
 // Re-reads the RTL system zone on every call, including its exception behavior.
 function CronSystemTimeZone: ICronTimeZone;
+{$IFDEF MAXCRON_TESTS}
+// Set before creating a scheduler; nil restores the RTL zone. Tests run serially.
+procedure SetCronSystemTimeZoneForTests(const aZone: ICronTimeZone);
+{$ENDIF}
 
 implementation
 
@@ -34,9 +38,21 @@ type
 
 var
   gSystemTimeZone: ICronTimeZone;
+{$IFDEF MAXCRON_TESTS}
+  gTestTimeZone: ICronTimeZone;
+
+procedure SetCronSystemTimeZoneForTests(const aZone: ICronTimeZone);
+begin
+  gTestTimeZone := aZone;
+end;
+{$ENDIF}
 
 function CronSystemTimeZone: ICronTimeZone;
 begin
+{$IFDEF MAXCRON_TESTS}
+  if Assigned(gTestTimeZone) then
+    Exit(gTestTimeZone);
+{$ENDIF}
   Result := gSystemTimeZone;
 end;
 
