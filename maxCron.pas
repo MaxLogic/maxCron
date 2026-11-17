@@ -10,7 +10,11 @@ interface
 
 
 uses
+  {$IFDEF FPC}
+  Classes, Generics.Collections, SyncObjs, SysUtils,
+  {$ELSE}
   System.Classes, System.Generics.Collections, System.SyncObjs, System.SysUtils,
+  {$ENDIF}
   maxCron.Internal.DeadlineQueue, maxCron.Internal.Platform, maxCron.Plan;
 
 type
@@ -592,8 +596,12 @@ function CronInstantUsToDateTime(const aValue: TCronInstantUs): TDateTime;
 implementation
 
 uses
+  {$IFDEF FPC}
+  DateUtils, Math, StrUtils, System.Diagnostics, System.Threading,
+  {$ELSE}
   System.DateUtils, System.Diagnostics, System.Math, System.StrUtils, System.Threading,
-  maxCron.Internal.TimeZone;
+  {$ENDIF}
+  maxCron.Internal.Text, maxCron.Internal.TimeZone;
 
 function CronFloorDiv(const aValue, aDivisor: Int64): Int64;
 begin
@@ -1055,26 +1063,6 @@ begin
     aCronEvent := nil;
 end;
 
-procedure SplitString(const s: string; delim: char; ts: TStrings);
-var
-  i: integer;
-  t: string;
-begin
-  t := '';
-  for i := 1 to length(s) do
-  begin
-    if (s[i] <> delim) then
-      t := t + s[i]
-    else
-    begin
-      ts.Add(t);
-      t := '';
-    end;
-  end;
-
-  if t <> '' then
-    ts.Add(t);
-end;
 
 function CallSimpleAsync(const aProc: TThreadProcedure; const aTaskName: string): IInterface;
 begin
@@ -2241,8 +2229,8 @@ begin
   fDefaultDialect := cdMaxCron;
   fDefaultMisfirePolicy := TmaxCronMisfirePolicy.mpCatchUpAll;
   fDefaultMisfireCatchUpLimit := 1;
-  fUsePooledThreadDispatch := SameText(Trim(CronGetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL')), '1') or
-    SameText(Trim(CronGetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL')), 'true');
+  fUsePooledThreadDispatch := CronSameTextAscii(Trim(CronGetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL')), '1') or
+    CronSameTextAscii(Trim(CronGetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL')), 'true');
   fGlobalMaxConcurrentCallbacks := 0;
   fGlobalMaxDispatchPerSecond := 0;
   fGlobalActiveCallbacks := 0;
@@ -2297,9 +2285,9 @@ begin
   ConfigureSchedulerEngine;
   fSharedState := TCronSharedState.Create(Self);
   fPreferredTimerResolution := TCronWaitResolution.HighResolution;
-  if SameText(CronGetEnvironmentVariable('MAXCRON_TIMER_RESOLUTION'), 'period') then
+  if CronSameTextAscii(CronGetEnvironmentVariable('MAXCRON_TIMER_RESOLUTION'), 'period') then
     fPreferredTimerResolution := TCronWaitResolution.TimerPeriod
-  else if SameText(CronGetEnvironmentVariable('MAXCRON_TIMER_RESOLUTION'), 'default') then
+  else if CronSameTextAscii(CronGetEnvironmentVariable('MAXCRON_TIMER_RESOLUTION'), 'default') then
     fPreferredTimerResolution := TCronWaitResolution.SystemDefault;
   CreateTimer(aTimerBackend);
 end;
@@ -2332,7 +2320,7 @@ begin
   if lText = '' then
     Exit;
 
-  if not TryStrToInt64(lText, lParsed) then
+  if not CronTryStrToInt64(lText, lParsed) then
     Exit;
   if (lParsed < Low(Integer)) or (lParsed > High(Integer)) then
     Exit;
@@ -2345,15 +2333,13 @@ function TmaxCron.TryReadAutoFloatEnv(const aEnvName: string; out aValue: Double
 var
   lText: string;
   lParsed: Double;
-  lFormatSettings: TFormatSettings;
 begin
   Result := False;
   lText := Trim(CronGetEnvironmentVariable(aEnvName));
   if lText = '' then
     Exit;
 
-  lFormatSettings := TFormatSettings.Invariant;
-  if not TryStrToFloat(lText, lParsed, lFormatSettings) then
+  if not CronTryStrToFloatInvariant(lText, lParsed) then
     Exit;
   if IsNan(lParsed) or IsInfinite(lParsed) then
     Exit;
@@ -2519,7 +2505,7 @@ var
 begin
   ConfigureAutoControllerSettings;
 
-  lValue := LowerCase(Trim(CronGetEnvironmentVariable('MAXCRON_ENGINE')));
+  lValue := CronLowerAscii(Trim(CronGetEnvironmentVariable('MAXCRON_ENGINE')));
   if lValue = 'heap' then
     fSchedulerEngine := TSchedulerEngine.seHeap
   else if lValue = 'shadow' then
@@ -2887,7 +2873,6 @@ var
   lDirtySample: Double;
   lEnterCandidate: Boolean;
   lExitCandidate: Boolean;
-  lFormatSettings: TFormatSettings;
   lHasPerfSignal: Boolean;
   lLogLine: string;
   lMinPerfSamples: Integer;
@@ -2965,27 +2950,26 @@ begin
       Dec(fAutoDiagLogTicksUntilEmit);
       if fAutoDiagLogTicksUntilEmit = 0 then
       begin
-        lFormatSettings := TFormatSettings.Invariant;
         lLogLine := Format(cAutoDiagLogFormat,
           [
             SchedulerEngineToText(aEngineUsed),
             SchedulerEngineToText(fAutoEffectiveEngine),
             AutoStateToText(fAutoState),
-            IntToStr(aEventCount),
-            IntToStr(aDueCount),
-            FloatToStrF(fAutoDueDensityEwma, ffFixed, 18, 6, lFormatSettings),
-            FloatToStrF(fAutoDirtyRateEwma, ffFixed, 18, 6, lFormatSettings),
-            FloatToStrF(fAutoScanTickUsEwma, ffFixed, 18, 2, lFormatSettings),
-            FloatToStrF(fAutoHeapTickUsEwma, ffFixed, 18, 2, lFormatSettings),
-            FloatToStrF(fAutoScanBaselineUs, ffFixed, 18, 2, lFormatSettings),
-            IntToStr(Int64(fAutoSwitchCount)),
-            IntToStr(fAutoCooldownTicks),
-            IntToStr(fAutoTrialFailLevel),
-            IntToStr(fAutoTrialFailCooldownTicks),
-            IntToStr(fAutoSwitchBudgetHits),
-            IntToStr(lSwitchBudgetCooldownTicks),
-            IntToStr(fAutoSwitchHistory.Count),
-            IntToStr(fAutoSwitchBurstLevel),
+            CronIntToStr(aEventCount),
+            CronIntToStr(aDueCount),
+            FloatToStrF(fAutoDueDensityEwma, ffFixed, 18, 6, TFormatSettings.Invariant),
+            FloatToStrF(fAutoDirtyRateEwma, ffFixed, 18, 6, TFormatSettings.Invariant),
+            FloatToStrF(fAutoScanTickUsEwma, ffFixed, 18, 2, TFormatSettings.Invariant),
+            FloatToStrF(fAutoHeapTickUsEwma, ffFixed, 18, 2, TFormatSettings.Invariant),
+            FloatToStrF(fAutoScanBaselineUs, ffFixed, 18, 2, TFormatSettings.Invariant),
+            CronIntToStr(Int64(fAutoSwitchCount)),
+            CronIntToStr(fAutoCooldownTicks),
+            CronIntToStr(fAutoTrialFailLevel),
+            CronIntToStr(fAutoTrialFailCooldownTicks),
+            CronIntToStr(fAutoSwitchBudgetHits),
+            CronIntToStr(lSwitchBudgetCooldownTicks),
+            CronIntToStr(fAutoSwitchHistory.Count),
+            CronIntToStr(fAutoSwitchBurstLevel),
             fAutoLastSwitchReason
           ]);
         CronDebugOutput(lLogLine);
@@ -3302,7 +3286,7 @@ end;
 
 function TmaxCron.EventNameKey(const aName: string): string;
 begin
-  Result := UpperCase(aName);
+  Result := CronUpperAscii(aName);
 end;
 
 procedure TmaxCron.IndexEventLocked(const aEventItem: IMaxCronEvent; const aIndex: Integer);
@@ -3606,7 +3590,7 @@ begin
     begin
       if lIndex > 0 then
         lBuilder.Append(',');
-      lBuilder.Append(IntToStr(aIds[lIndex]));
+      lBuilder.Append(CronIntToStr(aIds[lIndex]));
     end;
     lBuilder.Append(']');
     Result := lBuilder.ToString;
@@ -3789,7 +3773,7 @@ begin
     if (lIndex >= 0) and (lIndex < fItems.Count) then
     begin
       lEvent := fItems[lIndex];
-      if (lEvent = nil) or (not SameText(lEvent.Name, lName)) then
+      if (lEvent = nil) or (not CronSameTextAscii(lEvent.Name, lName)) then
         lIndex := -1;
     end;
     Result := DeleteLocked(lIndex);
@@ -4888,7 +4872,7 @@ end;
 
 procedure TmaxCronEvent.ParseExcludedDatesCsv(const aValue: string; out aDateSerials: TArray<Integer>);
 var
-  lItems: TStringList;
+  lItems: TArray<string>;
   lDates: TList<Integer>;
   lIndex: Integer;
   lToken: string;
@@ -4904,11 +4888,10 @@ begin
   if Trim(aValue) = '' then
     Exit;
 
-  lItems := TStringList.Create;
+  lItems := CronSplitChar(aValue, ',');
   lDates := TList<Integer>.Create;
   try
-    SplitString(aValue, ',', lItems);
-    for lIndex := 0 to lItems.Count - 1 do
+    for lIndex := 0 to Length(lItems) - 1 do
     begin
       lToken := Trim(lItems[lIndex]);
       if lToken = '' then
@@ -4917,9 +4900,9 @@ begin
       lDash2 := LastDelimiter('-', lToken);
       if (Length(lToken) <> 10) or (lDash1 <> 5) or (lDash2 <> 8) then
         raise Exception.Create('Invalid excluded date; expected YYYY-MM-DD');
-      lYear := StrToInt(Copy(lToken, 1, 4));
-      lMonth := StrToInt(Copy(lToken, 6, 2));
-      lDay := StrToInt(Copy(lToken, 9, 2));
+      lYear := CronStrToInt(Copy(lToken, 1, 4));
+      lMonth := CronStrToInt(Copy(lToken, 6, 2));
+      lDay := CronStrToInt(Copy(lToken, 9, 2));
       lDate := EncodeDate(lYear, lMonth, lDay);
       lSerial := CronFloorDiv(CronDateTimeToMs(lDate), cCronMsPerDay);
       if lDates.IndexOf(lSerial) < 0 then
@@ -4931,7 +4914,6 @@ begin
       aDateSerials[lIndex] := lDates[lIndex];
   finally
     lDates.Free;
-    lItems.Free;
   end;
 end;
 
@@ -5002,7 +4984,7 @@ var
   lMinutes: Integer;
   lIndex: Integer;
 begin
-  lText := UpperCase(Trim(aValue));
+  lText := CronUpperAscii(Trim(aValue));
   if (lText = '') or (lText = 'LOCAL') then
   begin
     aKind := TCronTimeZoneKind.ctzLocal;
@@ -5051,8 +5033,8 @@ begin
       if (lMinutesText[lIndex] < '0') or (lMinutesText[lIndex] > '9') then
         Exit(False);
 
-    lHours := StrToInt(lHoursText);
-    lMinutes := StrToInt(lMinutesText);
+    lHours := CronStrToInt(lHoursText);
+    lMinutes := CronStrToInt(lMinutesText);
   end else begin
     if (Length(lOffsetText) < 1) or (Length(lOffsetText) > 2) then
       Exit(False);
@@ -5060,7 +5042,7 @@ begin
       if (lOffsetText[lIndex] < '0') or (lOffsetText[lIndex] > '9') then
         Exit(False);
 
-    lHours := StrToInt(lOffsetText);
+    lHours := CronStrToInt(lOffsetText);
     lMinutes := 0;
   end;
 
@@ -5666,7 +5648,7 @@ function TmaxCronEvent.GetHashSeed: string;
 begin
   if FName <> '' then
     Exit(FName);
-  Result := '#' + IntToStr(fId);
+  Result := '#' + CronIntToStr(fId);
 end;
 
 function TmaxCronEvent.TryGetHeapScheduleSnapshot(out aId: Int64; out aDueAt: TDateTime): Boolean;
@@ -6327,7 +6309,7 @@ begin
         except
           on E: Exception do
           begin
-            lErrorText := E.ClassName + ': ' + E.Message;
+            lErrorText := E.ClassName + ': ' + CronExceptionText(E);
             if lAttemptIndex >= lRetryMaxAttempts then
               Break;
 

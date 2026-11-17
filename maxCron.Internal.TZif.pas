@@ -4,7 +4,11 @@ unit maxCron.Internal.TZif;
 interface
 
 uses
+  {$IFDEF FPC}
+  SysUtils,
+  {$ELSE}
   System.SysUtils,
+  {$ENDIF}
   maxCron.Internal.TimeZone;
 
 function TryParseCronTzif(const aBytes: TBytes; out aSource: ICronZoneRuleSource;
@@ -15,8 +19,12 @@ function TryLoadCronTzifFile(const aRoot, aName: string; out aSource: ICronZoneR
 implementation
 
 uses
+  {$IFDEF FPC}
+  Classes, System.IOUtils,
+  {$ELSE}
   System.Classes, System.IOUtils,
-  maxCron.Plan;
+  {$ENDIF}
+  maxCron.Internal.Text, maxCron.Plan;
 
 const
   cMaxTzifSize = 1048576;
@@ -535,7 +543,7 @@ begin
     except
       on E: Exception do
       begin
-        aError := E.Message;
+        aError := CronExceptionText(E);
         Result := False;
       end;
     end;
@@ -547,11 +555,16 @@ end;
 function TryLoadCronTzifFile(const aRoot, aName: string; out aSource: ICronZoneRuleSource;
   out aPath, aError: string): Boolean;
 var
+  {$IFDEF FPC}
+  lHandle: THandle;
+  lStream: THandleStream;
+  {$ELSE}
   lStream: TFileStream;
+  {$ENDIF}
   lBytes: TBytes;
   lParts: TArray<string>;
   lPart, lMatch: string;
-  lSearch: TSearchRec;
+  {$IFDEF FPC} lSearch: TUnicodeSearchRec; {$ELSE} lSearch: TSearchRec; {$ENDIF}
 begin
   aSource := nil;
   aError := '';
@@ -563,15 +576,15 @@ begin
   end;
   try
     // Resolve ASCII case without a CLDR table. Preserve the spelling on disk.
-    lParts := aName.Split(['/']);
+    lParts := CronSplitChar(aName, '/');
     for lPart in lParts do
     begin
       lMatch := '';
-      if FindFirst(TPath.Combine(aPath, '*'), faAnyFile, lSearch) = 0 then
+      if FindFirst({$IFDEF FPC}(IncludeTrailingPathDelimiter(aPath) + '*'){$ELSE}TPath.Combine(aPath, '*'){$ENDIF}, faAnyFile, lSearch) = 0 then
       begin
         try
           repeat
-            if SameText(lSearch.Name, lPart) then
+            if CronSameTextAscii(lSearch.Name, lPart) then
             begin
               lMatch := lSearch.Name;
               Break;
@@ -583,26 +596,33 @@ begin
       end;
       if lMatch = '' then
       begin
-        aPath := TPath.Combine(aRoot, StringReplace(aName, '/', PathDelim, [rfReplaceAll]));
+        aPath := {$IFDEF FPC}(IncludeTrailingPathDelimiter(aRoot) + CronReplaceTextAscii(aName, '/', PathDelim)){$ELSE}TPath.Combine(aRoot, StringReplace(aName, '/', PathDelim, [rfReplaceAll])){$ENDIF};
         aError := 'no TZif file at ' + aPath;
         Exit(False);
       end;
-      aPath := TPath.Combine(aPath, lMatch);
+      aPath := {$IFDEF FPC}(IncludeTrailingPathDelimiter(aPath) + lMatch){$ELSE}TPath.Combine(aPath, lMatch){$ENDIF};
     end;
+    {$IFDEF FPC}
+    lHandle := FileOpen(aPath, fmOpenRead or fmShareDenyWrite);
+    if lHandle = THandle(-1) then RaiseLastOSError;
+    lStream := THandleStream.Create(lHandle);
+    {$ELSE}
     lStream := TFileStream.Create(aPath, fmOpenRead or fmShareDenyWrite);
+    {$ENDIF}
     try
       if lStream.Size > cMaxTzifSize then raise Exception.Create('TZif file exceeds 1 MiB');
       SetLength(lBytes, lStream.Size);
       if Length(lBytes) > 0 then lStream.ReadBuffer(lBytes[0], Length(lBytes));
     finally
       lStream.Free;
+      {$IFDEF FPC} FileClose(lHandle); {$ENDIF}
     end;
     Result := TryParseCronTzif(lBytes, aSource, aError);
     if not Result then aError := 'invalid TZif data in ' + aPath + ': ' + aError;
   except
     on E: Exception do
     begin
-      aError := 'invalid TZif data in ' + aPath + ': ' + E.Message;
+      aError := 'invalid TZif data in ' + aPath + ': ' + CronExceptionText(E);
       Result := False;
     end;
   end;

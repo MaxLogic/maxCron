@@ -98,7 +98,7 @@
         <DCC_Namespace>System;Xml;Data;Datasnap;Web;Soap;$(DCC_Namespace)</DCC_Namespace>
         <Icon_MainIcon>$(BDS)\bin\delphi_PROJECTICON.ico</Icon_MainIcon>
         <Icns_MainIcns>$(BDS)\bin\delphi_PROJECTICNS.icns</Icns_MainIcns>
-        <DCC_UnitSearchPath>..\lib\maxlogicfoundation;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <DCC_UnitSearchPath>..;..\lib\maxlogicfoundation;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
         <CfgDependentOn>..\..\..\MaxLogicFoundation\MaxLogicDefault.optset</CfgDependentOn>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Base_Android)'!=''">
@@ -199,6 +199,7 @@
         </DelphiCompile>
         <DCCReference Include="..\maxCron.Internal.DeadlineQueue.pas"/>
         <DCCReference Include="..\maxCron.Internal.Platform.pas"/>
+        <DCCReference Include="..\maxCron.Internal.Text.pas"/>
         <DCCReference Include="..\maxCron.Internal.TimeZone.pas"/>
         <DCCReference Include="..\maxCron.Internal.TZif.pas"/>
         <DCCReference Include="..\maxCron.Plan.pas"/>

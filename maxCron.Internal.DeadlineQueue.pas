@@ -4,7 +4,11 @@ unit maxCron.Internal.DeadlineQueue;
 interface
 
 uses
-  System.Generics.Collections, System.SyncObjs;
+  {$IFDEF FPC}
+  Generics.Collections, SyncObjs
+  {$ELSE}
+  System.Generics.Collections, System.SyncObjs
+  {$ENDIF};
 
 type
   /// Indexed min-heap. Its lock is a leaf: no caller lock is acquired inside it.

@@ -102,6 +102,7 @@
         </DCCReference>
         <DCCReference Include="..\maxCron.Internal.DeadlineQueue.pas"/>
         <DCCReference Include="..\maxCron.Internal.Platform.pas"/>
+        <DCCReference Include="..\maxCron.Internal.Text.pas"/>
         <DCCReference Include="..\maxCron.Internal.TimeZone.pas"/>
         <DCCReference Include="..\maxCron.Internal.TZif.pas"/>
         <DCCReference Include="..\maxCron.Plan.pas"/>

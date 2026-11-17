@@ -11,6 +11,7 @@ uses
   DUnitX.RunResults,
   maxCron.Internal.DeadlineQueue in '..\maxCron.Internal.DeadlineQueue.pas',
   maxCron.Internal.Platform in '..\maxCron.Internal.Platform.pas',
+  maxCron.Internal.Text in '..\maxCron.Internal.Text.pas',
   maxCron.Internal.TimeZone in '..\maxCron.Internal.TimeZone.pas',
   maxCron.Internal.TZif in '..\maxCron.Internal.TZif.pas',
   TestIntervalTiming in 'unit\TestIntervalTiming.pas',
@@ -19,6 +20,7 @@ uses
   TestIntervalEvents in 'unit\TestIntervalEvents.pas',
   maxCron.Plan in '..\maxCron.Plan.pas',
   maxCron in '..\maxCron.pas',
+  TestCronTextParity in 'unit\TestCronTextParity.pas',
   TestZoneFakes in 'unit\TestZoneFakes.pas',
   TestTimeZoneRules in 'unit\TestTimeZoneRules.pas',
   TestTimeZoneTzif in 'unit\TestTimeZoneTzif.pas',
@@ -59,6 +61,7 @@ begin
   ReportMemoryLeaksOnShutdown := True;
   try
     TDUnitX.CheckCommandLine;
+    TDUnitX.RegisterTestFixture(TTestCronTextParity);
     TDUnitX.RegisterTestFixture(TTestTimeZoneRules);
     TDUnitX.RegisterTestFixture(TTestTimeZoneTzif);
     TDUnitX.RegisterTestFixture(TTestNamedTimeZones);

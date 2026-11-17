@@ -92,7 +92,7 @@
         <DCC_Namespace>Vcl;Vcl.Imaging;Vcl.Touch;Vcl.Samples;Vcl.Shell;System;Xml;Data;Datasnap;Web;Soap;$(DCC_Namespace)</DCC_Namespace>
         <VerInfo_Locale>1045</VerInfo_Locale>
         <VerInfo_Keys>CompanyName=;FileDescription=;FileVersion=1.0.0.0;InternalName=;LegalCopyright=;LegalTrademarks=;OriginalFilename=;ProductName=;ProductVersion=1.0.0.0;Comments=;CFBundleName=</VerInfo_Keys>
-        <DCC_UnitSearchPath>..\lib\maxlogicfoundation;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <DCC_UnitSearchPath>..;..\lib\maxlogicfoundation;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
         <CfgDependentOn>..\..\..\MaxLogicFoundation\MaxLogicDefault.optset</CfgDependentOn>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Base_Android64)'!=''">
@@ -156,6 +156,7 @@
         </DelphiCompile>
         <DCCReference Include="..\maxCron.Internal.DeadlineQueue.pas"/>
         <DCCReference Include="..\maxCron.Internal.Platform.pas"/>
+        <DCCReference Include="..\maxCron.Internal.Text.pas"/>
         <DCCReference Include="..\maxCron.Internal.TimeZone.pas"/>
         <DCCReference Include="..\maxCron.Internal.TZif.pas"/>
         <DCCReference Include="..\maxCron.Plan.pas"/>

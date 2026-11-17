@@ -4,7 +4,11 @@ unit maxCron.Internal.TimeZone;
 interface
 
 uses
-  System.SysUtils;
+  {$IFDEF FPC}
+  SysUtils
+  {$ELSE}
+  System.SysUtils
+  {$ENDIF};
 
 const
   cCronZoneMaxAbsOffsetMs = Int64(26) * 3600000;
@@ -84,8 +88,12 @@ procedure ClearCronZonesForTests;
 implementation
 
 uses
+  {$IFDEF FPC}
+  DateUtils, Generics.Collections, SyncObjs,
+  {$ELSE}
   System.DateUtils, System.Generics.Collections, System.SyncObjs,
-  maxCron.Internal.TZif;
+  {$ENDIF}
+  maxCron.Internal.Text, maxCron.Internal.TZif, maxCron.Plan;
 
 type
   TCronZoneRules = class(TInterfacedObject, ICronZoneRules)
@@ -362,7 +370,7 @@ begin
         ZoneAddEndpoint(lPoints, ZoneLocalStart(lPeriods[i]), lLo, lHi);
       end;
     end;
-    TArray.Sort<Int64>(lPoints);
+    {$IFDEF FPC} TArrayHelper<Int64>.Sort(lPoints); {$ELSE} TArray.Sort<Int64>(lPoints); {$ENDIF}
     for i := 0 to High(lPoints) - 1 do
     begin
       lPoint := lPoints[i];
@@ -388,7 +396,7 @@ begin
     ZoneAddEndpoint(lPoints, ZoneLocalStart(lPeriods[i]), lLo, lHi);
     ZoneAddEndpoint(lPoints, ZoneLocalEnd(lPeriods[i]), lLo, lHi);
   end;
-  TArray.Sort<Int64>(lPoints);
+  {$IFDEF FPC} TArrayHelper<Int64>.Sort(lPoints); {$ELSE} TArray.Sort<Int64>(lPoints); {$ENDIF}
   for i := 0 to High(lPoints) - 1 do
   begin
     lPoint := lPoints[i];
@@ -527,7 +535,7 @@ var
   lName, lSuffix: string;
   lHours, lSign: Integer;
 begin
-  lName := UpperCase(aName);
+  lName := CronUpperAscii(aName);
   aOffsetMs := 0;
   aNormalized := aName;
   Result := True;
@@ -558,8 +566,8 @@ begin
   if lName[8] = '+' then lSign := -1
   else if lName[8] = '-' then lSign := 1 else Exit;
   lSuffix := Copy(lName, 9, MaxInt);
-  if not TryStrToInt(lSuffix, lHours) then Exit;
-  if (IntToStr(lHours) <> lSuffix) or (lHours < 0) or (lHours > 14) then Exit;
+  if not CronTryStrToInt(lSuffix, lHours) then Exit;
+  if (CronIntToStr(lHours) <> lSuffix) or (lHours < 0) or (lHours > 14) then Exit;
   aOffsetMs := Int64(lSign) * lHours * 3600000;
   aNormalized := 'Etc/GMT' + Copy(lName, 8, MaxInt);
   Result := True;
@@ -581,11 +589,11 @@ begin
     aError := 'invalid IANA name syntax';
     Exit(False);
   end;
-  lKey := UpperCase(aName) + #0 + aDataRoot;
+  lKey := CronUpperAscii(aName) + #0 + aDataRoot;
   gZoneLock.Acquire;
   try
 {$IFDEF MAXCRON_TESTS}
-    if gTestZones.TryGetValue(UpperCase(aName), aZone) then
+    if gTestZones.TryGetValue(CronUpperAscii(aName), aZone) then
     begin
       aNormalizedName := aZone.GetName;
       Exit(True);
@@ -633,7 +641,7 @@ procedure RegisterCronZoneForTests(const aName: string; const aSource: ICronZone
 begin
   gZoneLock.Acquire;
   try
-    gTestZones.AddOrSetValue(UpperCase(aName), CreateCronZone(aName, aSource));
+    gTestZones.AddOrSetValue(CronUpperAscii(aName), CreateCronZone(aName, aSource));
     gZoneCache.Clear;
   finally
     gZoneLock.Release;

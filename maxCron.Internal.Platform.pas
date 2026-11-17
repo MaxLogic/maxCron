@@ -4,7 +4,11 @@ unit maxCron.Internal.Platform;
 interface
 
 uses
-  System.Classes, System.SysUtils;
+  {$IFDEF FPC}
+  Classes, SysUtils
+  {$ELSE}
+  System.Classes, System.SysUtils
+  {$ENDIF};
 
 type
   {$SCOPEDENUMS ON}
@@ -39,9 +43,21 @@ function CronGetEnvironmentVariable(const aName: string): string;
 implementation
 
 uses
+  {$IFDEF FPC}
+  // Windows before SyncObjs: Windows.TCriticalSection would hide the class.
+  {$IFDEF MSWINDOWS} MMSystem, Windows, {$ENDIF}
+  Math, SyncObjs, System.Diagnostics, System.Threading,
+  {$ELSE}
   System.Diagnostics, System.Math, System.SyncObjs,
   {$IFDEF MSWINDOWS} Winapi.MMSystem, Winapi.Windows, {$ENDIF}
-  maxAsync;
+  maxAsync,
+  {$ENDIF}
+  maxCron.Internal.Text;
+
+{$IFDEF FPC}
+function CreateWaitableTimerExW(aAttributes: Pointer; aName: PWideChar; aFlags, aAccess: DWORD): THandle;
+  stdcall; external 'kernel32.dll' name 'CreateWaitableTimerExW';
+{$ENDIF}
 
 type
   TCronWaiter = class
@@ -183,7 +199,7 @@ begin
     lDue := -lDelayUs * 10;
     if SetWaitableTimer(fTimer, lDue, 0, nil, nil, False) then
     begin
-      lHandles[0] := fWake.Handle;
+      lHandles[0] := THandle(fWake.Handle);
       lHandles[1] := fTimer;
       lResult := WaitForMultipleObjects(2, @lHandles[0], False, Cardinal((lDelayUs + 999) div 1000) + 1000);
       if lResult = WAIT_FAILED then
@@ -248,7 +264,7 @@ begin
         lDelayUs := Min(lDelayUs, lProvider());
     except
       on E: Exception do
-        CronDebugOutput('maxCron deadline provider: ' + E.Message);
+        CronDebugOutput('maxCron deadline provider: ' + CronExceptionText(E));
     end;
     if lDelayUs > 0 then
     begin
@@ -273,7 +289,7 @@ begin
       on E: Exception do
       begin
         TInterlocked.Increment(fSource.fTickExceptions);
-        CronDebugOutput('maxCron deadline tick: ' + E.Message);
+        CronDebugOutput('maxCron deadline tick: ' + CronExceptionText(E));
       end;
     end;
     TInterlocked.Increment(fSource.fTicksDelivered);
@@ -382,19 +398,23 @@ end;
 
 function CronMaxAsyncCall(const aProc: TThreadProcedure; const aTaskName: string): IInterface;
 begin
+  {$IFDEF FPC}
+  Result := TTask.Run(aProc);
+  {$ELSE}
   Result := maxAsync.SimpleAsyncCall(aProc, aTaskName);
+  {$ENDIF}
 end;
 
 procedure CronDebugOutput(const aText: string);
 begin
   {$IFDEF MSWINDOWS}
-  Winapi.Windows.OutputDebugString(PChar(aText));
+  OutputDebugStringW(PWideChar(aText));
   {$ENDIF}
 end;
 
 function CronGetEnvironmentVariable(const aName: string): string;
 begin
-  Result := System.SysUtils.GetEnvironmentVariable(aName);
+  Result := {$IFDEF FPC}SysUtils{$ELSE}System.SysUtils{$ENDIF}.GetEnvironmentVariable(aName);
 end;
 
 initialization

@@ -4,7 +4,11 @@ unit maxCron.Plan;
 interface
 
 uses
-  System.SysUtils;
+  {$IFDEF FPC}
+  SysUtils
+  {$ELSE}
+  System.SysUtils
+  {$ENDIF};
 
 const
   cIntervalPlanInvalid = 'Invalid interval plan';
@@ -284,7 +288,12 @@ function DescribeCronIntervalPlan(const aPlan: TCronIntervalPlan): string;
 implementation
 
 uses
-  System.Classes, System.DateUtils, System.Math, System.StrUtils;
+  {$IFDEF FPC}
+  Classes, DateUtils, Math, StrUtils
+  {$ELSE}
+  System.Classes, System.DateUtils, System.Math, System.StrUtils
+  {$ENDIF},
+  maxCron.Internal.Text;
 
 const
   cCronMaxLastDayOffset = 30;
@@ -413,26 +422,6 @@ const
     'Nov',
     'Dec');
 
-procedure SplitString(const s: string; delim: char; ts: TStrings);
-var
-  i: integer;
-  t: string;
-begin
-  t := '';
-  for i := 1 to length(s) do
-  begin
-    if (s[i] <> delim) then
-      t := t + s[i]
-    else
-    begin
-      ts.Add(t);
-      t := '';
-    end;
-  end;
-
-  if t <> '' then
-    ts.Add(t);
-end;
 
 function StripCronComment(const aValue: string): string;
 var
@@ -453,7 +442,7 @@ var
   s: string;
 begin
   s := Trim(StripCronComment(aPlan));
-  Result := SameText(Copy(s, 1, 6), '@every') and
+  Result := CronSameTextAscii(Copy(s, 1, 6), '@every') and
     ((Length(s) = 6) or ((Length(s) > 6) and (s[7] <= ' ')));
 end;
 
@@ -505,7 +494,7 @@ begin
   aError := cIntervalPlanInvalid;
   Result := False;
   if not IsCronIntervalPlan(aPlan) then Exit;
-  s := LowerCase(Trim(StripCronComment(aPlan)));
+  s := CronLowerAscii(Trim(StripCronComment(aPlan)));
   lPosition := 7;
   SkipIntervalWhitespace(s, lPosition);
   if not ReadIntervalNumber(s, lPosition, lValue, lOverflow) then Exit;
@@ -573,9 +562,9 @@ var
   lUnit: string;
 begin
   lUnit := IntervalUnit(aPlan.IntervalMs, lValue);
-  Result := '@every ' + UIntToStr(lValue) + lUnit;
+  Result := '@every ' + CronUIntToStr(lValue) + lUnit;
   if aPlan.FixedDelay then Result := Result + ' fixed-delay';
-  if aPlan.ExecutionLimit <> 0 then Result := Result + ' limit ' + UIntToStr(aPlan.ExecutionLimit);
+  if aPlan.ExecutionLimit <> 0 then Result := Result + ' limit ' + CronUIntToStr(aPlan.ExecutionLimit);
 end;
 
 function DescribeCronIntervalPlan(const aPlan: TCronIntervalPlan): string;
@@ -589,36 +578,10 @@ begin
   else if lUnit = 'm' then lUnit := 'minute'
   else lUnit := 'hour';
   if lValue = 1 then Result := 'Every ' + lUnit
-  else Result := 'Every ' + UIntToStr(lValue) + ' ' + lUnit + 's';
+  else Result := 'Every ' + CronUIntToStr(lValue) + ' ' + lUnit + 's';
   if aPlan.FixedDelay then Result := Result + ' (fixed delay)';
 end;
 
-procedure SplitByWhitespace(const aValue: string; aList: TStrings);
-var
-  i: Integer;
-  lToken: string;
-  c: Char;
-begin
-  aList.Clear;
-  lToken := '';
-  for i := 1 to Length(aValue) do
-  begin
-    c := aValue[i];
-    if c <= ' ' then
-    begin
-      if lToken <> '' then
-      begin
-        aList.Add(lToken);
-        lToken := '';
-      end;
-    end
-    else
-      lToken := lToken + c;
-  end;
-
-  if lToken <> '' then
-    aList.Add(lToken);
-end;
 
 function NormalizeCommaWhitespace(const aValue: string): string;
 var
@@ -654,7 +617,7 @@ function TryApplyCronMacro(const aValue: string; var aPlan: TPlan): Boolean;
 var
   lMacro: string;
 begin
-  lMacro := Trim(LowerCase(aValue));
+  lMacro := Trim(CronLowerAscii(aValue));
   if (lMacro = '@yearly') or (lMacro = '@annually') then
   begin
     aPlan.Minute := '0';
@@ -1299,7 +1262,7 @@ begin
   if (lIndex >= 1) and (lIndex <= 7) then
     Result := DayNames[lIndex]
   else
-    Result := IntToStr(aDow);
+    Result := CronIntToStr(aDow);
 end;
 
 function FormatMonthName(const aMonth: Word): string;
@@ -1307,7 +1270,7 @@ begin
   if (aMonth >= 1) and (aMonth <= 12) then
     Result := MonthNames[aMonth]
   else
-    Result := IntToStr(aMonth);
+    Result := CronIntToStr(aMonth);
 end;
 
 function JoinValues(const aValues: TWordArray; const aKind: TPartKind): string;
@@ -1326,7 +1289,7 @@ begin
       TPartKind.ckMonth:
         s := s + FormatMonthName(aValues[i]);
     else
-      s := s + IntToStr(aValues[i]);
+      s := s + CronIntToStr(aValues[i]);
     end;
   end;
   Result := s;
@@ -1404,7 +1367,7 @@ begin
 
   lYearSuffix := '';
   if lHasYear then
-    lYearSuffix := ' in ' + IntToStr(lYear);
+    lYearSuffix := ' in ' + CronIntToStr(lYear);
 
   if Second.TryGetStep(lStepStart, lStep, lStepFull) and (lStep > 0) and
     (Minute.IsAny) and (Hour.IsAny) and (Day_of_the_Month.IsAny) and (Month.IsAny) and
@@ -1613,7 +1576,7 @@ begin
   lText := Trim(plan.ExecutionLimit);
   if (lText <> '') and (lText <> '*') then
   begin
-    if not TryStrToInt64(lText, lNum) then
+    if not CronTryStrToInt64(lText, lNum) then
       raise Exception.Create('Invalid cron token');
     if (lNum < 0) or (lNum > High(LongWord)) then
       raise Exception.Create('Cron value out of range');
@@ -1894,8 +1857,8 @@ begin
     lDashPos := Pos('-', lRangeText);
     if lDashPos <= 1 then
       raise Exception.Create('Invalid cron token');
-    lRangeFrom := StrToInt(Copy(lRangeText, 1, lDashPos - 1));
-    lRangeTo := StrToInt(Copy(lRangeText, lDashPos + 1, MaxInt));
+    lRangeFrom := CronStrToInt(Copy(lRangeText, 1, lDashPos - 1));
+    lRangeTo := CronStrToInt(Copy(lRangeText, lDashPos + 1, MaxInt));
     lHasExplicitRange := True;
     Delete(lText, lOpenPos, lClosePos - lOpenPos + 1);
   end;
@@ -1903,7 +1866,7 @@ begin
   lSlashPos := Pos('/', lText);
   if lSlashPos > 0 then
   begin
-    lStep := StrToInt(Copy(lText, lSlashPos + 1, MaxInt));
+    lStep := CronStrToInt(Copy(lText, lSlashPos + 1, MaxInt));
     if lStep <= 0 then
       raise Exception.Create('Invalid cron step');
     lText := Copy(lText, 1, lSlashPos - 1);
@@ -1934,7 +1897,7 @@ begin
       raise Exception.Create('Cron value out of range');
   end;
 
-  lSeed := fHashSeed + '|' + IntToStr(Ord(fPartKind)) + '|' + aValue;
+  lSeed := fHashSeed + '|' + CronIntToStr(Ord(fPartKind)) + '|' + aValue;
   lHashValue := Hash32(lSeed);
   lStart := lRangeFrom + Integer(lHashValue mod Cardinal(lRangeTo - lRangeFrom + 1));
 
@@ -1985,7 +1948,7 @@ var
   lNum, i: Integer;
   lModifier: TCronDomModifier;
 begin
-  s := UpperCase(Trim(aToken));
+  s := CronUpperAscii(Trim(aToken));
   if (Pos('L', s) = 0) and (Pos('W', s) = 0) then
     Exit(False);
   if (Pos('#', s) > 0) or (Pos('/', s) > 0) then
@@ -2024,7 +1987,7 @@ begin
       if not CharInSet(lOffset[i], ['0'..'9']) then
         raise Exception.Create('Invalid cron token');
     end;
-    lNum := StrToIntDef(lOffset, MaxInt);
+    lNum := CronStrToIntDef(lOffset, MaxInt);
     if lNum > cCronMaxLastDayOffset then
       raise Exception.Create('Cron value out of range');
     fDomModifier := lModifier;
@@ -2035,7 +1998,7 @@ begin
     raise Exception.Create('Invalid cron token');
   if s[Length(s)] = 'W' then
   begin
-    lNum := StrToIntDef(Copy(s, 1, Length(s) - 1), -1);
+    lNum := CronStrToIntDef(Copy(s, 1, Length(s) - 1), -1);
     if (lNum < FValidFrom) or (lNum > FValidTo) then
       raise Exception.Create('Cron value out of range');
     fDomModifier := TCronDomModifier.cdmNearestWeekday;
@@ -2056,7 +2019,7 @@ var
 begin
   Result := False;
   s := ReplaceDaynames(Trim(aToken));
-  s := UpperCase(s);
+  s := CronUpperAscii(s);
 
   if Pos('W', s) > 0 then
     raise Exception.Create('Invalid cron token');
@@ -2070,11 +2033,11 @@ begin
     lRight := Copy(s, lHashPos + 1, MaxInt);
     if (lLeft = '') or (lRight = '') then
       raise Exception.Create('Invalid cron token');
-    lNum := StrToIntDef(lLeft, -1);
+    lNum := CronStrToIntDef(lLeft, -1);
     lNum := NormalizeDowValue(lNum);
     if (lNum < FValidFrom) or (lNum > FValidTo) then
       raise Exception.Create('Cron value out of range');
-    lNth := StrToIntDef(lRight, 0);
+    lNth := CronStrToIntDef(lRight, 0);
     if (lNth < 1) or (lNth > 5) then
       raise Exception.Create('Invalid cron token');
     fDowModifier := TCronDowModifier.cdwNthWeekday;
@@ -2088,7 +2051,7 @@ begin
     if (Pos('/', s) > 0) or (Pos('-', s) > 0) then
       raise Exception.Create('Invalid cron token');
     lLeft := Copy(s, 1, Length(s) - 1);
-    lNum := StrToIntDef(lLeft, -1);
+    lNum := CronStrToIntDef(lLeft, -1);
     lNum := NormalizeDowValue(lNum);
     if (lNum < FValidFrom) or (lNum > FValidTo) then
       raise Exception.Create('Cron value out of range');
@@ -2219,17 +2182,20 @@ begin
       Result := GetLastWeekdayOffsetOfMonth(aYear, aMonth, fDomValue, aDay);
     TCronDomModifier.cdmNearestWeekday:
       Result := GetNearestWeekdayTo(aYear, aMonth, fDomValue, aDay);
+  else
+    Result := False;
   end;
 end;
 
 function TCronPart.TryGetDowSpecialDay(const aYear, aMonth: Word; out aDay: Word): Boolean;
 begin
-  Result := False;
   case fDowModifier of
     TCronDowModifier.cdwLastWeekday:
       Result := GetLastDowOfMonth(aYear, aMonth, fDowValue, aDay);
     TCronDowModifier.cdwNthWeekday:
       Result := GetNthWeekdayOfMonth(aYear, aMonth, fDowValue, fDowNth, aDay);
+  else
+    Result := False;
   end;
 end;
 
@@ -2382,7 +2348,7 @@ end;
 procedure TCronPart.Parse;
 var
   x: integer;
-  l: TStringList;
+  l: TArray<string>;
   lToken: string;
   lHasSpecial: Boolean;
 begin
@@ -2407,22 +2373,21 @@ begin
     if (Length(FData) > 0) and ((FData[1] = ',') or (FData[Length(FData)] = ',') or (Pos(',,', FData) > 0)) then
       raise Exception.Create('Invalid cron token');
 
-    l := TStringList.Create;
-    try
-      SplitString(FData, ',', l);
-      if l.Count > 1 then
-        for x := 0 to l.Count - 1 do
+    l := CronSplitChar(FData, ',');
+    begin
+      if Length(l) > 1 then
+        for x := 0 to Length(l) - 1 do
           if Trim(l[x]) = '*' then
             raise Exception.Create('Invalid cron token');
       lHasSpecial := False;
-      for x := 0 to l.Count - 1 do
+      for x := 0 to Length(l) - 1 do
       begin
         lToken := Trim(l[x]);
         if lToken = '' then
           raise Exception.Create('Invalid cron token');
         if TryParseSpecialToken(lToken) then
         begin
-          if (l.Count > 1) or lHasSpecial then
+          if (Length(l) > 1) or lHasSpecial then
             raise Exception.Create('Invalid cron token');
           lHasSpecial := True;
         end;
@@ -2431,7 +2396,7 @@ begin
       if lHasSpecial then
         Exit;
 
-      for x := 0 to l.Count - 1 do
+      for x := 0 to Length(l) - 1 do
       begin
         if l[x] = '*' then
         begin
@@ -2442,8 +2407,6 @@ begin
         else
           ParsePart(l[x]);
       end;
-    finally
-      l.Free;
     end;
   end;
 end;
@@ -2494,12 +2457,14 @@ begin
       s := ReplaceMonthNames(s);
     ckDayOfTheWeek:
       s := ReplaceDaynames(s);
+  else
+    ; // Other cron parts have no textual names.
   end;
 
   iSlash := Pos('/', s);
   if iSlash > 0 then
   begin
-    Repeater := StrToInt(Copy(s, iSlash + 1, MaxInt));
+    Repeater := CronStrToInt(Copy(s, iSlash + 1, MaxInt));
     if Repeater <= 0 then
       raise Exception.Create('Invalid cron step');
     s := Copy(s, 1, iSlash - 1);
@@ -2514,11 +2479,11 @@ begin
     RangeTo := FValidTo;
   end else if iR > 0 then
   begin
-    RangeFrom := StrToInt(Copy(s, 1, iR - 1));
-    RangeTo := StrToInt(Copy(s, iR + 1, MaxInt));
+    RangeFrom := CronStrToInt(Copy(s, 1, iR - 1));
+    RangeTo := CronStrToInt(Copy(s, iR + 1, MaxInt));
   end else
   begin
-    RangeFrom := StrToInt(s);
+    RangeFrom := CronStrToInt(s);
     if iSlash > 0 then
     begin
       if (fPartKind = ckDayOfTheWeek) and fDowOneBased then
@@ -2819,16 +2784,16 @@ begin
     begin
       // Quartz-compatible: Sun = 1, Mon = 2, ... Sat = 7
       if x = 7 then
-        s := StringReplace(s, DayNames[x], '1', [rfReplaceAll, rfIgnorecase])
+        s := CronReplaceTextAscii(s, DayNames[x], '1')
       else
-        s := StringReplace(s, DayNames[x], IntToStr(x + 1), [rfReplaceAll, rfIgnorecase]);
+        s := CronReplaceTextAscii(s, DayNames[x], CronIntToStr(x + 1));
     end else
     begin
       // Cron-compatible: Sun = 0 (also accept 7 as Sunday numerically in ParsePart)
       if x = 7 then
-        s := StringReplace(s, DayNames[x], '0', [rfReplaceAll, rfIgnorecase])
+        s := CronReplaceTextAscii(s, DayNames[x], '0')
       else
-        s := StringReplace(s, DayNames[x], IntToStr(x), [rfReplaceAll, rfIgnorecase]);
+        s := CronReplaceTextAscii(s, DayNames[x], CronIntToStr(x));
     end;
   end;
   Result := s;
@@ -2841,7 +2806,7 @@ var
 begin
   s := Value;
   for x := 1 to 12 do
-    s := StringReplace(s, MonthNames[x], IntToStr(x), [rfReplaceAll, rfIgnorecase]);
+    s := CronReplaceTextAscii(s, MonthNames[x], CronIntToStr(x));
   Result := s;
 end;
 
@@ -2920,7 +2885,7 @@ end;
 
 procedure TPlan.setText(const Value: string);
 var
-  l: TStringList;
+  l: TArray<string>;
   s: string;
   x: integer;
   lDialect: TmaxCronDialect;
@@ -2950,27 +2915,26 @@ begin
     Exit;
   end;
 
-  l := TStringList.Create;
-  try
-    SplitByWhitespace(s, l);
+  l := CronSplitWhitespace(s);
+  begin
 
     case fDialect of
       cdStandard:
-        if l.Count <> 5 then
+        if Length(l) <> 5 then
           raise Exception.Create('Cron plan must have exactly 5 fields');
       cdQuartzSecondsFirst:
-        if (l.Count < 6) or (l.Count > 7) then
+        if (Length(l) < 6) or (Length(l) > 7) then
           raise Exception.Create('Cron plan must have 6 or 7 fields');
     else
       begin
-        if l.Count < 5 then
+        if Length(l) < 5 then
           raise Exception.Create('Cron plan must have at least 5 fields');
-        if l.Count > Length(parts) then
+        if Length(l) > Length(parts) then
           raise Exception.Create('Cron plan has too many fields');
       end;
     end;
 
-    for x := 0 to l.Count - 1 do
+    for x := 0 to Length(l) - 1 do
       if (Length(l[x]) > 0) and ((l[x][1] = ',') or (l[x][Length(l[x])] = ',') or (Pos(',,', l[x]) > 0)) then
         raise Exception.Create('Invalid cron token');
 
@@ -2991,15 +2955,13 @@ begin
           DayOfTheMonth := l[3];
           Month := l[4];
           DayOfTheWeek := l[5];
-          if l.Count > 6 then
+          if Length(l) > 6 then
             Year := l[6];
         end;
     else
-      for x := 0 to Min(Length(parts), l.Count) - 1 do
+      for x := 0 to Min(Length(parts), Length(l)) - 1 do
         parts[x] := l[x];
     end;
-  finally
-    l.Free;
   end;
 
 end;
