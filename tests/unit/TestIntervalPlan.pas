@@ -1,6 +1,13 @@
 unit TestIntervalPlan;
+{$I maxCron.inc}
 interface
-uses System.SysUtils, DUnitX.TestFramework, maxCron.Plan;
+uses
+  {$IFDEF FPC}
+  SysUtils,
+  DUnitX.TestFramework,
+  maxCron.Plan
+  {$ELSE} System.SysUtils, DUnitX.TestFramework, maxCron.Plan
+  {$ENDIF};
 type
   [TestFixture]
   TTestIntervalPlan = class

@@ -1,10 +1,16 @@
 unit TestZoneFakes;
+{$I maxCron.inc}
 
 interface
 
 uses
+  {$IFDEF FPC}
+  SysUtils,
+  maxCron.Internal.TimeZone
+  {$ELSE}
   System.SysUtils,
-  maxCron.Internal.TimeZone;
+  maxCron.Internal.TimeZone
+  {$ENDIF};
 
 type
   TZoneChange = record
@@ -47,9 +53,15 @@ procedure CheckZoneSearch(const aZone: ICronZoneRules; const aInitial: Int64;
 implementation
 
 uses
+  {$IFDEF FPC}
+  DateUtils, Generics.Collections, System.IOUtils,
+  AutoFree,
+  maxCron.Plan
+  {$ELSE}
   System.DateUtils, System.Generics.Collections, System.IOUtils,
   AutoFree,
-  maxCron.Plan;
+  maxCron.Plan
+  {$ENDIF};
 
 function ZoneMs(const aYear, aMonth, aDay, aHour, aMinute: Word): Int64;
 begin
@@ -60,6 +72,14 @@ function ZoneFixtureRoot: string;
 var
   lDir, lParent: string;
 begin
+  lDir := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_TEST_ROOT');
+  if lDir <> '' then
+  begin
+    Result := TPath.Combine(TPath.Combine(TPath.Combine(lDir, 'tests'), 'data'), 'tzif');
+    if not DirectoryExists(Result) then
+      raise Exception.Create('Invalid MAXCRON_TEST_ROOT (expected tests/data/tzif).');
+    Exit;
+  end;
   lDir := ExtractFilePath(ParamStr(0));
   repeat
     Result := TPath.Combine(lDir, 'data');
@@ -73,7 +93,7 @@ begin
     if lParent = lDir then Break;
     lDir := lParent;
   until lDir = '';
-  Result := GetEnvironmentVariable('MAXCRON_TEST_TZDIR');
+  Result := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_TEST_TZDIR');
   if not DirectoryExists(Result) then raise Exception.Create('Test TZif fixtures not found');
 end;
 
@@ -107,6 +127,7 @@ end;
 
 function FakeZoneChanges(const aIndex: Integer; out aInitial: Int64): TArray<TZoneChange>;
 begin
+  Result := nil;
   SetLength(Result, 2);
   case aIndex of
     0:
@@ -371,6 +392,7 @@ end;
 
 procedure CheckZoneSearchLimits;
 var
+  k: Integer;
   g: TGarbos;
   lOracle: TZoneOccurrenceSource;
   lZone: ICronZoneRules;
@@ -388,7 +410,7 @@ begin
   GC(lOracle, TZoneOccurrenceSource.Create, g);
   lOracle.Values := [lChanges[0].UtcMs + 1800000, lChanges[1].UtcMs + 5400000,
     lBase + 4 * 86400000];
-  for var k := 1 to 3 do
+  for k := 1 to 3 do
   begin
     lOracle.Calls := 0;
     lOracle.LimitAt := k;
@@ -429,19 +451,20 @@ end;
 function ZoneDenseNext(const aInitial: Int64; const aChanges: TArray<TZoneChange>;
   const aBase: Int64; const aFall: TCronFallChoice): Int64;
 var
+  c: TZoneChange;
   lMap: TCronLocalMapping;
   lLocal, lBefore, lShift: Int64;
   lNear: Integer;
 begin
   Result := aBase + 1000;
   lNear := 0;
-  for var c in aChanges do
+  for c in aChanges do
     if Abs(c.UtcMs - aBase) < Int64(6) * 86400000 then Inc(lNear);
   if lNear <= 1 then
   begin
     // Independent dense closed forms, valid for either gap policy.
     lBefore := aInitial;
-    for var c in aChanges do
+    for c in aChanges do
     begin
       lShift := lBefore - c.OffsetMs;
       if lShift > 0 then
@@ -482,6 +505,14 @@ procedure CheckZoneSearch(const aZone: ICronZoneRules; const aInitial: Int64;
   const aChanges: TArray<TZoneChange>; const aFrom, aTo: Int64; var aChecks: Int64;
   out aWindow, aMaxCalls: Integer);
 var
+  c: TZoneChange;
+  k: Integer;
+  d: Integer;
+  i: Integer;
+  lSet: Integer;
+  lSpring: Boolean;
+  lFall: TCronFallChoice;
+  lChange: TZoneChange;
   g: TGarbos;
   lOracle: TZoneOccurrenceSource;
   lValues, lExpected, lGapOccurrences, lBases: TArray<Int64>;
@@ -505,7 +536,7 @@ begin
     lProbes[0].OffsetMs := aInitial;
   end;
   lBefore := aInitial;
-  for var c in lProbes do
+  for c in lProbes do
   begin
     if (c.UtcMs < aFrom) or (c.UtcMs >= aTo) then
     begin
@@ -514,11 +545,11 @@ begin
     end;
     lShift := Abs(lBefore - c.OffsetMs);
     lBases := nil;
-    for var k := -2 to 2 do
-      for var d := -5 to 5 do ZoneAppend(lBases, c.UtcMs + k * lShift + d * 1000);
-    for var i := 1 to 64 do
+    for k := -2 to 2 do
+      for d := -5 to 5 do ZoneAppend(lBases, c.UtcMs + k * lShift + d * 1000);
+    for i := 1 to 64 do
       ZoneAppend(lBases, c.UtcMs + (Int64(ZoneNextSeed(lSeed) mod 518401) - 259200) * 1000);
-    for var lSet := 0 to 6 do
+    for lSet := 0 to 6 do
     begin
       lValues := nil;
       lLo := c.UtcMs - Int64(5) * 86400000;
@@ -538,14 +569,16 @@ begin
         4: if c.OffsetMs > lBefore then ZoneAppend(lValues,
           CronFloorDiv(c.UtcMs + lBefore + lShift div 2, 1000) * 1000);
         5:
-          for var i := 1 to 1 + Integer(ZoneNextSeed(lSeed) mod 20) do
+          for i := 1 to 1 + Integer(ZoneNextSeed(lSeed) mod 20) do
             ZoneAppend(lValues, c.UtcMs + (Int64(ZoneNextSeed(lSeed) mod 518401) - 259200) * 1000);
       end;
-      TArray.Sort<Int64>(lValues);
+      {$IFDEF FPC}
+  TArrayHelper<Int64>.Sort(
+  {$ELSE}TArray.Sort<Int64>({$ENDIF}lValues);
       lOracle.Values := lValues;
       lOracle.EverySecond := lSet = 0;
-      for var lSpring in [False, True] do
-        for var lFall := Low(TCronFallChoice) to High(TCronFallChoice) do
+      for lSpring in [False, True] do
+        for lFall := Low(TCronFallChoice) to High(TCronFallChoice) do
         begin
           lExpected := nil;
           lGapOccurrences := nil;
@@ -563,8 +596,12 @@ begin
                 ZoneAppend(lExpected, lMap.SecondUtcMs);
             end;
           end;
-          TArray.Sort<Int64>(lExpected);
-          TArray.Sort<Int64>(lGapOccurrences);
+          {$IFDEF FPC}
+  TArrayHelper<Int64>.Sort(
+  {$ELSE}TArray.Sort<Int64>({$ENDIF}lExpected);
+          {$IFDEF FPC}
+  TArrayHelper<Int64>.Sort(
+  {$ELSE}TArray.Sort<Int64>({$ENDIF}lGapOccurrences);
           for lBase in lBases do
           begin
             lExpectedUtc := High(Int64);
@@ -599,10 +636,10 @@ begin
             if (lSet = 0) and (not lSpring) then
             begin
               lLocal := aInitial;
-              for var d in aChanges do
+              for lChange in aChanges do
               begin
-                if (d.OffsetMs > lLocal) and (d.UtcMs > lBase) and (d.UtcMs < lExpectedUtc) then Inc(lSkipped);
-                lLocal := d.OffsetMs;
+                if (lChange.OffsetMs > lLocal) and (lChange.UtcMs > lBase) and (lChange.UtcMs < lExpectedUtc) then Inc(lSkipped);
+                lLocal := lChange.OffsetMs;
               end;
             end;
             ZoneRequire(lCalls <= (2 * aWindow + 2) * (lSkipped + 1), lContext + ' call bound');

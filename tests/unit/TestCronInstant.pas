@@ -1,11 +1,18 @@
 unit TestCronInstant;
+{$I maxCron.inc}
 
 interface
 
 uses
+  {$IFDEF FPC}
+  DateUtils, Math, SysUtils,
+  DUnitX.TestFramework,
+  maxCron
+  {$ELSE}
   System.DateUtils, System.Math, System.SysUtils,
   DUnitX.TestFramework,
-  maxCron;
+  maxCron
+  {$ENDIF};
 
 type
   [TestFixture]
@@ -42,6 +49,7 @@ end;
 
 procedure TTestCronInstant.CheckRecovery(const aMs: Int64);
 var
+  i: Integer;
   lValue, lDate: TDateTime;
   lYear, lMonth, lDay, lHour, lMinute, lSecond, lMilli: Word;
   lKey, lPrevious: Int64;
@@ -50,7 +58,7 @@ begin
   Assert.AreEqual(aMs, CronDateTimeToMs(lValue), 'H1 ms=' + IntToStr(aMs));
   Assert.AreEqual(aMs * 1000, CronDateTimeToInstantUs(lValue));
   lPrevious := Low(Int64);
-  for var i := -8 to 8 do
+  for i := -8 to 8 do
   begin
     lKey := CronDateTimeToMs(FromBits(DoubleBits(lValue) + i));
     Assert.IsTrue(lKey >= lPrevious, 'H2 monotone ms=' + IntToStr(aMs));
@@ -74,19 +82,21 @@ const
   cDates: array[0..10] of Integer = (19000101, 19000301, 20000229, 20261116, 20790604, 20790605,
     22581109, 22581110, 26170920, 26170921, 30001231);
 var
+  d: Int64;
+  i: Integer;
   lMs, lLower, lUpper: Int64;
   lSeed: Cardinal;
 begin
-  for var d in cDates do
+  for d in cDates do
   begin
     lMs := Trunc(EncodeDate(d div 10000, d div 100 mod 100, d mod 100)) * cCronMsPerDay;
-    for var i := -2000 to 2000 do
+    for i := -2000 to 2000 do
       CheckRecovery(lMs + i);
   end;
   lLower := Trunc(EncodeDate(1900, 1, 1)) * cCronMsPerDay;
   lUpper := Trunc(EncodeDate(3001, 1, 1)) * cCronMsPerDay;
   lSeed := 20261116;
-  for var i := 1 to 100000 do
+  for i := 1 to 100000 do
   begin
     lMs := Int64(SeedNext(lSeed)) * 65536 + (SeedNext(lSeed) and $FFFF);
     lMs := lLower + (lMs mod (lUpper - lLower));
@@ -98,8 +108,10 @@ end;
 procedure TTestCronInstant.ExactTies;
 const
   cDays: array[0..2] of Integer = (2, 46000, 402133);
+var
+  d: Int64;
 begin
-  for var d in cDays do
+  for d in cDays do
   begin
     Assert.AreEqual(Int64(d) * cCronMsPerDay + 42188, CronDateTimeToMs(d + 1 / 2048.0), 'H3 odd floor rounds up');
     Assert.AreEqual(Int64(d) * cCronMsPerDay + 126562, CronDateTimeToMs(d + 3 / 2048.0), 'H3 even floor stays');
@@ -137,10 +149,12 @@ const
     0, 1, High(Int64) - 1, High(Int64));
   cDivisors: array[0..4] of Int64 = (1, 2, 1000, 1000000, High(Int64));
 var
+  v: Int64;
+  d: Int64;
   lFloor, lCeil, lTruncated: Int64;
 begin
-  for var v in cValues do
-    for var d in cDivisors do
+  for v in cValues do
+    for d in cDivisors do
     begin
       lTruncated := v div d;
       lFloor := lTruncated;
@@ -169,6 +183,7 @@ end;
 
 procedure TTestCronInstant.WholeSecondBits;
 var
+  i: Integer;
   lSeed: Cardinal;
   lSecond, lLower, lUpper: Int64;
   lValue: TDateTime;
@@ -177,7 +192,7 @@ begin
   lSeed := 20261116;
   lLower := Trunc(EncodeDate(1900, 1, 1)) * 86400;
   lUpper := Trunc(EncodeDate(3001, 1, 1)) * 86400;
-  for var i := 1 to 100000 do
+  for i := 1 to 100000 do
   begin
     lSecond := lLower + (Int64(SeedNext(lSeed)) * 65536 + (SeedNext(lSeed) and $FFFF)) mod (lUpper - lLower);
     lValue := CronSecondToDateTime(lSecond);

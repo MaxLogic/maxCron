@@ -1,7 +1,14 @@
 unit TestDeadlineQueue;
+{$I maxCron.inc}
 interface
-uses System.Generics.Collections, System.SysUtils, DUnitX.TestFramework,
-  maxCron.Internal.DeadlineQueue;
+uses
+  {$IFDEF FPC}
+  Generics.Collections, SysUtils,
+  DUnitX.TestFramework,
+  maxCron.Internal.DeadlineQueue
+  {$ELSE} System.Generics.Collections, System.SysUtils, DUnitX.TestFramework,
+  maxCron.Internal.DeadlineQueue
+  {$ENDIF};
 type
   [TestFixture]
   TTestDeadlineQueue = class

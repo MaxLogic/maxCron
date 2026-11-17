@@ -1,9 +1,14 @@
 unit TestTimeZoneRules;
+{$I maxCron.inc}
 
 interface
 
 uses
-  DUnitX.TestFramework;
+  {$IFDEF FPC}
+  DUnitX.TestFramework
+  {$ELSE}
+  DUnitX.TestFramework
+  {$ENDIF};
 
 type
   [TestFixture]
@@ -19,11 +24,18 @@ type
 implementation
 
 uses
+  {$IFDEF FPC}
+  SysUtils,
+  maxCron.Internal.TimeZone, maxCron.Internal.TZif, TestZoneFakes
+  {$ELSE}
   System.SysUtils,
-  maxCron.Internal.TimeZone, maxCron.Internal.TZif, TestZoneFakes;
+  maxCron.Internal.TimeZone, maxCron.Internal.TZif, TestZoneFakes
+  {$ENDIF};
 
 procedure TTestTimeZoneRules.GeneratedNeighbourhoods;
 var
+  k: Integer;
+  d: Int64;
   lInitial, lBefore, lLocal, lLeft, lRight, lStep: Int64;
   lChanges: TArray<TZoneChange>;
   lChange: TZoneChange;
@@ -31,14 +43,14 @@ var
   lExpected, lActual: TCronLocalMapping;
   lContext: string;
 begin
-  for var k := 0 to 5 do
+  for k := 0 to 5 do
   begin
     lChanges := FakeZoneChanges(k, lInitial);
     lZone := CreateCronZone('fake', FakeZoneSource(k));
     lBefore := lInitial;
     for lChange in lChanges do
     begin
-      for var d in [-1001, -1000, -999, -1, 0, 1, 999, 1000, 1001] do
+      for d in TArray<Int64>.Create(-1001, -1000, -999, -1, 0, 1, 999, 1000, 1001) do
       begin
         if d < 0 then lExpected.FirstUtcMs := lBefore else lExpected.FirstUtcMs := lChange.OffsetMs;
         Assert.AreEqual(lExpected.FirstUtcMs, lZone.UtcToLocalMs(lChange.UtcMs + d) - lChange.UtcMs - d);
@@ -96,10 +108,11 @@ end;
 
 procedure TTestTimeZoneRules.SyntaxAndResolution;
 var
+  s: string;
   lZone: ICronZoneRules;
   lName, lError: string;
 begin
-  for var s in ['../etc/passwd', '/Europe/Warsaw', 'Europe//Warsaw', 'Europe/Warsaw/',
+  for s in ['../etc/passwd', '/Europe/Warsaw', 'Europe//Warsaw', 'Europe/Warsaw/',
     'Europe\Warsaw', 'Europe/ Warsaw', 'Europe/..'] do Assert.IsFalse(IsCronZoneNameSyntax(s), s);
   Assert.IsFalse(IsCronZoneNameSyntax(StringOfChar('x', 256)));
   Assert.IsTrue(IsCronZoneNameSyntax('UTC+15'));
@@ -115,6 +128,8 @@ end;
 
 procedure RunZoneProperties(const aSearch: Boolean);
 var
+  k: Integer;
+  lName: string;
   lSource: ICronZoneRuleSource;
   lZone: ICronZoneRules;
   lChanges: TArray<TZoneChange>;
@@ -126,7 +141,7 @@ begin
   if aSearch then CheckZoneSearchLimits;
   lFrom := ZoneMs(2018, 1, 1, 0);
   lTo := ZoneMs(2029, 1, 1, 0);
-  for var k := 0 to 5 do
+  for k := 0 to 5 do
   begin
     lSource := FakeZoneSource(k);
     lChanges := FakeZoneChanges(k, lInitial);
@@ -134,7 +149,7 @@ begin
     if aSearch then CheckZoneSearch(lZone, lInitial, lChanges, lFrom, lTo, lChecks, lWindow, lCalls)
     else CheckZoneRanges(lZone, lFrom, lTo, lChecks);
   end;
-  for var lName in ['Europe/Warsaw', 'America/New_York', 'Australia/Sydney', 'Australia/Lord_Howe',
+  for lName in ['Europe/Warsaw', 'America/New_York', 'Australia/Sydney', 'Australia/Lord_Howe',
     'America/Sao_Paulo', 'Antarctica/Troll', 'US/Eastern', 'Asia/Calcutta', 'Etc/UTC',
     'Synthetic/Version1', 'Synthetic/Version2', 'Synthetic/Version3', 'Synthetic/Version4',
     'Synthetic/Version5', 'Synthetic/Fat', 'Synthetic/Julian', 'Synthetic/Ordinal',

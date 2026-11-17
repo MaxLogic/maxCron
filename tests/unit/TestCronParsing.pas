@@ -1,11 +1,18 @@
 unit TestCronParsing;
+{$I maxCron.inc}
 
 interface
 
 uses
+  {$IFDEF FPC}
+  SysUtils,
+  DUnitX.TestFramework,
+  maxCron
+  {$ELSE}
   System.SysUtils,
   DUnitX.TestFramework,
-  maxCron;
+  maxCron
+  {$ENDIF};
 
 type
   [TestFixture]

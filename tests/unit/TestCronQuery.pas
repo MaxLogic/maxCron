@@ -1,11 +1,18 @@
 unit TestCronQuery;
+{$I maxCron.inc}
 
 interface
 
 uses
+  {$IFDEF FPC}
+  DateUtils, SysUtils,
+  DUnitX.TestFramework,
+  maxCron.Plan
+  {$ELSE}
   System.DateUtils, System.SysUtils,
   DUnitX.TestFramework,
-  maxCron.Plan;
+  maxCron.Plan
+  {$ENDIF};
 
 type
   [TestFixture]

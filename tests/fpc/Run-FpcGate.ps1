@@ -153,6 +153,7 @@ try {
     if ($version.ExitCode -ne 0 -or $cpu.ExitCode -ne 0 -or $target.ExitCode -ne 0 -or
         $version.Text.Trim() -ne '3.3.1' -or $cpu.Text.Trim() -ne 'x86_64' -or $target.Text.Trim() -ne 'win64' -or
         -not [IO.File]::Exists((Join-Path $bin 'fpc.cfg'))) { throw 'Requires FPC 3.3.1 x86_64-win64 and fpc.cfg' }
+    $powershell = Join-Path $PSHOME 'powershell.exe'
     $optimization = @('-O2', '-gl')
     if ($env:MAXCRON_DEBUG_SAFETY -eq '1') { $optimization = @('-O-', '-gl', '-Cr', '-Co', '-Ct', '-Ci', '-Sa') }
     $common = @('-n', ('@' + (Join-Path $bin 'fpc.cfg')), ('-FD' + (Join-Path $bin '.')),
@@ -160,7 +161,18 @@ try {
     $step = 3; $failureExit = 3
     Invoke-GateBuild 'check-public' 'tests\fpc\maxCronFpcCompileCheck.dpr' @('-Sew')
     Invoke-GateBuild 'check-tests' 'tests\fpc\maxCronFpcCompileCheck.dpr' @('-Sew', '-dMAXCRON_TESTS')
-    [Console]::WriteLine("FPC COMPILE CHECKS PASSED (2 configurations, compiler 3.3.1 x86_64-win64 at $compiler)")
+    $step = 4
+    Invoke-GateBuild 'gen' 'tests\fpc\maxCronFpcRegistryGen.dpr' @('-Sew', '-vm4104,4105')
+    $registry = Join-Path $runOutput 'gen\maxCronFpcRegistry.inc'
+    $generated = Invoke-GateProcess (Join-Path $runOutput 'gen\maxCronFpcRegistryGen.exe') @($repository, $registry)
+    if ($generated.ExitCode -ne 0) { throw 'Registry generator failed' }
+    $parity = Invoke-GateProcess $powershell @('-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'Check-FixtureParity.ps1'), '-Registry', $registry)
+    if ($parity.ExitCode -ne 0) { throw 'Fixture parity failed' }
+    $step = 5
+    Invoke-GateBuild 'tests' 'tests\fpc\maxCronFpcTests.dpr' @('-Sew', '-dMAXCRON_TESTS', '-gh', '-vm4104,4105', ('-Fu' + $PSScriptRoot), ('-Fu' + (Join-Path $repository 'tests\unit')), ('-Fi' + (Join-Path $runOutput 'gen')))
+    $failureExit = 1
+    $testCount = Invoke-GateTest 'tests' 'maxCronFpcTests' $testArguments -Heap
+    [Console]::WriteLine("FPC GATE PASSED ($testCount tests, compiler 3.3.1 x86_64-win64 at $compiler)")
     exit 0
 } catch {
     [Console]::Error.WriteLine($_.Exception.Message)

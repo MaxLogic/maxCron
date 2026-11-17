@@ -1,11 +1,18 @@
 unit TestCronFuzzOracle;
+{$I maxCron.inc}
 
 interface
 
 uses
+  {$IFDEF FPC}
+  DateUtils, SysUtils,
+  DUnitX.TestFramework,
+  maxCron
+  {$ELSE}
   System.DateUtils, System.SysUtils,
   DUnitX.TestFramework,
-  maxCron;
+  maxCron
+  {$ENDIF};
 
 type
   [TestFixture]
@@ -46,12 +53,28 @@ type
 
 implementation
 
+function OracleNextSecond(const aValue: TDateTime): TDateTime;
+{$IFDEF FPC}
+var
+  lStamp: TTimeStamp;
+{$ENDIF}
+begin
+  {$IFDEF FPC}
+  // FPC IncSecond accumulates submillisecond error; Delphi normalizes each step.
+  lStamp := DateTimeToTimeStamp(IncSecond(aValue, 1));
+  Result := TimeStampToDateTime(lStamp);
+  {$ELSE}
+  Result := IncSecond(aValue, 1);
+  {$ENDIF}
+end;
+
+
 function TTestCronFuzzOracle.ReadEnvInt(const aName: string; const aDefault, aMin, aMax: Integer): Integer;
 var
   lText: string;
   lParsed: Integer;
 begin
-  lText := Trim(GetEnvironmentVariable(aName));
+  lText := Trim({$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable(aName));
   if (lText <> '') and TryStrToInt(lText, lParsed) then
     Result := lParsed
   else
@@ -284,8 +307,9 @@ var
   lCursor: TDateTime;
   lFound: Integer;
 begin
+  Result := nil;
   SetLength(Result, aCount);
-  lCursor := IncSecond(aFromDate, 1);
+  lCursor := OracleNextSecond(aFromDate);
   lScan := 0;
   lFound := 0;
 
@@ -297,7 +321,7 @@ begin
       Inc(lFound);
     end;
 
-    lCursor := IncSecond(lCursor, 1);
+    lCursor := OracleNextSecond(lCursor);
     Inc(lScan);
   end;
 

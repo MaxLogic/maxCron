@@ -1,9 +1,14 @@
 unit TestTimeZoneTzif;
+{$I maxCron.inc}
 
 interface
 
 uses
-  DUnitX.TestFramework;
+  {$IFDEF FPC}
+  DUnitX.TestFramework
+  {$ELSE}
+  DUnitX.TestFramework
+  {$ENDIF};
 
 type
   [TestFixture]
@@ -70,9 +75,15 @@ type
 implementation
 
 uses
+  {$IFDEF FPC}
+  Windows,
+  Classes, System.IOUtils, SysUtils, ZStream,
+  maxCron, maxCron.Internal.TimeZone, maxCron.Internal.TZif, TestZoneFakes
+  {$ELSE}
   System.Classes, System.IOUtils, System.SysUtils, System.ZLib,
   Winapi.Windows,
-  maxCron, maxCron.Internal.TimeZone, maxCron.Internal.TZif, TestZoneFakes;
+  maxCron, maxCron.Internal.TimeZone, maxCron.Internal.TZif, TestZoneFakes
+  {$ENDIF};
 
 type
   TZoneRow = record
@@ -170,8 +181,8 @@ var
   lPrevious, lPath: string;
   lRaised: Boolean;
 begin
-  lPrevious := GetEnvironmentVariable('MAXCRON_TZDIR');
-  Winapi.Windows.SetEnvironmentVariable('MAXCRON_TZDIR', PChar(ZoneFixtureRoot));
+  lPrevious := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_TZDIR');
+  SetEnvironmentVariableW('MAXCRON_TZDIR', PChar(ZoneFixtureRoot));
   lCron := TmaxCron.Create(ctPortable);
   try
     lEvent := lCron.Add('footer rejection');
@@ -195,20 +206,22 @@ begin
   finally
     lEvent := nil;
     lCron.Free;
-    Winapi.Windows.SetEnvironmentVariable('MAXCRON_TZDIR', PChar(lPrevious));
+    SetEnvironmentVariableW('MAXCRON_TZDIR', PChar(lPrevious));
   end;
 end;
 
 procedure TTestTimeZoneTzif.FooterAcceptedRegressions;
 var
+  lYear: Int64;
+  lOffset: Int64;
   lZone: ICronZoneRules;
   lUtc: Int64;
 begin
   lZone := FixtureZone('Synthetic/AllYear');
-  for var lYear in [1900, 2024, 2026, 2100, 2999, 9999] do
+  for lYear in TArray<Int64>.Create(1900, 2024, 2026, 2100, 2999, 9999) do
   begin
     lUtc := ZoneMs(lYear, 1, 1, 0);
-    for var lOffset in [0, 17999999, 18000000] do
+    for lOffset in TArray<Int64>.Create(0, 17999999, 18000000) do
       Assert.AreEqual(Int64(-14400000), lZone.GetPeriod(lUtc + lOffset).OffsetMs, 'RFC all-year');
     Assert.AreEqual(Int64(-14400000), lZone.GetPeriod(ZoneMs(lYear, 7, 1, 0)).OffsetMs);
   end;
@@ -263,6 +276,7 @@ end;
 
 procedure TTestTimeZoneTzif.FooterDomainProperty;
 var
+  lCase: Integer;
   lTable: TMemoryStream;
   lSource: ICronZoneRuleSource;
   lName, lPath, lError, lFirstError: string;
@@ -277,7 +291,7 @@ begin
     Assert.AreEqual(Cardinal($31564446), lMagic, 'FDV1');
     lTable.ReadBuffer(lCases, SizeOf(lCases));
     lAccepted := 0; lRejected := 0; lFailures := 0; lFirstError := '';
-    for var lCase := 1 to lCases do
+    for lCase := 1 to lCases do
     begin
       lName := FooterName(lTable);
       lTable.ReadBuffer(lExpected, SizeOf(lExpected));
@@ -307,6 +321,7 @@ type
 
 procedure TTestTimeZoneTzif.FooterDifferential;
 var
+  lCase: Integer;
   lTable: TMemoryStream;
   lSource: ICronZoneRuleSource;
   lZone: ICronZoneRules;
@@ -325,7 +340,7 @@ begin
     lTable.ReadBuffer(lCases, SizeOf(lCases));
     Assert.IsTrue(lCases > 0, 'nonempty reference table');
     lChecks := 0;
-    for var lCase := 1 to lCases do
+    for lCase := 1 to lCases do
     begin
       lName := FooterName(lTable);
       lTable.ReadBuffer(lFirstYear, SizeOf(lFirstYear));
@@ -372,11 +387,12 @@ end;
 
 procedure TTestTimeZoneTzif.IsolatedPythonReference;
 var
+  i: Integer;
   lZones: array[0..4] of ICronZoneRules;
   lRow: TZoneRow;
   lContext: string;
 begin
-  for var i := 0 to 4 do lZones[i] := FixtureZone(cZoneNames[i]);
+  for i := 0 to 4 do lZones[i] := FixtureZone(cZoneNames[i]);
   for lRow in cZoneRows do
   begin
     lContext := Format('%s UTC ms=%d', [cZoneNames[lRow.Zone], lRow.UtcMs]);
@@ -424,12 +440,15 @@ end;
 
 procedure TTestTimeZoneTzif.FormatsAndFooters;
 var
+  i: Integer;
+  y: Int64;
+  m: Integer;
   lZone, lFat: ICronZoneRules;
   lSource: ICronZoneRuleSource;
   lPath, lRoot, lError: string;
   lUtc: Int64;
 begin
-  for var i := 1 to 5 do
+  for i := 1 to 5 do
   begin
     lZone := FixtureZone('Synthetic/Version' + IntToStr(i));
     Assert.AreEqual(Int64(3600000), lZone.GetPeriod(ZoneMs(2100, 6, 1, 0)).OffsetMs);
@@ -441,8 +460,8 @@ begin
   Assert.IsTrue(TryLoadCronTzifFile(lRoot, 'Europe/Warsaw', lSource, lPath, lError), lError);
   lFat := CreateCronZone('fat Warsaw', lSource);
   lZone := FixtureZone('Europe/Warsaw');
-  for var y := 1970 to 2100 do
-    for var m := 1 to 12 do
+  for y := 1970 to 2100 do
+    for m := 1 to 12 do
     begin
       lUtc := ZoneMs(y, m, 1, 0);
       Assert.AreEqual(lZone.GetPeriod(lUtc).OffsetMs, lFat.GetPeriod(lUtc).OffsetMs);
@@ -456,7 +475,7 @@ begin
   Assert.AreEqual(Int64(0), lZone.GetPeriod(lUtc - 1).OffsetMs);
   Assert.AreEqual(Int64(3600000), lZone.GetPeriod(lUtc).OffsetMs);
   lZone := FixtureZone('Synthetic/AllYear');
-  for var y in [2024, 2025, 2026] do
+  for y in TArray<Int64>.Create(2024, 2025, 2026) do
   begin
     Assert.AreEqual(Int64(-14400000), lZone.GetPeriod(ZoneMs(y, 1, 1, 0)).OffsetMs);
     Assert.AreEqual(Int64(-14400000), lZone.GetPeriod(ZoneMs(y, 7, 1, 0)).OffsetMs);
@@ -476,11 +495,12 @@ const
   cReasons: array[0..8] of string = ('leap-second', 'increasing', 'index', '26 hours',
     'disagrees', 'footer', 'magic', 'footer', 'counts');
 var
+  i: Integer;
   lSource: ICronZoneRuleSource;
   lPath, lError: string;
   lBytes: TBytes;
 begin
-  for var i := 0 to High(cNames) do
+  for i := 0 to High(cNames) do
   begin
     Assert.IsFalse(TryLoadCronTzifFile(ZoneFixtureRoot, 'Synthetic/' + cNames[i], lSource, lPath, lError));
     Assert.IsTrue(lSource = nil);
@@ -489,7 +509,7 @@ begin
   lPath := TPath.Combine(ZoneFixtureRoot, 'Europe');
   lPath := TPath.Combine(lPath, 'Warsaw');
   lBytes := TFile.ReadAllBytes(lPath);
-  for var i := 0 to Length(lBytes) - 1 do
+  for i := 0 to Length(lBytes) - 1 do
   begin
     Assert.IsFalse(TryParseCronTzif(Copy(lBytes, 0, i), lSource, lError), 'truncation=' + IntToStr(i));
     Assert.IsTrue(lError <> '');

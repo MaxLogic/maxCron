@@ -1,11 +1,18 @@
 unit TestCronUtilsCorpus;
+{$I maxCron.inc}
 
 interface
 
 uses
+  {$IFDEF FPC}
+  Classes, DateUtils, SysUtils,
+  DUnitX.TestFramework,
+  maxCron
+  {$ELSE}
   System.Classes, System.DateUtils, System.SysUtils,
   DUnitX.TestFramework,
-  maxCron;
+  maxCron
+  {$ENDIF};
 
 type
   [TestFixture]
@@ -30,6 +37,13 @@ var
   lDir: string;
   i: Integer;
 begin
+  lDir := ExcludeTrailingPathDelimiter({$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_TEST_ROOT'));
+  if lDir <> '' then
+  begin
+    if not FileExists(lDir + PathDelim + 'maxCron.pas') or not FileExists(lDir + PathDelim + 'README.md') then
+      raise Exception.Create('Invalid MAXCRON_TEST_ROOT (expected maxCron.pas + README.md).');
+    Exit(lDir);
+  end;
   lDir := ExcludeTrailingPathDelimiter(ExtractFilePath(ParamStr(0)));
   for i := 0 to 8 do
   begin
