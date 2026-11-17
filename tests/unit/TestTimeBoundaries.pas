@@ -57,6 +57,7 @@ type
     [Test] procedure CalculationValidityRepresentation;
     [Test] procedure ExactMsReference;
     [Test] procedure ExactMsQueries;
+    [Test] procedure WeekdaysDocumentedContract;
   end;
 
 implementation
@@ -689,6 +690,51 @@ begin
       Assert.AreEqual(lMs, GridMs(lResult), lHint + ' valid to equality');
   end;
   Assert.IsTrue(lChecked > 2000, 'Exact query rows checked=' + IntToStr(lChecked));
+end;
+
+procedure TTestTimeBoundaries.WeekdaysDocumentedContract;
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lWallUs, lMondayMs, lDayMs, lExpectedMs: Int64;
+  lFires: Integer;
+begin
+  lMondayMs := GridMs(EncodeDate(2030, 1, 7));
+  lWallUs := lMondayMs * 1000;
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('weekdays-contract');
+    lEvent.EventPlan := '* * * * * * *';
+    lEvent.WeekdaysOnly := True;
+    lEvent.InvokeMode := imMainThread;
+    lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lFires); end;
+    for var i := 0 to 6 do
+    begin
+      lEvent.Stop;
+      lDayMs := lMondayMs + Int64(i) * MSecsPerDay;
+      lWallUs := lDayMs * 1000 - 1000;
+      lEvent.Run;
+      lExpectedMs := lDayMs;
+      if i >= 5 then
+        lExpectedMs := lMondayMs + Int64(7) * MSecsPerDay;
+      Assert.AreEqual(lExpectedMs, GridMs(lEvent.NextSchedule), 'ISO weekday=' + IntToStr(i + 1));
+    end;
+    lEvent.Stop;
+    lDayMs := lMondayMs + Int64(5) * MSecsPerDay;
+    lWallUs := lDayMs * 1000 - 1000001;
+    lEvent.Run;
+    lFires := 0;
+    lCron.TickAtUs(lDayMs * 1000 - 1000); // Friday 23:59:59.999, due less than 1 s ago.
+    Assert.AreEqual(1, lFires, 'Friday remains allowed through its last millisecond');
+    lCron.TickAtUs(lDayMs * 1000); // Saturday 00:00:00.000.
+    Assert.AreEqual(1, lFires, 'Saturday midnight is excluded');
+    Assert.AreEqual(lMondayMs + Int64(7) * MSecsPerDay, GridMs(lEvent.NextSchedule));
+  finally
+    g.Clear;
+    SetMaxCronWallClockHook(nil);
+  end;
 end;
 
 end.

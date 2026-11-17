@@ -149,11 +149,12 @@ begin
     lEvent := lCron.Add('WeekdaysOnly');
     lEvent.EventPlan := '0 0 * * * * 0 0';
     lEvent.WeekdaysOnly := True;
-    lSaturday := FindNextDayOfWeek(EncodeDate(2030, 1, 1), 7);
+    lSaturday := FindNextDayOfWeek(EncodeDate(2030, 1, 1), 6);
     lEvent.ValidFrom := lSaturday;
     lEvent.Run;
 
-    Assert.AreEqual(2, DayOfTheWeek(lEvent.NextSchedule));
+    Assert.AreEqual(IncDay(lSaturday, 2), lEvent.NextSchedule, 0.0,
+      'Saturday must advance to the following Monday');
   finally
     lCron.Free;
   end;

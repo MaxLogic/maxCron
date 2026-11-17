@@ -4885,7 +4885,7 @@ begin
     if fWeekdaysOnly then
     begin
       lDow := DayOfTheWeek(lEventNext);
-      lWeekendExcluded := (lDow = 1) or (lDow = 7);
+      lWeekendExcluded := (lDow = 6) or (lDow = 7);
     end;
 
     lDateExcluded := False;

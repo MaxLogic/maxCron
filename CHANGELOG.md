@@ -15,6 +15,7 @@ All notable user-visible changes to this project will be documented in this file
 - Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
 
 ### Fixed
+- Fixed WeekdaysOnly previously excluding Monday and Sunday instead of Saturday and Sunday.
 - Use one nearest-millisecond, ties-to-even conversion for next, previous and range queries, including validity comparisons; this fixes platform-dependent results near half-millisecond inputs without changing the validity-window rules. `CronDateTimeToMs` now rounds the exact stored value with integer arithmetic, so inputs within a rounding error of a half millisecond no longer round the wrong way.
 - Fixed `mpSkip` boundaries with integer microsecond decisions: occurrences less than one second late fire, including sub-millisecond neighbours of the one-second boundary; occurrences exactly one second late are skipped. Run/reset and late-pass searches no longer skip the next occurrence in the final half-millisecond before it.
 - Fixed `mpSkip` discarding on-time cron occurrences: occurrences less than one second late now fire; those one second or more late are skipped.
