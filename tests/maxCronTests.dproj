@@ -197,6 +197,7 @@
         <DelphiCompile Include="$(MainSource)">
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
+        <DCCReference Include="..\maxCron.Internal.DeadlineQueue.pas"/>
         <DCCReference Include="..\maxCron.Internal.Platform.pas"/>
         <DCCReference Include="..\maxCron.Internal.TimeZone.pas"/>
         <DCCReference Include="..\maxCron.Plan.pas"/>
@@ -206,6 +207,9 @@
         <DCCReference Include="unit\TestCronInstant.pas"/>
         <DCCReference Include="unit\TestTimeBoundaries.pas"/>
         <DCCReference Include="unit\TestDeadlineTimer.pas"/>
+        <DCCReference Include="unit\TestIntervalPlan.pas"/>
+        <DCCReference Include="unit\TestDeadlineQueue.pas"/>
+        <DCCReference Include="unit\TestIntervalEvents.pas"/>
         <DCCReference Include="..\maxCron.pas"/>
         <DCCReference Include="unit\TestCronInvalidCorpus.pas"/>
         <DCCReference Include="unit\TestCronParsing.pas"/>

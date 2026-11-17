@@ -7,6 +7,8 @@ uses
   System.SysUtils;
 
 const
+  cIntervalPlanInvalid = 'Invalid interval plan';
+  cIntervalPlanOutOfRange = 'Interval plan value out of range';
   cCronUsPerMs = 1000;
   cCronUsPerSecond = 1000000;
   cCronMsPerSecond = 1000;
@@ -18,6 +20,12 @@ const
 type
   /// Microseconds since 1899-12-30 00:00 on the originating wall clock.
   TCronInstantUs = Int64;
+
+  TCronIntervalPlan = record
+    IntervalMs: Cardinal;
+    FixedDelay: Boolean;
+    ExecutionLimit: LongWord;
+  end;
 
   TCronSchedulePlan = class;
 
@@ -265,6 +273,12 @@ function CronInstantFloorSecond(const aValue: TCronInstantUs): Int64;
 /// Display/persistence only: floors to whole milliseconds.
 function CronInstantUsToDateTime(const aValue: TCronInstantUs): TDateTime;
 
+function IsCronIntervalPlan(const aPlan: string): Boolean;
+function TryParseCronIntervalPlan(const aPlan: string; out aResult: TCronIntervalPlan;
+  out aError: string): Boolean;
+function FormatCronIntervalPlan(const aPlan: TCronIntervalPlan): string;
+function DescribeCronIntervalPlan(const aPlan: TCronIntervalPlan): string;
+
 implementation
 
 uses
@@ -424,6 +438,151 @@ begin
       Break;
     end;
   Result := TrimRight(Result);
+end;
+
+function IsCronIntervalPlan(const aPlan: string): Boolean;
+var
+  s: string;
+begin
+  s := Trim(StripCronComment(aPlan));
+  Result := SameText(Copy(s, 1, 6), '@every') and
+    ((Length(s) = 6) or ((Length(s) > 6) and (s[7] <= ' ')));
+end;
+
+function ReadIntervalNumber(const aText: string; var aPosition: Integer;
+  out aValue: Int64; out aOverflow: Boolean): Boolean;
+var
+  lStart, lDigit: Integer;
+begin
+  lStart := aPosition;
+  aValue := 0;
+  aOverflow := False;
+  while (aPosition <= Length(aText)) and CharInSet(aText[aPosition], ['0'..'9']) do
+  begin
+    lDigit := Ord(aText[aPosition]) - Ord('0');
+    if aValue > (Int64(High(Cardinal)) - lDigit) div 10 then
+      aOverflow := True
+    else if not aOverflow then
+      aValue := aValue * 10 + lDigit;
+    Inc(aPosition);
+  end;
+  Result := aPosition > lStart;
+end;
+
+procedure SkipIntervalWhitespace(const aText: string; var aPosition: Integer);
+begin
+  while (aPosition <= Length(aText)) and (aText[aPosition] <= ' ') do
+    Inc(aPosition);
+end;
+
+function ReadIntervalWord(const aText: string; var aPosition: Integer): string;
+var
+  lStart: Integer;
+begin
+  lStart := aPosition;
+  while (aPosition <= Length(aText)) and (aText[aPosition] > ' ') do
+    Inc(aPosition);
+  Result := Copy(aText, lStart, aPosition - lStart);
+end;
+
+function TryParseCronIntervalPlan(const aPlan: string; out aResult: TCronIntervalPlan;
+  out aError: string): Boolean;
+var
+  s, lWord: string;
+  lPosition: Integer;
+  lValue, lFactor, lLimit: Int64;
+  lOverflow, lLimitOverflow: Boolean;
+begin
+  aResult := Default(TCronIntervalPlan);
+  aError := cIntervalPlanInvalid;
+  Result := False;
+  if not IsCronIntervalPlan(aPlan) then Exit;
+  s := LowerCase(Trim(StripCronComment(aPlan)));
+  lPosition := 7;
+  SkipIntervalWhitespace(s, lPosition);
+  if not ReadIntervalNumber(s, lPosition, lValue, lOverflow) then Exit;
+  SkipIntervalWhitespace(s, lPosition);
+  lWord := ReadIntervalWord(s, lPosition);
+  if lWord = 'ms' then lFactor := 1
+  else if lWord = 's' then lFactor := 1000
+  else if lWord = 'm' then lFactor := 60000
+  else if lWord = 'h' then lFactor := 3600000
+  else Exit;
+  SkipIntervalWhitespace(s, lPosition);
+  lWord := ReadIntervalWord(s, lPosition);
+  if (lWord = 'fixed-rate') or (lWord = 'fixed-delay') then
+  begin
+    aResult.FixedDelay := lWord = 'fixed-delay';
+    SkipIntervalWhitespace(s, lPosition);
+    lWord := ReadIntervalWord(s, lPosition);
+  end;
+  lLimit := 0;
+  lLimitOverflow := False;
+  if lWord = 'limit' then
+  begin
+    SkipIntervalWhitespace(s, lPosition);
+    if not ReadIntervalNumber(s, lPosition, lLimit, lLimitOverflow) then Exit;
+    // Require whitespace or end after the numeric limit.
+    if (lPosition <= Length(s)) and (s[lPosition] > ' ') then Exit;
+    SkipIntervalWhitespace(s, lPosition);
+    lWord := ReadIntervalWord(s, lPosition);
+  end;
+  if lWord <> '' then Exit;
+  if lOverflow or lLimitOverflow or (lValue = 0) or
+    (lValue > Int64(High(Cardinal)) div lFactor) then
+  begin
+    aResult := Default(TCronIntervalPlan);
+    aError := cIntervalPlanOutOfRange;
+    Exit;
+  end;
+  aResult.IntervalMs := Cardinal(lValue * lFactor);
+  aResult.ExecutionLimit := LongWord(lLimit);
+  aError := '';
+  Result := True;
+end;
+
+function IntervalUnit(const aIntervalMs: Cardinal; out aValue: Cardinal): string;
+begin
+  if aIntervalMs = 0 then
+    raise Exception.Create(cIntervalPlanOutOfRange);
+  if aIntervalMs mod 3600000 = 0 then
+  begin
+    aValue := aIntervalMs div 3600000; Result := 'h';
+  end else if aIntervalMs mod 60000 = 0 then
+  begin
+    aValue := aIntervalMs div 60000; Result := 'm';
+  end else if aIntervalMs mod 1000 = 0 then
+  begin
+    aValue := aIntervalMs div 1000; Result := 's';
+  end else begin
+    aValue := aIntervalMs; Result := 'ms';
+  end;
+end;
+
+function FormatCronIntervalPlan(const aPlan: TCronIntervalPlan): string;
+var
+  lValue: Cardinal;
+  lUnit: string;
+begin
+  lUnit := IntervalUnit(aPlan.IntervalMs, lValue);
+  Result := '@every ' + UIntToStr(lValue) + lUnit;
+  if aPlan.FixedDelay then Result := Result + ' fixed-delay';
+  if aPlan.ExecutionLimit <> 0 then Result := Result + ' limit ' + UIntToStr(aPlan.ExecutionLimit);
+end;
+
+function DescribeCronIntervalPlan(const aPlan: TCronIntervalPlan): string;
+var
+  lValue: Cardinal;
+  lUnit: string;
+begin
+  lUnit := IntervalUnit(aPlan.IntervalMs, lValue);
+  if lUnit = 'ms' then lUnit := 'millisecond'
+  else if lUnit = 's' then lUnit := 'second'
+  else if lUnit = 'm' then lUnit := 'minute'
+  else lUnit := 'hour';
+  if lValue = 1 then Result := 'Every ' + lUnit
+  else Result := 'Every ' + UIntToStr(lValue) + ' ' + lUnit + 's';
+  if aPlan.FixedDelay then Result := Result + ' (fixed delay)';
 end;
 
 procedure SplitByWhitespace(const aValue: string; aList: TStrings);

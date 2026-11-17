@@ -11,10 +11,11 @@ interface
 
 uses
   System.Classes, System.Generics.Collections, System.SyncObjs, System.SysUtils,
-  maxCron.Internal.Platform, maxCron.Plan;
+  maxCron.Internal.DeadlineQueue, maxCron.Internal.Platform, maxCron.Plan;
 
 type
   TCronInstantUs = maxCron.Plan.TCronInstantUs;
+  TCronIntervalPlan = maxCron.Plan.TCronIntervalPlan;
   TmaxCronDayMatchMode = maxCron.Plan.TmaxCronDayMatchMode;
   TmaxCronDialect = maxCron.Plan.TmaxCronDialect;
   TDates = maxCron.Plan.TDates;
@@ -104,6 +105,18 @@ type
     dfpRunOncePreferFirstInstance,
     dfpRunOncePreferSecondInstance
     );
+
+  TmaxCronIntervalMode = (ivFixedRate, ivFixedDelay);
+
+  IMaxCronIntervalEvent = interface
+    ['{8DB89F50-5877-4CA7-853B-A5A4AC80CF91}']
+    function GetIsInterval: Boolean;
+    function GetIntervalMs: Cardinal;
+    function GetIntervalMode: TmaxCronIntervalMode;
+    property IsInterval: Boolean read GetIsInterval;
+    property IntervalMs: Cardinal read GetIntervalMs;
+    property IntervalMode: TmaxCronIntervalMode read GetIntervalMode;
+  end;
 
   TmaxCronTimerBackend = (ctAuto, ctVcl, ctPortable);
   TmaxCronTimerResolution = (trHighResolution, trTimerPeriod, trSystemDefault);
@@ -352,6 +365,7 @@ type
     fDefaultsLock: TCriticalSection;
     fUsePooledThreadDispatch: Boolean;
     fTimer: ICronTickSource;
+    fIntervalQueue: TCronDeadlineQueue;
     fLastCronPassKey: Int64;
     fPreferredTimerResolution: TCronWaitResolution;
     fItems: TList<IMaxCronEvent>;
@@ -468,6 +482,8 @@ type
     procedure DoTick;
     function ComputeNextTickDelayUs: Int64;
     procedure WakeTimer;
+    procedure SetIntervalWake(const aEventId, aWakeUs: Int64; const aHasDeadline: Boolean);
+    procedure DoIntervalTickAt(const aMonoNowUs, aWallNowUs: Int64);
     function GetActiveTimerResolution: TmaxCronTimerResolution;
     procedure DoTickAtUs(const aNowUs: TCronInstantUs);
     procedure QueueTick;
@@ -497,6 +513,15 @@ type
     Function Add(const aName: string): IMaxCronEvent; overload;
     Function Add(const aName, aEventPlan: string; const aOnScheduleEvent: TmaxCronNotifyEvent): IMaxCronEvent; overload;
     Function Add(const aName, aEventPlan: string; const aOnScheduleEvent: TmaxCronNotifyProc): IMaxCronEvent; overload;
+
+    function AddInterval(const aName: string; const aIntervalMs: Cardinal;
+      const aMode: TmaxCronIntervalMode = ivFixedRate): IMaxCronEvent; overload;
+    function AddInterval(const aName: string; const aIntervalMs: Cardinal;
+      const aOnScheduleEvent: TmaxCronNotifyEvent;
+      const aMode: TmaxCronIntervalMode = ivFixedRate): IMaxCronEvent; overload;
+    function AddInterval(const aName: string; const aIntervalMs: Cardinal;
+      const aOnScheduleEvent: TmaxCronNotifyProc;
+      const aMode: TmaxCronIntervalMode = ivFixedRate): IMaxCronEvent; overload;
 
     function Delete(const aId: Int64): boolean; overload;
     function Delete(const aName: string): boolean; overload;
@@ -659,6 +684,7 @@ type
     function GetCallbackDepth: Integer;
     procedure Attach(const aOwner: TmaxCron);
     procedure MarkHeapDirty;
+    procedure PublishIntervalWake(const aEventId, aWakeUs: Int64; const aHasDeadline: Boolean);
     procedure KeepAsyncAlive(const aAsync: IInterface);
     procedure ReleaseAsyncAlive(const aAsync: IInterface);
     procedure FlushPendingFree;
@@ -694,6 +720,7 @@ type
     procedure DecrementCallbackDepth;
     function GetCallbackDepth: Integer;
     procedure MarkHeapDirty;
+    procedure PublishIntervalWake(const aEventId, aWakeUs: Int64; const aHasDeadline: Boolean);
     procedure KeepAsyncAlive(const aAsync: IInterface);
     procedure ReleaseAsyncAlive(const aAsync: IInterface);
     procedure FlushPendingFree;
@@ -713,13 +740,28 @@ type
     function AsEventObject: TmaxCronEvent;
   end;
 
-  TmaxCronEvent = class(TInterfacedObject, IMaxCronEvent, ICronEventInternal)
+  TmaxCronEvent = class(TInterfacedObject, IMaxCronEvent, IMaxCronIntervalEvent, ICronEventInternal)
   private
     type
+      {$SCOPEDENUMS ON}
+      {$SCOPEDENUMS ON}
+      {$SCOPEDENUMS ON}
+      TCronScheduleKind = (Cron, Interval);
+      {$SCOPEDENUMS OFF}
+      {$SCOPEDENUMS OFF}
+      {$SCOPEDENUMS OFF}
       TCronTimeZoneKind = (ctzLocal, ctzUtc, ctzFixedOffset);
   private
     fSharedState: ICronSharedState;
     fScheduler: TCronSchedulePlan;
+    fScheduleKind: TCronScheduleKind;
+    fIntervalMs: Cardinal;
+    fIntervalFixedDelay: Boolean;
+    fIntervalExecutionLimit: LongWord;
+    fIntervalDueUs: Int64;
+    fIntervalWakeUs: Int64;
+    fIntervalHasDeadline: Boolean;
+    fIntervalAwaitingCompletion: Boolean;
     FEventPlan: string;
     fId: Int64;
 
@@ -777,6 +819,14 @@ type
     fAmbiguousSecondGatePassedTarget: Boolean;
     fAmbiguousSecondGateRollbackSeen: Boolean;
 
+    function GetIsInterval: Boolean;
+    function GetIntervalMs: Cardinal;
+    function GetIntervalMode: TmaxCronIntervalMode;
+    function GetExecutionLimitLocked: LongWord;
+    procedure SetIntervalWakeLocked(const aWakeUs: Int64; const aHasDeadline: Boolean = True);
+    procedure ResetIntervalScheduleLocked;
+    procedure RestoreIntervalDueLocked(const aSavedNext: TDateTime);
+    procedure ProcessIntervalDue(const aMonoNowUs, aWallNowUs: Int64);
     function GetEventPlan: string;
     function GetId: Int64;
     function GetName: string;
@@ -1107,11 +1157,176 @@ begin
   Result := Self;
 end;
 
+function TmaxCronEvent.GetIsInterval: Boolean;
+begin
+  fLock.Acquire;
+  try
+    Result := fScheduleKind = TCronScheduleKind.Interval;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetIntervalMs: Cardinal;
+begin
+  fLock.Acquire;
+  try
+    Result := fIntervalMs;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetIntervalMode: TmaxCronIntervalMode;
+begin
+  fLock.Acquire;
+  try
+    if fIntervalFixedDelay then Result := TmaxCronIntervalMode.ivFixedDelay
+    else Result := TmaxCronIntervalMode.ivFixedRate;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TmaxCronEvent.GetExecutionLimitLocked: LongWord;
+begin
+  if fScheduleKind = TCronScheduleKind.Interval then Result := fIntervalExecutionLimit
+  else Result := fScheduler.ExecutionLimit;
+end;
+
+procedure TmaxCronEvent.SetIntervalWakeLocked(const aWakeUs: Int64; const aHasDeadline: Boolean);
+begin
+  fIntervalWakeUs := aWakeUs;
+  fIntervalHasDeadline := aHasDeadline;
+  if fSharedState <> nil then fSharedState.PublishIntervalWake(fId, aWakeUs, aHasDeadline);
+end;
+
+procedure TmaxCronEvent.ResetIntervalScheduleLocked;
+var
+  lMonoUs, lWallUs, lIntervalUs, lValidFromUs: Int64;
+begin
+  fIntervalAwaitingCompletion := False;
+  fIntervalDueUs := 0;
+  if FEnabled and not fPendingDestroy then
+  begin
+    lMonoUs := SchedulerMonoNowUs;
+    lWallUs := SchedulerWallNowUs;
+    lIntervalUs := Int64(fIntervalMs) * cCronUsPerMs;
+    if (CronDateTimeToInstantUs(FValidTo) > 0) and
+      (CronDateTimeToInstantUs(FValidTo) < lWallUs) then
+      FEnabled := False
+    else begin
+      fIntervalDueUs := lMonoUs + lIntervalUs;
+      lValidFromUs := CronDateTimeToInstantUs(FValidFrom);
+      if lValidFromUs > lWallUs + lIntervalUs then
+        fIntervalDueUs := lMonoUs + (lValidFromUs - lWallUs);
+    end;
+  end;
+  SetIntervalWakeLocked(fIntervalDueUs, FEnabled and not fPendingDestroy);
+end;
+
+procedure TmaxCronEvent.RestoreIntervalDueLocked(const aSavedNext: TDateTime);
+var
+  lDeltaUs, lIntervalUs, lSavedUs: Int64;
+begin
+  lSavedUs := CronDateTimeToInstantUs(aSavedNext);
+  if (lSavedUs <= 0) or not FEnabled then Exit;
+  lIntervalUs := Int64(fIntervalMs) * cCronUsPerMs;
+  lDeltaUs := lSavedUs - SchedulerWallNowUs;
+  if lDeltaUs > lIntervalUs then lDeltaUs := lIntervalUs;
+  fIntervalDueUs := SchedulerMonoNowUs + lDeltaUs;
+  SetIntervalWakeLocked(fIntervalDueUs);
+end;
+
+procedure TmaxCronEvent.ProcessIntervalDue(const aMonoNowUs, aWallNowUs: Int64);
+var
+  lOnEvent: TmaxCronNotifyEvent;
+  lOnProc: TmaxCronNotifyProc;
+  lInvokeMode: TmaxCronInvokeMode;
+  lOverlap: TmaxCronOverlapMode;
+  lMisfire: TmaxCronMisfirePolicy;
+  lCatchUpLimit, lFires, i: Cardinal;
+  lDueUs, lIntervalUs, lMissed, lNewDueUs, lWakeUs, lLastUs, lProjectedUs, lValidUs: Int64;
+begin
+  fLock.Acquire;
+  try
+    if (fScheduleKind <> TCronScheduleKind.Interval) or not FEnabled or fPendingDestroy then Exit;
+    lOnEvent := FOnScheduleEvent; lOnProc := FOnScheduleProc;
+    lInvokeMode := fInvokeMode; lOverlap := fOverlapMode; lMisfire := fMisfirePolicy;
+  finally
+    fLock.Release;
+  end;
+  lCatchUpLimit := 1;
+  if lInvokeMode = TmaxCronInvokeMode.imDefault then
+    if (fSharedState = nil) or not fSharedState.TryGetDefaultInvokeMode(lInvokeMode) then
+      lInvokeMode := TmaxCronInvokeMode.imMainThread;
+  if lMisfire = TmaxCronMisfirePolicy.mpDefault then
+    if (fSharedState = nil) or not fSharedState.TryGetMisfireDefaults(lMisfire, lCatchUpLimit) then
+      lMisfire := TmaxCronMisfirePolicy.mpCatchUpAll;
+  if lCatchUpLimit = 0 then lCatchUpLimit := 1;
+  fLock.Acquire;
+  try
+    if (fScheduleKind <> TCronScheduleKind.Interval) or not FEnabled or fPendingDestroy or
+      fIntervalAwaitingCompletion or not fIntervalHasDeadline or (aMonoNowUs < fIntervalWakeUs) then Exit;
+    if (fIntervalExecutionLimit <> 0) and (fNumOfDue >= fIntervalExecutionLimit) then
+    begin
+      FEnabled := False; fIntervalDueUs := 0; SetIntervalWakeLocked(0, False); Exit;
+    end;
+    lDueUs := fIntervalDueUs;
+    lIntervalUs := Int64(fIntervalMs) * cCronUsPerMs;
+    lProjectedUs := aWallNowUs - (aMonoNowUs - lDueUs);
+    lValidUs := CronDateTimeToInstantUs(FValidTo);
+    if (lValidUs > 0) and (lProjectedUs > lValidUs) then
+    begin
+      FEnabled := False; fIntervalDueUs := 0; SetIntervalWakeLocked(0, False); Exit;
+    end;
+    lValidUs := CronDateTimeToInstantUs(FValidFrom);
+    if lProjectedUs < lValidUs then
+    begin
+      fIntervalDueUs := aMonoNowUs + (lValidUs - aWallNowUs);
+      SetIntervalWakeLocked(fIntervalDueUs); Exit;
+    end;
+    lMissed := (aMonoNowUs - lDueUs) div lIntervalUs;
+    lFires := 1;
+    lLastUs := lDueUs;
+    lNewDueUs := lDueUs + lIntervalUs;
+    if lMissed >= 1 then
+      case lMisfire of
+        TmaxCronMisfirePolicy.mpSkip:
+          begin lFires := 0; lNewDueUs := lDueUs + (lMissed + 1) * lIntervalUs; end;
+        TmaxCronMisfirePolicy.mpFireOnceNow:
+          begin lLastUs := lDueUs + lMissed * lIntervalUs; lNewDueUs := lLastUs + lIntervalUs; end;
+      else
+        begin
+          if lMissed + 1 < lCatchUpLimit then lFires := Cardinal(lMissed + 1)
+          else lFires := lCatchUpLimit;
+          lNewDueUs := lDueUs + Int64(lFires) * lIntervalUs;
+          lLastUs := lNewDueUs - lIntervalUs;
+        end;
+      end;
+    fIntervalDueUs := lNewDueUs;
+    lWakeUs := lNewDueUs;
+    if lWakeUs <= aMonoNowUs then lWakeUs := aMonoNowUs + lIntervalUs;
+    SetIntervalWakeLocked(lWakeUs, not fIntervalAwaitingCompletion);
+    if lFires > 0 then
+      fLastExecutionTime := CronInstantUsToDateTime(aWallNowUs - (aMonoNowUs - lLastUs));
+  finally
+    fLock.Release;
+  end;
+  for i := 1 to lFires do
+    DispatchScheduledCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+end;
+
 procedure TmaxCronEvent.ResetSchedule;
 var
   lBase: TDateTime;
   lFindResult: TFindNextScheduleResult;
 begin
+  if fScheduleKind = TCronScheduleKind.Interval then
+  begin
+    ResetIntervalScheduleLocked;
+    Exit;
+  end;
   fPendingDstSecondSchedule := 0;
   ClearAmbiguousSecondGate;
 
@@ -1170,6 +1385,12 @@ begin
       ResetSchedule;
     end else begin
       FEnabled := False;
+      if fScheduleKind = TCronScheduleKind.Interval then
+      begin
+        fIntervalDueUs := 0;
+        fIntervalAwaitingCompletion := False;
+        SetIntervalWakeLocked(0, False);
+      end;
     end;
   finally
     fLock.Release;
@@ -1181,28 +1402,57 @@ end;
 
 procedure TmaxCronEvent.SetEventPlan(const Value: string);
 var
-  lValidator: TCronSchedulePlan;
+  lPreviousScheduler, lValidator: TCronSchedulePlan;
+  lInterval: TCronIntervalPlan;
+  lError: string;
 begin
   fLock.Acquire;
   try
-    if FEventPlan <> Value then
+    if FEventPlan = Value then Exit;
+    if IsCronIntervalPlan(Value) then
     begin
+      if not TryParseCronIntervalPlan(Value, lInterval, lError) then
+        raise Exception.Create(lError);
+      fScheduleKind := TCronScheduleKind.Interval;
+      fIntervalMs := lInterval.IntervalMs;
+      fIntervalFixedDelay := lInterval.FixedDelay;
+      fIntervalExecutionLimit := lInterval.ExecutionLimit;
+      fNextSchedule := 0;
+      fNextScheduleNeedsResolve := False;
+      fPendingDstSecondSchedule := 0;
+      ClearAmbiguousSecondGate;
+    end else begin
       lValidator := TCronSchedulePlan.Create;
       try
         lValidator.Dialect := fDialect;
         lValidator.HashSeed := GetHashSeed;
+        lValidator.DayMatchMode := fScheduler.DayMatchMode;
         lValidator.Parse(Value);
+        if fScheduler.Dialect <> fDialect then
+        begin
+          // The retained cron text may be invalid in the interval's new dialect.
+          // Adopt the validated replacement without reparsing that stale text.
+          lPreviousScheduler := fScheduler;
+          fScheduler := lValidator;
+          lValidator := lPreviousScheduler;
+        end else begin
+          fScheduler.HashSeed := GetHashSeed;
+          fScheduler.Parse(Value);
+        end;
       finally
         lValidator.Free;
       end;
-
-      if fScheduler.Dialect <> fDialect then
-        fScheduler.Dialect := fDialect;
-      fScheduler.HashSeed := GetHashSeed;
-      fScheduler.Parse(Value);
-      FEventPlan := Value;
-      ResetSchedule;
+      SetIntervalWakeLocked(0, False);
+      fIntervalDueUs := 0;
+      fIntervalAwaitingCompletion := False;
+      fScheduleKind := TCronScheduleKind.Cron;
+      fIntervalMs := 0;
+      fIntervalFixedDelay := False;
+      fIntervalExecutionLimit := 0;
     end;
+    FEventPlan := Value;
+    ResetSchedule;
+    if fSharedState <> nil then fSharedState.MarkHeapDirty;
   finally
     fLock.Release;
   end;
@@ -1287,6 +1537,12 @@ begin
   fLock.Acquire;
   try
     FEnabled := False;
+    if fScheduleKind = TCronScheduleKind.Interval then
+    begin
+      fIntervalDueUs := 0;
+      fIntervalAwaitingCompletion := False;
+      SetIntervalWakeLocked(0, False);
+    end;
   finally
     fLock.Release;
   end;
@@ -1346,6 +1602,43 @@ begin
   finally
     fItemsLock.Release;
   end;
+end;
+
+function MakeIntervalPlan(const aIntervalMs: Cardinal; const aMode: TmaxCronIntervalMode): string;
+var
+  lPlan: TCronIntervalPlan;
+begin
+  lPlan := Default(TCronIntervalPlan);
+  lPlan.IntervalMs := aIntervalMs;
+  lPlan.FixedDelay := aMode = TmaxCronIntervalMode.ivFixedDelay;
+  Result := FormatCronIntervalPlan(lPlan);
+end;
+
+function TmaxCron.AddInterval(const aName: string; const aIntervalMs: Cardinal;
+  const aMode: TmaxCronIntervalMode): IMaxCronEvent;
+var
+  lPlan: string;
+begin
+  lPlan := MakeIntervalPlan(aIntervalMs, aMode);
+  Result := Add(aName);
+  try
+    Result.EventPlan := lPlan;
+  except
+    Delete(Result);
+    raise;
+  end;
+end;
+
+function TmaxCron.AddInterval(const aName: string; const aIntervalMs: Cardinal;
+  const aOnScheduleEvent: TmaxCronNotifyEvent; const aMode: TmaxCronIntervalMode): IMaxCronEvent;
+begin
+  Result := Add(aName, MakeIntervalPlan(aIntervalMs, aMode), aOnScheduleEvent);
+end;
+
+function TmaxCron.AddInterval(const aName: string; const aIntervalMs: Cardinal;
+  const aOnScheduleEvent: TmaxCronNotifyProc; const aMode: TmaxCronIntervalMode): IMaxCronEvent;
+begin
+  Result := Add(aName, MakeIntervalPlan(aIntervalMs, aMode), aOnScheduleEvent);
 end;
 
 procedure TmaxCron.Clear;
@@ -1562,6 +1855,18 @@ begin
     Exit;
   try
     lOwner.MarkHeapDirty;
+  finally
+    ReleaseOwner;
+  end;
+end;
+
+procedure TCronSharedState.PublishIntervalWake(const aEventId, aWakeUs: Int64; const aHasDeadline: Boolean);
+var
+  lOwner: TmaxCron;
+begin
+  if not TryAcquireOwner(lOwner) then Exit;
+  try
+    lOwner.SetIntervalWake(aEventId, aWakeUs, aHasDeadline);
   finally
     ReleaseOwner;
   end;
@@ -1819,6 +2124,7 @@ var
 begin
   inherited Create;
 
+  fIntervalQueue := TCronDeadlineQueue.Create;
   fItems := TList<IMaxCronEvent>.Create;
   fItemsById := TDictionary<Int64, Integer>.Create;
   fItemsByName := TDictionary<string, Integer>.Create;
@@ -3505,6 +3811,7 @@ begin
   fItemsById.Free;
   fItemsByName.Free;
   fHeapItems.Free;
+  fIntervalQueue.Free;
   fAutoSwitchHistory.Free;
   fAutoLock.Free;
   fWatchdogLock.Free;
@@ -3659,9 +3966,13 @@ begin
           lCronEvent.fNumOfExecutions := lState.NumOfExecutionsPerformed;
           lCronEvent.fNumOfDue := lState.NumOfExecutionsPerformed;
           lCronEvent.fLastExecutionTime := lState.LastExecution;
-          if lState.NextSchedule > 0 then
-            lCronEvent.fNextSchedule := lState.NextSchedule;
-          lCronEvent.fNextScheduleNeedsResolve := lState.NextScheduleNeedsResolve;
+          if lCronEvent.fScheduleKind = TmaxCronEvent.TCronScheduleKind.Interval then
+            lCronEvent.RestoreIntervalDueLocked(lState.NextSchedule)
+          else begin
+            if lState.NextSchedule > 0 then
+              lCronEvent.fNextSchedule := lState.NextSchedule;
+            lCronEvent.fNextScheduleNeedsResolve := lState.NextScheduleNeedsResolve;
+          end;
         finally
           lCronEvent.fLock.Release;
         end;
@@ -3824,6 +4135,7 @@ begin
   if IsShutdownRequested then
     Exit;
   lWallUs := SchedulerWallNowUs;
+  DoIntervalTickAt(SchedulerMonoNowUs, lWallUs);
   lKey := CronPassKey(lWallUs);
   if lKey <> TInterlocked.Read(fLastCronPassKey) then
   begin
@@ -3834,7 +4146,7 @@ end;
 
 function TmaxCron.ComputeNextTickDelayUs: Int64;
 var
-  lWallUs, lKey: Int64;
+  lWallUs, lKey, lWakeUs, lDelayUs: Int64;
 begin
   if IsShutdownRequested or (TInterlocked.CompareExchange(fTickQueued, 0, 0) <> 0) then
     Exit(High(Int64));
@@ -3842,7 +4154,74 @@ begin
   lKey := CronPassKey(lWallUs);
   if lKey <> TInterlocked.Read(fLastCronPassKey) then
     Exit(0);
-  Result := (lKey + 1) * 1000000 + cCronPassOffsetUs - lWallUs;
+  Result := (lKey + 1) * cCronUsPerSecond + cCronPassOffsetUs - lWallUs;
+  if fIntervalQueue.TryPeek(lWakeUs) then
+  begin
+    lDelayUs := lWakeUs - SchedulerMonoNowUs;
+    if lDelayUs < 0 then lDelayUs := 0;
+    if lDelayUs < Result then Result := lDelayUs;
+  end;
+end;
+
+procedure TmaxCron.SetIntervalWake(const aEventId, aWakeUs: Int64; const aHasDeadline: Boolean);
+var
+  lChanged: Boolean;
+begin
+  if not aHasDeadline then lChanged := fIntervalQueue.Remove(aEventId)
+  else lChanged := fIntervalQueue.Upsert(aEventId, aWakeUs);
+  if lChanged then WakeTimer;
+end;
+
+procedure TmaxCron.DoIntervalTickAt(const aMonoNowUs, aWallNowUs: Int64);
+var
+  lIds: TList<Int64>;
+  lSnapshot: TArray<IMaxCronEvent>;
+  lEvent: TmaxCronEvent;
+  lWakeUs: Int64;
+  i, lIndex: Integer;
+begin
+  if IsShutdownRequested then Exit;
+  if not fIntervalQueue.TryPeek(lWakeUs) or (lWakeUs > aMonoNowUs) then Exit;
+  lIds := TList<Int64>.Create;
+  try
+    // PopDue releases the leaf queue lock before acquiring fItemsLock.
+    fIntervalQueue.PopDue(aMonoNowUs, lIds);
+    fItemsLock.Acquire;
+    try
+      Inc(fTickDepth);
+      SetLength(lSnapshot, lIds.Count);
+      for i := 0 to lIds.Count - 1 do
+        if fItemsById.TryGetValue(lIds[i], lIndex) then lSnapshot[i] := fItems[lIndex];
+    finally
+      fItemsLock.Release;
+    end;
+    try
+      for i := 0 to Length(lSnapshot) - 1 do
+        if TryGetCronEvent(lSnapshot[i], lEvent) then
+          lEvent.ProcessIntervalDue(aMonoNowUs, aWallNowUs);
+    finally
+      for i := 0 to Length(lSnapshot) - 1 do
+        if TryGetCronEvent(lSnapshot[i], lEvent) then
+        begin
+          lEvent.fLock.Acquire;
+          try
+            if (lEvent.fScheduleKind = TmaxCronEvent.TCronScheduleKind.Interval) and lEvent.FEnabled then
+              lEvent.SetIntervalWakeLocked(lEvent.fIntervalWakeUs, lEvent.fIntervalHasDeadline);
+          finally
+            lEvent.fLock.Release;
+          end;
+        end;
+      fItemsLock.Acquire;
+      try
+        Dec(fTickDepth);
+        FlushPendingFreeLocked;
+      finally
+        fItemsLock.Release;
+      end;
+    end;
+  finally
+    lIds.Free;
+  end;
 end;
 
 procedure TmaxCron.WakeTimer;
@@ -4109,12 +4488,13 @@ end;
 {$IFDEF MAXCRON_TESTS}
 procedure TmaxCron.TickAtUs(const aNowUs: TCronInstantUs);
 begin
+  DoIntervalTickAt(SchedulerMonoNowUs, aNowUs);
   DoTickAtUs(aNowUs);
 end;
 
 procedure TmaxCron.TickAt(const aNow: TDateTime);
 begin
-  DoTickAtUs(CronDateTimeToInstantUs(aNow));
+  TickAtUs(CronDateTimeToInstantUs(aNow));
 end;
 
 procedure TmaxCron.StartTimerForTests(const aIntervalMs: Cardinal);
@@ -4323,7 +4703,7 @@ begin
   try
     fDayMatchMode := Value;
     fScheduler.DayMatchMode := lMode;
-    if FEnabled then
+    if FEnabled and (fScheduleKind = TCronScheduleKind.Cron) then
       ResetSchedule;
   finally
     fLock.Release;
@@ -4603,7 +4983,7 @@ begin
     fUtcToLocalCacheStable := False;
     fPendingDstSecondSchedule := 0;
     ClearAmbiguousSecondGate;
-    if FEnabled then
+    if FEnabled and (fScheduleKind = TCronScheduleKind.Cron) then
       ResetSchedule;
   finally
     fLock.Release;
@@ -4615,7 +4995,7 @@ begin
   fLock.Acquire;
   try
     fDstSpringPolicy := Value;
-    if FEnabled then
+    if FEnabled and (fScheduleKind = TCronScheduleKind.Cron) then
       ResetSchedule;
   finally
     fLock.Release;
@@ -4629,7 +5009,7 @@ begin
     fDstFallPolicy := Value;
     fPendingDstSecondSchedule := 0;
     ClearAmbiguousSecondGate;
-    if FEnabled then
+    if FEnabled and (fScheduleKind = TCronScheduleKind.Cron) then
       ResetSchedule;
   finally
     fLock.Release;
@@ -4641,7 +5021,7 @@ begin
   fLock.Acquire;
   try
     fWeekdaysOnly := Value;
-    if FEnabled then
+    if FEnabled and (fScheduleKind = TCronScheduleKind.Cron) then
       ResetSchedule;
   finally
     fLock.Release;
@@ -4660,7 +5040,7 @@ begin
     SetLength(fExcludedDateSerials, Length(lDates));
     for lIndex := 0 to Length(lDates) - 1 do
       fExcludedDateSerials[lIndex] := lDates[lIndex];
-    if FEnabled then
+    if FEnabled and (fScheduleKind = TCronScheduleKind.Cron) then
       ResetSchedule;
   finally
     fLock.Release;
@@ -4674,7 +5054,7 @@ begin
   fLock.Acquire;
   try
     fBlackoutStartTime := Value;
-    if FEnabled then
+    if FEnabled and (fScheduleKind = TCronScheduleKind.Cron) then
       ResetSchedule;
   finally
     fLock.Release;
@@ -4688,7 +5068,7 @@ begin
   fLock.Acquire;
   try
     fBlackoutEndTime := Value;
-    if FEnabled then
+    if FEnabled and (fScheduleKind = TCronScheduleKind.Cron) then
       ResetSchedule;
   finally
     fLock.Release;
@@ -4960,7 +5340,7 @@ begin
   try
     if fDialect = Value then
       Exit;
-    if FEventPlan <> '' then
+    if (FEventPlan <> '') and (fScheduleKind = TCronScheduleKind.Cron) then
     begin
       lValidator := TCronSchedulePlan.Create;
       try
@@ -4973,12 +5353,15 @@ begin
     end;
 
     fDialect := Value;
-    fScheduler.Dialect := Value;
-    fScheduler.HashSeed := GetHashSeed;
-    if FEventPlan <> '' then
+    if fScheduleKind = TCronScheduleKind.Cron then
     begin
-      fScheduler.Parse(FEventPlan);
-      ResetSchedule;
+      fScheduler.Dialect := Value;
+      fScheduler.HashSeed := GetHashSeed;
+      if FEventPlan <> '' then
+      begin
+        fScheduler.Parse(FEventPlan);
+        ResetSchedule;
+      end;
     end;
   finally
     fLock.Release;
@@ -5028,7 +5411,7 @@ begin
   try
     aId := fId;
     aDueAt := fNextSchedule;
-    Result := (not fPendingDestroy) and FEnabled and (fNextSchedule > 0);
+    Result := (fScheduleKind = TCronScheduleKind.Cron) and (not fPendingDestroy) and FEnabled and (fNextSchedule > 0);
   finally
     fLock.Release;
   end;
@@ -5038,7 +5421,7 @@ function TmaxCronEvent.IsHeapScheduleCurrent(const aDueAt: TDateTime): Boolean;
 begin
   fLock.Acquire;
   try
-    Result := (not fPendingDestroy) and FEnabled and (fNextSchedule > 0) and (fNextSchedule = aDueAt);
+    Result := (fScheduleKind = TCronScheduleKind.Cron) and (not fPendingDestroy) and FEnabled and (fNextSchedule > 0) and (fNextSchedule = aDueAt);
   finally
     fLock.Release;
   end;
@@ -5278,7 +5661,13 @@ function TmaxCronEvent.GetNextSchedule: TDateTime;
 begin
   fLock.Acquire;
   try
-    Result := fNextSchedule;
+    if fScheduleKind = TCronScheduleKind.Interval then
+    begin
+      Result := 0;
+      if FEnabled and fIntervalHasDeadline then
+        Result := CronInstantUsToDateTime(SchedulerWallNowUs + fIntervalDueUs - SchedulerMonoNowUs);
+    end else
+      Result := fNextSchedule;
   finally
     fLock.Release;
   end;
@@ -5343,7 +5732,7 @@ begin
     if not FEnabled then
       if TInterlocked.CompareExchange(fAllowDisabledDispatch, 0, 0) = 0 then
         Exit(False);
-    if (fScheduler.ExecutionLimit <> 0) and (fNumOfDue >= fScheduler.ExecutionLimit) then
+    if (GetExecutionLimitLocked <> 0) and (fNumOfDue >= GetExecutionLimitLocked) then
     begin
       FEnabled := False;
       Exit(False);
@@ -5473,6 +5862,9 @@ begin
   try
     fPendingDestroy := True;
     FEnabled := False;
+    fIntervalDueUs := 0;
+    fIntervalAwaitingCompletion := False;
+    SetIntervalWakeLocked(0, False);
     fPendingRuns := 0;
     fPendingDstSecondSchedule := 0;
     ClearAmbiguousSecondGate;
@@ -5985,7 +6377,7 @@ begin
 
   fLock.Acquire;
   try
-    if not FEnabled then Exit;
+    if (fScheduleKind <> TCronScheduleKind.Cron) or (not FEnabled) then Exit;
     if fNextScheduleNeedsResolve then
     begin
       if aNowUs < CronDateTimeToInstantUs(fNextSchedule) then Exit;

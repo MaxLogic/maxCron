@@ -21,6 +21,75 @@ type
 
 implementation
 
+type
+  // A consumer implementing the pre-interval interface must continue to compile.
+  // Keep these declarations at the Phase 1 contract; interval metadata has its own interface.
+  TLegacyCronEventContract = class abstract(TInterfacedObject, IMaxCronEvent)
+  public
+    function Run: IMaxCronEvent; virtual; abstract;
+    procedure Stop; virtual; abstract;
+    function GetEventPlan: string; virtual; abstract;
+    procedure SetEventPlan(const aValue: string); virtual; abstract;
+    function GetNextSchedule: TDateTime; virtual; abstract;
+    function GetId: Int64; virtual; abstract;
+    function GetName: string; virtual; abstract;
+    function GetLastExecution: TDateTime; virtual; abstract;
+    function GetTag: Integer; virtual; abstract;
+    procedure SetTag(const aValue: Integer); virtual; abstract;
+    function GetUserData: Pointer; virtual; abstract;
+    procedure SetUserData(const aValue: Pointer); virtual; abstract;
+    function GetUserDataInterface: IInterface; virtual; abstract;
+    procedure SetUserDataInterface(const aValue: IInterface); virtual; abstract;
+    function GetOnScheduleEvent: TmaxCronNotifyEvent; virtual; abstract;
+    procedure SetOnScheduleEvent(const aValue: TmaxCronNotifyEvent); virtual; abstract;
+    function GetOnScheduleProc: TmaxCronNotifyProc; virtual; abstract;
+    procedure SetOnScheduleProc(const aValue: TmaxCronNotifyProc); virtual; abstract;
+    function GetEnabled: Boolean; virtual; abstract;
+    procedure SetEnabled(const aValue: Boolean); virtual; abstract;
+    function GetInvokeMode: TmaxCronInvokeMode; virtual; abstract;
+    procedure SetInvokeMode(const aValue: TmaxCronInvokeMode); virtual; abstract;
+    function GetOverlapMode: TmaxCronOverlapMode; virtual; abstract;
+    procedure SetOverlapMode(const aValue: TmaxCronOverlapMode); virtual; abstract;
+    function GetDayMatchMode: TmaxCronDayMatchMode; virtual; abstract;
+    procedure SetDayMatchMode(const aValue: TmaxCronDayMatchMode); virtual; abstract;
+    function GetDialect: TmaxCronDialect; virtual; abstract;
+    procedure SetDialect(const aValue: TmaxCronDialect); virtual; abstract;
+    function GetMisfirePolicy: TmaxCronMisfirePolicy; virtual; abstract;
+    procedure SetMisfirePolicy(const aValue: TmaxCronMisfirePolicy); virtual; abstract;
+    function GetRetryMaxAttempts: Integer; virtual; abstract;
+    procedure SetRetryMaxAttempts(const aValue: Integer); virtual; abstract;
+    function GetRetryInitialDelayMs: Cardinal; virtual; abstract;
+    procedure SetRetryInitialDelayMs(const aValue: Cardinal); virtual; abstract;
+    function GetRetryBackoffMultiplier: Double; virtual; abstract;
+    procedure SetRetryBackoffMultiplier(const aValue: Double); virtual; abstract;
+    function GetRetryMaxDelayMs: Cardinal; virtual; abstract;
+    procedure SetRetryMaxDelayMs(const aValue: Cardinal); virtual; abstract;
+    function GetOnDeadLetterEvent: TmaxCronDeadLetterEvent; virtual; abstract;
+    procedure SetOnDeadLetterEvent(const aValue: TmaxCronDeadLetterEvent); virtual; abstract;
+    function GetOnDeadLetterProc: TmaxCronDeadLetterProc; virtual; abstract;
+    procedure SetOnDeadLetterProc(const aValue: TmaxCronDeadLetterProc); virtual; abstract;
+    function GetTimeZoneId: string; virtual; abstract;
+    procedure SetTimeZoneId(const aValue: string); virtual; abstract;
+    function GetDstSpringPolicy: TmaxCronDstSpringPolicy; virtual; abstract;
+    procedure SetDstSpringPolicy(const aValue: TmaxCronDstSpringPolicy); virtual; abstract;
+    function GetDstFallPolicy: TmaxCronDstFallPolicy; virtual; abstract;
+    procedure SetDstFallPolicy(const aValue: TmaxCronDstFallPolicy); virtual; abstract;
+    function GetWeekdaysOnly: Boolean; virtual; abstract;
+    procedure SetWeekdaysOnly(const aValue: Boolean); virtual; abstract;
+    function GetExcludedDatesCsv: string; virtual; abstract;
+    procedure SetExcludedDatesCsv(const aValue: string); virtual; abstract;
+    function GetBlackoutStartTime: TDateTime; virtual; abstract;
+    procedure SetBlackoutStartTime(const aValue: TDateTime); virtual; abstract;
+    function GetBlackoutEndTime: TDateTime; virtual; abstract;
+    procedure SetBlackoutEndTime(const aValue: TDateTime); virtual; abstract;
+    function GetNumOfExecutionsPerformed: UInt64; virtual; abstract;
+    function GetValidFrom: TDateTime; virtual; abstract;
+    procedure SetValidFrom(const aValue: TDateTime); virtual; abstract;
+    function GetValidTo: TDateTime; virtual; abstract;
+    procedure SetValidTo(const aValue: TDateTime); virtual; abstract;
+  end;
+
+
 function Pick(const aValue: TmaxCronDialect): string; overload;
 begin
   Result := GetEnumName(TypeInfo(TmaxCronDialect), Ord(aValue));
@@ -75,6 +144,7 @@ end;
 procedure TTestPublicApiCompat.EnumValueExportCompleteness;
 const
   // Every re-exported value is named unqualified, so a missing const in maxCron.pas fails to compile.
+  cIntervalModes: array[TmaxCronIntervalMode] of TmaxCronIntervalMode = (ivFixedRate, ivFixedDelay);
   cDayMatchModes: array[TmaxCronDayMatchMode] of TmaxCronDayMatchMode = (dmDefault, dmAnd, dmOr);
   cDialects: array[TmaxCronDialect] of TmaxCronDialect = (cdStandard, cdMaxCron, cdQuartzSecondsFirst);
   cPartKinds: array[TPartKind] of TPartKind = (ckMinute, ckHour, ckDayOfTheMonth, ckMonth,
@@ -83,12 +153,18 @@ const
     cdmNearestWeekday, cdmLastWeekday);
   cDowModifiers: array[TCronDowModifier] of TCronDowModifier = (cdwNone, cdwLastWeekday, cdwNthWeekday);
 var
+  lIntervalMode: TmaxCronIntervalMode;
+  lIntervalPlan: TCronIntervalPlan;
   lDayMatchMode: TmaxCronDayMatchMode;
   lDialect: TmaxCronDialect;
   lPartKind: TPartKind;
   lDomModifier: TCronDomModifier;
   lDowModifier: TCronDowModifier;
 begin
+  lIntervalPlan := Default(TCronIntervalPlan);
+  Assert.AreEqual<Cardinal>(0,lIntervalPlan.IntervalMs);
+  for lIntervalMode := Low(TmaxCronIntervalMode) to High(TmaxCronIntervalMode) do
+    Assert.IsTrue(cIntervalModes[lIntervalMode] = lIntervalMode, 'TmaxCronIntervalMode export order');
   for lDayMatchMode := Low(TmaxCronDayMatchMode) to High(TmaxCronDayMatchMode) do
     Assert.IsTrue(cDayMatchModes[lDayMatchMode] = lDayMatchMode, 'TmaxCronDayMatchMode export order');
   for lDialect := Low(TmaxCronDialect) to High(TmaxCronDialect) do

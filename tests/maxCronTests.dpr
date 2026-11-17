@@ -9,8 +9,12 @@ uses
   DUnitX.TestFramework,
   DUnitX.Loggers.Console,
   DUnitX.RunResults,
+  maxCron.Internal.DeadlineQueue in '..\maxCron.Internal.DeadlineQueue.pas',
   maxCron.Internal.Platform in '..\maxCron.Internal.Platform.pas',
   maxCron.Internal.TimeZone in '..\maxCron.Internal.TimeZone.pas',
+  TestIntervalPlan in 'unit\TestIntervalPlan.pas',
+  TestDeadlineQueue in 'unit\TestDeadlineQueue.pas',
+  TestIntervalEvents in 'unit\TestIntervalEvents.pas',
   maxCron.Plan in '..\maxCron.Plan.pas',
   maxCron in '..\maxCron.pas',
   TestPublicApiCompat in 'unit\TestPublicApiCompat.pas',
@@ -77,6 +81,9 @@ begin
     TDUnitX.RegisterTestFixture(TTestScheduleNext);
     TDUnitX.RegisterTestFixture(TTestStress);
     TDUnitX.RegisterTestFixture(TTestValidRange);
+    TDUnitX.RegisterTestFixture(TTestIntervalPlan);
+    TDUnitX.RegisterTestFixture(TTestDeadlineQueue);
+    TDUnitX.RegisterTestFixture(TTestIntervalEvents);
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));
