@@ -278,8 +278,7 @@ end;
 
 procedure TTestRobustCoverage.TimeZoneId_InvalidValues_Raise;
 const
-  cInvalidValues: array [0 .. 9] of string = (
-    'GMT',
+  cInvalidValues: array [0 .. 8] of string = (
     'UTC+',
     'UTC- ',
     'UTC++2',

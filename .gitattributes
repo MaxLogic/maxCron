@@ -19,3 +19,8 @@
 # ```
 #
 # After that, you can even set `core.autocrlf` to `false` everywhere if you want — attributes will control EOL.
+
+# TZif binary fixtures (keep the provenance README as text)
+tests/data/tzif/** binary
+tests/data/tzif/README.md text
+tests/data/tzif-fat/** binary

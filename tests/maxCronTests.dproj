@@ -200,7 +200,12 @@
         <DCCReference Include="..\maxCron.Internal.DeadlineQueue.pas"/>
         <DCCReference Include="..\maxCron.Internal.Platform.pas"/>
         <DCCReference Include="..\maxCron.Internal.TimeZone.pas"/>
+        <DCCReference Include="..\maxCron.Internal.TZif.pas"/>
         <DCCReference Include="..\maxCron.Plan.pas"/>
+        <DCCReference Include="unit\TestZoneFakes.pas"/>
+        <DCCReference Include="unit\TestTimeZoneRules.pas"/>
+        <DCCReference Include="unit\TestTimeZoneTzif.pas"/>
+        <DCCReference Include="unit\TestNamedTimeZones.pas"/>
         <DCCReference Include="unit\TestPublicApiCompat.pas"/>
         <DCCReference Include="unit\TestCronQuery.pas"/>
         <DCCReference Include="unit\TestMisfireOnTime.pas"/>

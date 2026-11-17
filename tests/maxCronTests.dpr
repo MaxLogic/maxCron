@@ -12,12 +12,17 @@ uses
   maxCron.Internal.DeadlineQueue in '..\maxCron.Internal.DeadlineQueue.pas',
   maxCron.Internal.Platform in '..\maxCron.Internal.Platform.pas',
   maxCron.Internal.TimeZone in '..\maxCron.Internal.TimeZone.pas',
+  maxCron.Internal.TZif in '..\maxCron.Internal.TZif.pas',
   TestIntervalTiming in 'unit\TestIntervalTiming.pas',
   TestIntervalPlan in 'unit\TestIntervalPlan.pas',
   TestDeadlineQueue in 'unit\TestDeadlineQueue.pas',
   TestIntervalEvents in 'unit\TestIntervalEvents.pas',
   maxCron.Plan in '..\maxCron.Plan.pas',
   maxCron in '..\maxCron.pas',
+  TestZoneFakes in 'unit\TestZoneFakes.pas',
+  TestTimeZoneRules in 'unit\TestTimeZoneRules.pas',
+  TestTimeZoneTzif in 'unit\TestTimeZoneTzif.pas',
+  TestNamedTimeZones in 'unit\TestNamedTimeZones.pas',
   TestPublicApiCompat in 'unit\TestPublicApiCompat.pas',
   TestCronInvalidCorpus in 'unit\TestCronInvalidCorpus.pas',
   TestCronParsing in 'unit\TestCronParsing.pas',
@@ -54,6 +59,9 @@ begin
   ReportMemoryLeaksOnShutdown := True;
   try
     TDUnitX.CheckCommandLine;
+    TDUnitX.RegisterTestFixture(TTestTimeZoneRules);
+    TDUnitX.RegisterTestFixture(TTestTimeZoneTzif);
+    TDUnitX.RegisterTestFixture(TTestNamedTimeZones);
     TDUnitX.RegisterTestFixture(TTestPublicApiCompat);
     TDUnitX.RegisterTestFixture(TTestCronInvalidCorpus);
     TDUnitX.RegisterTestFixture(TTestCronParsing);

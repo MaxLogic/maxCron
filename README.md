@@ -8,7 +8,8 @@ Homepage: https://maxlogic.eu/portfolio/maxcron-scheduler-for-delphi/
 ## Installation
 
 Add `maxCron.pas`, `maxCron.Plan.pas`, `maxCron.Internal.Platform.pas` and
-`maxCron.Internal.TimeZone.pas` to your project, or add their folder to the unit
+`maxCron.Internal.TimeZone.pas` and `maxCron.Internal.TZif.pas` to your project,
+or add their folder to the unit
 search path. Keep `maxCron.inc` beside these units. The scheduler still requires
 the MaxLogicFoundation submodule. Existing code can continue to use `uses maxCron`.
 Calculation-only consumers can use `maxCron.Plan`, which depends only on the RTL.
@@ -685,7 +686,20 @@ Each event can evaluate cron time in its own timezone:
 NewSchedule.TimeZoneId := 'LOCAL';      // default
 NewSchedule.TimeZoneId := 'UTC';
 NewSchedule.TimeZoneId := 'UTC+02:30';  // fixed offset
+NewSchedule.TimeZoneId := 'Europe/Warsaw'; // IANA name (TZif data required)
 ```
+
+Named zones read TZif files (versions 1-4 and compatible later versions). On Windows,
+set `MAXCRON_TZDIR` to an installed zoneinfo directory before assigning a name;
+the native Windows zone provider is not available yet. On other platforms, lookup
+uses `MAXCRON_TZDIR`, then `TZDIR`, then `/usr/share/zoneinfo`. No zone database
+is bundled for application use. The reader supports signed and extended POSIX
+footer rule times when both rule-local transitions stay at least 2 local days from the year boundaries and both DST and standard parts last at least 28 days throughout a 400-year Gregorian cycle. Fixed-offset and RFC all-year-DST footers are also supported; unsupported footer rules fail when setting the zone and preserve its previous value.
+Leap-second (`right/`) files are rejected.
+Names match ASCII case-insensitively; the returned name preserves the file's
+spelling and aliases such as `US/Eastern`. Unknown names raise on assignment,
+report the cause and leave the previous zone intact. Resolved rules are immutable
+and cached; restart the process to pick up data-file changes.
 
 DST behavior is configurable per event:
 
@@ -702,6 +716,22 @@ NewSchedule.DstFallPolicy := dfpRunOncePreferSecondInstance;
 `dfpRunTwice` executes both ambiguous fall-back instances at the same local wall-clock time.
 For `dfpRunTwice` and `dfpRunOncePreferSecondInstance`, maxCron now waits for the repeated wall-clock pass
 after fallback instead of dispatching the second-instance semantics immediately on the first pass.
+
+For named zones, `dspSkip` omits nonexistent local times; `dspRunAtNextValidTime`
+runs at the transition instant (the first valid local time). Several occurrences
+shifted to that instant fire once. `dfpRunOnce` and `dfpRunOncePreferFirstInstance`
+select the earlier UTC instance, `dfpRunOncePreferSecondInstance` the later one,
+and `dfpRunTwice` both, in UTC order. `LOCAL` retains its minute-step spring
+behavior: a missing 02:30:30 can shift to 03:00:30, while a named zone shifts it
+to 03:00:00. Named-zone searches query eligible constant-offset ranges rather
+than each occurrence in a shifted window. Dense schedules remain bounded across
+30-minute and two-hour clock changes.
+
+The scheduler keeps its system-local clock. Named events running through the
+host's repeated hour wait for the observed rollback before firing a second
+instance. Starting, resetting or resuming inside that hour uses its earlier UTC
+interpretation, so occurrences can run late or at the other instance; future
+instances are retained. Hosts on UTC or without DST are unaffected.
 
 Performance note: UTC/fixed-offset events use a stable local-offset cache for UTC->local conversion when the target UTC hour is outside DST-transition ambiguity, which reduces repeated timezone API calls in hot paths.
 

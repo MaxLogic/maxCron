@@ -5,6 +5,13 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- `TimeZoneId` now also accepts IANA names such as `GMT` and `Europe/Warsaw`.
+- Added internal integer-millisecond zone rules and a TZif reader for IANA names
+  such as `Europe/Warsaw`, `America/New_York` and `Australia/Sydney`. On Windows,
+  set `MAXCRON_TZDIR`; other platforms also use `TZDIR` or `/usr/share/zoneinfo`.
+  Named zones apply spring/fall policies, preserve aliases and reject leap-second
+  files. Dense schedules across 30-minute and two-hour shifts use bounded period-range
+  searches. Native Windows zone lookup remains deferred.
 - Added wrapped ranges with continuous steps in seconds, minutes, hours and months, including month names. Existing weekday range behavior is unchanged.
 - Added month-end offsets `L-n`, `LW-n` and `L-nW` (0..30), with descriptions and matching next, previous and range queries.
 - Added monotonic interval events with `AddInterval`, `@every` plans, fixed-rate and fixed-delay modes, read-only interval metadata, wake-on-change, and persistence through the existing schedule store. Existing overlap, retry, execution-limit, and global-cap policies apply.
@@ -13,6 +20,9 @@ All notable user-visible changes to this project will be documented in this file
 - Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
 
 ### Changed
+- Invalid or unknown `TimeZoneId` values report the rejected value and cause,
+  preserving the event's previous zone. Add `maxCron.Internal.TZif.pas` to consumer
+  projects. Existing `LOCAL`, `UTC` and fixed-offset behavior is unchanged.
 - Plans containing a newly recognised day-of-month form and an invalid later field now report the later field's error.
 - Recognized `L-n`, `LW-n` and `L-nW` forms with out-of-range or overflowing offsets now report `Cron value out of range` instead of `Invalid cron token`.
 - Align cron passes to second boundaries with a deadline timing thread and precise Windows wall clock; add timer-resolution selection and coalesced VCL delivery.
@@ -21,6 +31,7 @@ All notable user-visible changes to this project will be documented in this file
 - Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
 
 ### Fixed
+- Validate TZif DST footers across a full Gregorian cycle: signed/extended rules must keep both transitions at least 2 local days from the year boundaries and both DST and standard parts at least 28 days long. Fixed-offset and RFC all-year-DST forms remain supported; rejected rules preserve the event's previous zone.
 - Preserve fixed-delay completion ownership across restarts, plan changes, and serialized handoffs; ignore completions from older runs.
 - Process restored interval deadlines at zero and negative monotonic instants through the misfire policy.
 - Fixed WeekdaysOnly previously excluding Monday and Sunday instead of Saturday and Sunday.
