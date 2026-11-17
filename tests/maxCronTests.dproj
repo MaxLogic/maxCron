@@ -204,6 +204,7 @@
         <DCCReference Include="..\maxCron.Internal.TZif.pas"/>
         <DCCReference Include="..\maxCron.Plan.pas"/>
         <DCCReference Include="unit\TestCronTextParity.pas"/>
+        <DCCReference Include="unit\TestLocalZoneOs.pas"/>
         <DCCReference Include="unit\TestZoneFakes.pas"/>
         <DCCReference Include="unit\TestTimeZoneRules.pas"/>
         <DCCReference Include="unit\TestTimeZoneTzif.pas"/>

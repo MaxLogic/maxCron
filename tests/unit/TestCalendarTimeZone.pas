@@ -1,11 +1,18 @@
 unit TestCalendarTimeZone;
+{$I maxCron.inc}
 
 interface
 
 uses
+  {$IFDEF FPC}
+  DateUtils, SysUtils,
+  DUnitX.TestFramework,
+  maxCron
+  {$ELSE}
   System.DateUtils, System.SysUtils,
   DUnitX.TestFramework,
-  maxCron;
+  maxCron
+  {$ENDIF};
 
 type
   [TestFixture]
@@ -46,6 +53,9 @@ type
   end;
 
 implementation
+
+uses
+  maxCron.Internal.TimeZone;
 
 procedure TTestCalendarTimeZone.TransitionSelection_PreservesSchedulingMargin;
 var
@@ -101,7 +111,7 @@ begin
   lCursor := lStart;
   while lCursor < lLimit do
   begin
-    if TTimeZone.Local.IsInvalidTime(lCursor) then
+    if CronSystemTimeZone.IsInvalidTime(lCursor) then
     begin
       aDateTime := lCursor;
       Exit(True);
@@ -109,6 +119,7 @@ begin
     lCursor := IncMinute(lCursor, 1);
   end;
   Result := False;
+  Assert.Fail('No LOCAL transition found in the two-year search window');
 end;
 
 function TTestCalendarTimeZone.TryFindAmbiguousLocalTime(out aDateTime: TDateTime): Boolean;
@@ -128,7 +139,7 @@ begin
   lCursor := lStart;
   while lCursor < lLimit do
   begin
-    if TTimeZone.Local.IsAmbiguousTime(lCursor) then
+    if CronSystemTimeZone.IsAmbiguousTime(lCursor) then
     begin
       aDateTime := lCursor;
       Exit(True);
@@ -136,6 +147,7 @@ begin
     lCursor := IncMinute(lCursor, 1);
   end;
   Result := False;
+  Assert.Fail('No LOCAL transition found in the two-year search window');
 end;
 
 procedure TTestCalendarTimeZone.Exclusion_WeekdaysOnly_SkipsWeekend;
@@ -217,11 +229,11 @@ begin
     lEvent.ValidFrom := lStartAt;
     lEvent.Run;
 
-    lUtcBase := TTimeZone.Local.ToUniversalTime(lStartAt);
+    lUtcBase := CronSystemTimeZone.ToUniversalTime(lStartAt, False);
     lUtcMidnight := EncodeDateTime(YearOf(lUtcBase), MonthOf(lUtcBase), DayOf(lUtcBase), 0, 0, 0, 0);
     if lUtcMidnight <= lUtcBase then
       lUtcMidnight := IncDay(lUtcMidnight);
-    lExpected := TTimeZone.Local.ToLocalTime(lUtcMidnight);
+    lExpected := CronSystemTimeZone.ToLocalTime(lUtcMidnight);
 
     Assert.AreEqual(lExpected, lEvent.NextSchedule, 0.0);
   finally
@@ -250,12 +262,12 @@ begin
     lEvent.ValidFrom := lStartAt;
     lEvent.Run;
 
-    lUtcBase := TTimeZone.Local.ToUniversalTime(lStartAt);
+    lUtcBase := CronSystemTimeZone.ToUniversalTime(lStartAt, False);
     lEventBase := lUtcBase + (lOffsetMinutes / (24 * 60));
     lEventMidnight := EncodeDateTime(YearOf(lEventBase), MonthOf(lEventBase), DayOf(lEventBase), 0, 0, 0, 0);
     if lEventMidnight <= lEventBase then
       lEventMidnight := IncDay(lEventMidnight);
-    lExpected := TTimeZone.Local.ToLocalTime(lEventMidnight - (lOffsetMinutes / (24 * 60)));
+    lExpected := CronSystemTimeZone.ToLocalTime(lEventMidnight - (lOffsetMinutes / (24 * 60)));
 
     Assert.AreEqual(lExpected, lEvent.NextSchedule, 0.0);
   finally
@@ -332,13 +344,13 @@ begin
     lEvent.Run;
 
     lFirstNext := lEvent.NextSchedule;
-    Assert.IsTrue(TTimeZone.Local.IsAmbiguousTime(lFirstNext));
+    Assert.IsTrue(CronSystemTimeZone.IsAmbiguousTime(lFirstNext));
     lCron.TickAt(lFirstNext);
     Assert.AreEqual(1, lCount, 'First ambiguous instance should execute');
     lSecondNext := lEvent.NextSchedule;
 
     Assert.AreEqual(lFirstNext, lSecondNext, 0.0);
-    Assert.IsTrue(TTimeZone.Local.IsAmbiguousTime(lSecondNext));
+    Assert.IsTrue(CronSystemTimeZone.IsAmbiguousTime(lSecondNext));
     lCron.TickAt(lSecondNext);
     Assert.AreEqual(1, lCount, 'Second run must wait for the repeated wall-clock instance');
     lCron.TickAt(IncMinute(lSecondNext, -1)); // simulate fallback rollback (time moved back)
@@ -380,7 +392,7 @@ begin
     lEvent.Run;
 
     lNextAt := lEvent.NextSchedule;
-    Assert.IsTrue(TTimeZone.Local.IsAmbiguousTime(lNextAt));
+    Assert.IsTrue(CronSystemTimeZone.IsAmbiguousTime(lNextAt));
 
     lCron.TickAt(lNextAt);
     Assert.AreEqual(0, lCount, 'Prefer-second must not fire at the first ambiguous instance');

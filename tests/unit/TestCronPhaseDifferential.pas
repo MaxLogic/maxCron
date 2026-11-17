@@ -1,12 +1,20 @@
 unit TestCronPhaseDifferential;
+{$I maxCron.inc}
 
 interface
 
 uses
+  {$IFDEF FPC}
+  Windows,
+  DateUtils, Generics.Collections, SysUtils,
+  DUnitX.TestFramework,
+  maxCron
+  {$ELSE}
   System.DateUtils, System.Generics.Collections, System.SysUtils,
   Winapi.Windows,
   DUnitX.TestFramework,
-  maxCron;
+  maxCron
+  {$ENDIF};
 
 type
   [TestFixture]
@@ -105,8 +113,8 @@ var
   lPlan, lOldEngine: string;
   lOldSeed, i, j, k, lStart, lLength: Integer;
 begin
-  lOldEngine := GetEnvironmentVariable('MAXCRON_ENGINE');
-  Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(aEngine));
+  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
   lOldSeed := RandSeed;
   RandSeed := 20261115;
   lBase := EncodeDateTime(2026, 6, 15, 0, 0, 0, 0);
@@ -168,7 +176,7 @@ begin
     end;
     SetMaxCronWallClockHook(nil);
     RandSeed := lOldSeed;
-    Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(lOldEngine));
+    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
   end;
 end;
 

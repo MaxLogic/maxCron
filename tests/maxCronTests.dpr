@@ -21,6 +21,7 @@ uses
   maxCron.Plan in '..\maxCron.Plan.pas',
   maxCron in '..\maxCron.pas',
   TestCronTextParity in 'unit\TestCronTextParity.pas',
+  TestLocalZoneOs in 'unit\TestLocalZoneOs.pas',
   TestZoneFakes in 'unit\TestZoneFakes.pas',
   TestTimeZoneRules in 'unit\TestTimeZoneRules.pas',
   TestTimeZoneTzif in 'unit\TestTimeZoneTzif.pas',
@@ -62,6 +63,7 @@ begin
   try
     TDUnitX.CheckCommandLine;
     TDUnitX.RegisterTestFixture(TTestCronTextParity);
+    TDUnitX.RegisterTestFixture(TTestLocalZoneOs);
     TDUnitX.RegisterTestFixture(TTestTimeZoneRules);
     TDUnitX.RegisterTestFixture(TTestTimeZoneTzif);
     TDUnitX.RegisterTestFixture(TTestNamedTimeZones);

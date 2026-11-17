@@ -172,6 +172,14 @@ try {
     Invoke-GateBuild 'tests' 'tests\fpc\maxCronFpcTests.dpr' @('-Sew', '-dMAXCRON_TESTS', '-gh', '-vm4104,4105', ('-Fu' + $PSScriptRoot), ('-Fu' + (Join-Path $repository 'tests\unit')), ('-Fi' + (Join-Path $runOutput 'gen')))
     $failureExit = 1
     $testCount = Invoke-GateTest 'tests' 'maxCronFpcTests' $testArguments -Heap
+    $step = 6; $failureExit = 3
+    Invoke-GateBuild 'smoke' 'tests\fpc\maxCronFpcSmoke.dpr' @('-Sew')
+    $failureExit = 1
+    [void](Invoke-GateTest 'smoke' 'maxCronFpcSmoke' @())
+    $failureExit = 3
+    Invoke-GateBuild 'smoke-heaptrc' 'tests\fpc\maxCronFpcSmoke.dpr' @('-Sew', '-gh', '-dMAXCRON_FPC_SMOKE_NOPOOL')
+    $failureExit = 1
+    [void](Invoke-GateTest 'smoke-heaptrc' 'maxCronFpcSmoke' @() -Heap)
     [Console]::WriteLine("FPC GATE PASSED ($testCount tests, compiler 3.3.1 x86_64-win64 at $compiler)")
     exit 0
 } catch {

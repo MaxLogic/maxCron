@@ -1,12 +1,20 @@
 unit TestTimeBoundaries;
+{$I maxCron.inc}
 
 interface
 
 uses
+  {$IFDEF FPC}
+  Windows,
+  DateUtils, Math, SysUtils,
+  AutoFree, DUnitX.TestFramework,
+  maxCron, maxCron.Internal.TimeZone
+  {$ELSE}
   System.DateUtils, System.Math, System.SysUtils,
   Winapi.Windows,
   AutoFree, DUnitX.TestFramework,
-  maxCron, maxCron.Internal.TimeZone;
+  maxCron, maxCron.Internal.TimeZone
+  {$ENDIF};
 
 type
   [TestFixture]
@@ -192,6 +200,11 @@ end;
 procedure TTestTimeBoundaries.CheckWindows(const aEngine: string; const aPolicy, aLimit: Integer;
   const aCarrier: Boolean);
 var
+  p: Integer;
+  i: Integer;
+  j: Integer;
+  v: Integer;
+  k: Integer;
   g: TGarbos;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
@@ -201,8 +214,8 @@ var
   lDue, lTick, lOriginal: TDateTime;
   lOldEngine, lFirst: string;
 begin
-  lOldEngine := GetEnvironmentVariable('MAXCRON_ENGINE');
-  Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(aEngine));
+  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
   lWallUs := GridMs(EncodeDate(1989, 1, 1)) * 1000;
   SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
   lFailures := 0;
@@ -216,19 +229,19 @@ begin
     lEvent := lCron.Add('integer-model');
     lEvent.InvokeMode := imMainThread;
     lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lCount); end;
-    for var p := 0 to 3 do
+    for p := 0 to 3 do
     begin
       lEvent.Stop;
       lEvent.EventPlan := cPlans[p];
       lPeriodUs := Int64(cPeriods[p]) * cUsPerSecond;
-      for var i := 0 to 63 do
+      for i := 0 to 63 do
       begin
         lDueUs := DueSecond(i, cPeriods[p]) * cUsPerSecond;
         lWallUs := lDueUs - cUsPerSecond;
         lDue := IncSecond(EncodeDate(1899, 12, 30), lDueUs div cUsPerSecond);
         lEvent.Stop;
         lEvent.ValidFrom := IncSecond(lDue, -1);
-        for var j := 0 to High(cOffsets) + 8 do
+        for j := 0 to High(cOffsets) + 8 do
         begin
           if j <= High(cOffsets) then
             lOffset := cOffsets[j]
@@ -241,7 +254,7 @@ begin
             lVariant := 1
           else
             lVariant := 0;
-          for var v := 0 to lVariant do
+          for v := 0 to lVariant do
           begin
             if v = 0 then
               lOriginal := lTickUs / cUsPerDay
@@ -251,7 +264,7 @@ begin
               lDistance := 4
             else
               lDistance := 0;
-            for var k := -lDistance to lDistance do
+            for k := -lDistance to lDistance do
             begin
               lTick := Neighbour(lOriginal, k);
               if aCarrier then
@@ -290,7 +303,7 @@ begin
                 (GridMs(lEvent.LastExecution) <> lLastUs div 1000) then
               begin
                 Inc(lFailures);
-                if lFirst = '' then
+          if lFirst = '' then
                   lFirst := Format('seed=20261116 due=%d offset=%d now=%d engine=%s policy=%d limit=%d plan=%s variant=%d ulp=%d fires=%d expected=%d nextMs=%d expectedNextMs=%d lastMs=%d expectedLastMs=%d',
                     [lDueUs, lOffset, lModelUs, aEngine, aPolicy, aLimit, cPlans[p], v, k, lCount,
                     lExpected, GridMs(lEvent.NextSchedule), lNextUs div 1000, GridMs(lEvent.LastExecution), lLastUs div 1000]);
@@ -300,10 +313,10 @@ begin
         end;
         // Existing Double-addition forms, including both ulp neighbours, stay covered.
         if aCarrier then
-          for var k := 0 to 2 do
+          for k := 0 to 2 do
           begin
             lOriginal := lDue + k * (1.0 / 24 / 60 / 60);
-            for var j := -4 to 4 do
+            for j := -4 to 4 do
             begin
               lTick := Neighbour(lOriginal, j);
               lEvent.Stop;
@@ -345,7 +358,7 @@ begin
   finally
     g.Clear;
     SetMaxCronWallClockHook(nil);
-    Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(lOldEngine));
+    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
   end;
 end;
 
@@ -364,6 +377,9 @@ const
   cDeltas: array[0..13] of Integer = (-1, -100, -400, -499, -500, -501, -999, -1000, -999999,
     0, 1, 499, 500, 999999);
 var
+  p: Integer;
+  i: Integer;
+  d: Int64;
   g: TGarbos;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
@@ -371,8 +387,8 @@ var
   lFailures, lChecks: Integer;
   lOldEngine, lFirst: string;
 begin
-  lOldEngine := GetEnvironmentVariable('MAXCRON_ENGINE');
-  Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(aEngine));
+  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
   lWallUs := GridMs(EncodeDate(1989, 1, 1)) * 1000;
   SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
   lFailures := 0;
@@ -381,14 +397,14 @@ begin
   try
     GC(lCron, TmaxCron.Create(ctPortable), g);
     lEvent := lCron.Add('run-base');
-    for var p := 0 to 3 do
+    for p := 0 to 3 do
     begin
       lEvent.Stop;
       lEvent.EventPlan := cPlans[p];
-      for var i := 0 to 63 do
+      for i := 0 to 63 do
       begin
         lDueUs := DueSecond(i, cPeriods[p]) * cUsPerSecond;
-        for var d in cDeltas do
+        for d in cDeltas do
         begin
           lWallUs := lDueUs + d;
           lEvent.Stop;
@@ -412,7 +428,7 @@ begin
   finally
     g.Clear;
     SetMaxCronWallClockHook(nil);
-    Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(lOldEngine));
+    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
   end;
 end;
 
@@ -420,6 +436,7 @@ procedure TTestTimeBoundaries.HistoricalSubMs(const aEngine: string);
 const
   cLate: array[0..2] of Integer = (999600, 999900, 1000000);
 var
+  d: Int64;
   g: TGarbos;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
@@ -427,8 +444,8 @@ var
   lCount, lExpected: Integer;
   lOldEngine: string;
 begin
-  lOldEngine := GetEnvironmentVariable('MAXCRON_ENGINE');
-  Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(aEngine));
+  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
   lDueUs := GridMs(EncodeDateTime(2026, 11, 16, 11, 0, 0, 0)) * 1000;
   lWallUs := lDueUs - cUsPerSecond;
   SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
@@ -437,7 +454,7 @@ begin
     lCron.DefaultMisfirePolicy := TmaxCronMisfirePolicy.mpSkip;
     lEvent := lCron.Add('R4', cPlans[0], procedure(aSender: IMaxCronEvent) begin Inc(lCount); end);
     lEvent.InvokeMode := imMainThread;
-    for var d in cLate do
+    for d in cLate do
     begin
       lEvent.Stop;
       lEvent.Run;
@@ -450,7 +467,7 @@ begin
   finally
     g.Clear;
     SetMaxCronWallClockHook(nil);
-    Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(lOldEngine));
+    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
   end;
 end;
 
@@ -481,6 +498,7 @@ const
   cOffsets: array[0..8] of Integer = (-501, -500, -499, -1, 0, 1, 499, 500, 501);
   cTickUs: Int64 = 4000000000000000;
 var
+  d: Int64;
   g: TGarbos;
   lCron: TmaxCron;
   lWallUs: Int64;
@@ -491,7 +509,7 @@ begin
   try
     GC(lCron, TmaxCron.Create(ctPortable), g);
     Assert.IsTrue(lCron.TryGetWatchdogDiagnostics(lDiagnostics));
-    for var d in cOffsets do
+    for d in cOffsets do
     begin
       lWallUs := cTickUs + Int64(lDiagnostics.MaxTickLagMs) * 1000 + d;
       lCron.TickAtUs(cTickUs);
@@ -511,6 +529,8 @@ procedure TTestTimeBoundaries.CalculationApiContract(const aPeriodIndex: Integer
 const
   cOffsetsMs: array[0..6] of Integer = (-1001, -1000, -1, 0, 1, 999, 1000);
 var
+  i: Integer;
+  j: Integer;
   g: TGarbos;
   lPlan: TCronSchedulePlan;
   lDates: TDates;
@@ -525,7 +545,7 @@ begin
   lSeed := 20261116;
   lPeriodMs := Int64(cPeriods[aPeriodIndex]) * 1000;
   // i 0..63 keep the original 2000..2999 dues; i 64..95 add the early domain from 1900-01-06.
-  for var i := 0 to 95 do
+  for i := 0 to 95 do
   begin
     lSeed := (lSeed * 1664525 + 1013904223) and $FFFFFFFF;
     if i < 64 then
@@ -555,17 +575,17 @@ begin
           Assert.IsTrue(lPlan.FindPreviousScheduleDate(lBase, lPrevious), lHint + ' previous found');
           Assert.AreEqual(lExpectedPrevious, GridMs(lPrevious), lHint + ' previous');
           Assert.AreEqual(3, lPlan.GetNextOccurrences(3, lBase, lDates), lHint + ' next page count');
-          for var j := 0 to 2 do
+          for j := 0 to 2 do
             Assert.AreEqual(lExpectedNext + j * lPeriodMs, GridMs(lDates[j]), lHint + ' next page');
           Assert.AreEqual(3, lPlan.GetPreviousOccurrences(3, lBase, lDates), lHint + ' previous page count');
-          for var j := 0 to 2 do
+          for j := 0 to 2 do
             Assert.AreEqual(lExpectedPrevious - j * lPeriodMs, GridMs(lDates[j]), lHint + ' previous page');
           lEnd := CronInstantUsToDateTime((lInputMs + 2 * lPeriodMs) * 1000);
           lFirst := ((lInputMs + lPeriodMs - 1) div lPeriodMs) * lPeriodMs;
           lLast := ((CarrierUs(lEnd) div 1000 + lPeriodMs - 1) div lPeriodMs - 1) * lPeriodMs;
           lExpectedCount := (lLast - lFirst) div lPeriodMs + 1;
           Assert.AreEqual(lExpectedCount, lPlan.GetOccurrencesBetween(lBase, lEnd, lDates), lHint + ' range count');
-          for var j := 0 to lExpectedCount - 1 do
+          for j := 0 to lExpectedCount - 1 do
             Assert.AreEqual(lFirst + j * lPeriodMs, GridMs(lDates[j]), lHint + ' range member');
           Assert.AreEqual(lExpectedCount, lPlan.CountBetween(lBase, lEnd), lHint + ' count');
           Assert.IsTrue(lPlan.HasOccurrenceBetween(lBase, lEnd), lHint + ' has');
@@ -575,6 +595,7 @@ end;
 
 procedure TTestTimeBoundaries.CalculationValidityRepresentation;
 var
+  y: Int64;
   g: TGarbos;
   lPlan: TCronSchedulePlan;
   lDue, lBase, lNext: TDateTime;
@@ -582,7 +603,7 @@ var
 begin
   GC(lPlan, TCronSchedulePlan.Create, g);
   lPlan.Parse('* * * * * * *');
-  for var y in [1900, 2000, 2026, 2079, 2100, 2500, 2999] do
+  for y in TArray<Int64>.Create(1900, 2000, 2026, 2079, 2100, 2500, 2999) do
   begin
     lDue := EncodeDateTime(y, 11, 16, 10, 0, 0, 0);
     lDueMs := GridMs(lDue);
@@ -602,6 +623,7 @@ end;
 
 procedure TTestTimeBoundaries.ExactMsReference;
 var
+  i: Integer;
   lValue: TDateTime;
   lFailures, lCarrierFailures: Integer;
   lFirst: string;
@@ -609,7 +631,7 @@ begin
   lFailures := 0;
   lCarrierFailures := 0;
   lFirst := '';
-  for var i := Low(cExactMsRows) to High(cExactMsRows) do
+  for i := Low(cExactMsRows) to High(cExactMsRows) do
   begin
     Move(cExactMsRows[i].Bits, lValue, SizeOf(lValue));
     if CarrierMs(lValue) <> cExactMsRows[i].Ms then
@@ -639,6 +661,9 @@ const
     ($4076D64C474E8B07, 31570009000, 31570010000),
     ($4076D653B8B174F9, 31570165000, 31570166000));
 var
+  r: Integer;
+  i: Integer;
+  j: Integer;
   g: TGarbos;
   lPlan: TCronSchedulePlan;
   lValue, lResult, lEnd: TDateTime;
@@ -649,7 +674,7 @@ var
 begin
   GC(lPlan, TCronSchedulePlan.Create, g);
   lPlan.Parse('* * * * * * *');
-  for var r := 0 to 5 do
+  for r := 0 to 5 do
   begin
     Move(cReview[r, 0], lValue, SizeOf(lValue));
     lHint := 'review r1 bits=' + IntToHex(cReview[r, 0], 16);
@@ -661,7 +686,7 @@ begin
   lMinMs := GridMs(EncodeDate(1900, 1, 3));
   lMaxMs := GridMs(EncodeDate(3000, 12, 29));
   lChecked := 0;
-  for var i := Low(cExactMsRows) to High(cExactMsRows) do
+  for i := Low(cExactMsRows) to High(cExactMsRows) do
   begin
     lMs := cExactMsRows[i].Ms;
     if (lMs < lMinMs) or (lMs > lMaxMs) then
@@ -679,7 +704,7 @@ begin
     lEnd := CronMsToDateTime(lFloor + 2500);
     lCount := (lFloor + 2000 - lCeil) div 1000 + 1;
     Assert.AreEqual(lCount, lPlan.GetOccurrencesBetween(lValue, lEnd, lDates), lHint + ' range count');
-    for var j := 0 to lCount - 1 do
+    for j := 0 to lCount - 1 do
       Assert.AreEqual(lCeil + j * 1000, GridMs(lDates[j]), lHint + ' range member');
     Assert.AreEqual(lCount, lPlan.CountBetween(lValue, lEnd), lHint + ' count');
     Assert.IsTrue(lPlan.HasOccurrenceBetween(lValue, lEnd), lHint + ' has');
@@ -702,6 +727,7 @@ end;
 
 procedure TTestTimeBoundaries.WeekdaysDocumentedContract;
 var
+  i: Integer;
   g: TGarbos;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
@@ -718,7 +744,7 @@ begin
     lEvent.WeekdaysOnly := True;
     lEvent.InvokeMode := imMainThread;
     lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lFires); end;
-    for var i := 0 to 6 do
+    for i := 0 to 6 do
     begin
       lEvent.Stop;
       lDayMs := lMondayMs + Int64(i) * MSecsPerDay;
@@ -883,6 +909,10 @@ procedure TTestTimeBoundaries.GeneratedBlackoutWindows;
 const
   cYears: array[0..2] of Word = (2026, 2075, 2500);
 var
+  y: Integer;
+  i: Integer;
+  d: Integer;
+  k: Integer;
   g: TGarbos;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
@@ -894,18 +924,19 @@ begin
   lSeed := 20261116;
   lWallUs := 0;
   lFailures := 0;
+  lFirst := '';
   lChecks := 0;
   SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
   try
     GC(lCron, TmaxCron.Create(ctPortable), g);
     lEvent := lCron.Add('generated-blackout');
     lEvent.EventPlan := '* * * * * * */15';
-    for var y := 0 to High(cYears) do
+    for y := 0 to High(cYears) do
     begin
       lDayMs := GridMs(EncodeDate(cYears[y], 6, 5));
-      for var i := 0 to 47 do
-        for var d := -1 to 1 do
-          for var k := -4 to 4 do
+      for i := 0 to 47 do
+        for d := -1 to 1 do
+          for k := -4 to 4 do
           begin
             lEvent.Stop;
             lStart := Int64(i) * 1800000;
@@ -943,7 +974,7 @@ begin
             end;
           end;
     end;
-    for var i := 0 to 511 do
+    for i := 0 to 511 do
     begin
       lEvent.Stop;
       lSeed := (UInt64(lSeed) * 1664525 + 1013904223) and $FFFFFFFF;
@@ -978,6 +1009,9 @@ const
   cEdges: array[0..3] of Integer = (6, 9, 17, 22);
   cDelta: array[0..8] of Integer = (-1000001, -1000, -400, -1, 0, 1, 400, 1000, 999999);
 var
+  w: Integer;
+  i: Integer;
+  j: Integer;
   g: TGarbos;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
@@ -992,7 +1026,7 @@ begin
     lEvent.EventPlan := '* * * * * * *';
     lEvent.InvokeMode := imMainThread;
     lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lFires); end;
-    for var w := 0 to 1 do
+    for w := 0 to 1 do
     begin
       if w = 0 then
       begin
@@ -1002,8 +1036,8 @@ begin
         lStart := 22 * 3600000;
         lEnd := 6 * 3600000;
       end;
-      for var i := 0 to High(cEdges) do
-        for var j := 0 to High(cDelta) do
+      for i := 0 to High(cEdges) do
+        for j := 0 to High(cDelta) do
         begin
           lEvent.Stop;
           lEvent.BlackoutStartTime := PolicyGrid(lStart);
@@ -1030,6 +1064,7 @@ end;
 
 procedure TTestTimeBoundaries.GeneratedExcludedDates;
 var
+  i: Integer;
   g: TGarbos;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
@@ -1044,7 +1079,7 @@ begin
     lEvent.EventPlan := '* * * * * * *';
     lEvent.InvokeMode := imMainThread;
     lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lFires); end;
-    for var i := 0 to 63 do
+    for i := 0 to 63 do
     begin
       lEvent.Stop;
       lDate := EncodeDate(2026 + i * 7, 1 + i mod 12, 1 + i mod 28);
@@ -1069,6 +1104,9 @@ procedure TTestTimeBoundaries.FakeDstPolicies;
 const
   cDelta: array[0..8] of Integer = (-999999, -500, -499, -1, 0, 1, 499, 500, 999999);
 var
+  p: Integer;
+  i: Integer;
+  k: Integer;
   g: TGarbos;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
@@ -1087,8 +1125,8 @@ begin
     lEvent.EventPlan := '0 2 * * *';
     lEvent.InvokeMode := imMainThread;
     lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lFires); end;
-    for var p := 0 to 1 do
-      for var i := 0 to High(cDelta) do
+    for p := 0 to 1 do
+      for i := 0 to High(cDelta) do
       begin
         lEvent.Stop;
         lEvent.DstSpringPolicy := TmaxCronDstSpringPolicy(p);
@@ -1105,8 +1143,8 @@ begin
           lExpectedFirst := 1;
         Assert.AreEqual(lExpectedFirst, lFires, 'spring precise edge');
       end;
-    for var p := Ord(Low(TmaxCronDstFallPolicy)) to Ord(High(TmaxCronDstFallPolicy)) do
-      for var i := 0 to High(cDelta) do
+    for p := Ord(Low(TmaxCronDstFallPolicy)) to Ord(High(TmaxCronDstFallPolicy)) do
+      for i := 0 to High(cDelta) do
       begin
         lEvent.Stop;
         lEvent.DstFallPolicy := TmaxCronDstFallPolicy(p);
@@ -1135,8 +1173,8 @@ begin
         Assert.AreEqual(lExpectedSecond, lFires, 'fall repeated instance');
       end;
     // The fake-zone boundary classifier itself follows exact-ms carrier semantics at ulp neighbours.
-    for var k := -8 to 8 do
-      for var i := 0 to 3 do
+    for k := -8 to 8 do
+      for i := 0 to 3 do
       begin
         lExpectedMs := lSpringMs + 7200000;
         case i of
@@ -1156,6 +1194,10 @@ end;
 
 procedure TTestTimeBoundaries.GeneratedUtcOffsetHours;
 var
+  d: Integer;
+  z: Integer;
+  h: Integer;
+  k: Integer;
   g: TGarbos;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
@@ -1168,18 +1210,18 @@ begin
   try
     GC(lCron, TmaxCron.Create(ctPortable), g);
     lEvent := lCron.Add('utc-offset-hours');
-    for var d := 0 to 1 do
+    for d := 0 to 1 do
     begin
       lDayMs := GridMs(EncodeDate(2075, 3, 31));
       if d = 1 then
         lDayMs := GridMs(EncodeDate(2075, 10, 27));
-      for var z := 0 to 1 do
+      for z := 0 to 1 do
       begin
         lOffset := 0;
         if z = 1 then
           lOffset := 19800000;
-        for var h := -24 to 47 do
-          for var k := -4 to 4 do
+        for h := -24 to 47 do
+          for k := -4 to 4 do
           begin
             lEvent.Stop;
             lEvent.TimeZoneId := 'UTC';
@@ -1214,6 +1256,10 @@ procedure TTestTimeBoundaries.GeneratedDstSearchEdges;
 const
   cDelta: array[0..8] of Integer = (-999999, -501, -500, -499, -1, 0, 1, 500, 999999);
 var
+  d: Integer;
+  e: Integer;
+  p: Integer;
+  i: Integer;
   g: TGarbos;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
@@ -1227,10 +1273,10 @@ begin
     GC(lCron, TmaxCron.Create(ctPortable), g);
     lEvent := lCron.Add('dst-search-edges');
     lEvent.EventPlan := '* * * * * * *';
-    for var d := 0 to 1 do
-      for var e := 2 to 3 do
-        for var p := 0 to 1 do
-          for var i := 0 to High(cDelta) + 17 do
+    for d := 0 to 1 do
+      for e := 2 to 3 do
+        for p := 0 to 1 do
+          for i := 0 to High(cDelta) + 17 do
           begin
             lEvent.Stop;
             lEvent.DstSpringPolicy := TmaxCronDstSpringPolicy(p);

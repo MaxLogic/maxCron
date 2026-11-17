@@ -5,6 +5,9 @@ All notable user-visible changes to this project will be documented in this file
 ## [Unreleased]
 
 ### Added
+- FPC trunk 3.3.1 Windows x64 support, Unicode-safe text compatibility, Windows-rule LOCAL and a separate FPC test gate.
+- The FPC gate isolates each invocation in a fresh validated output directory, handles conditional and tokenized test attributes, and checks shared test names against Delphi discovery. Containment covers misconfiguration and pre-existing aliases; concurrent malicious directory replacement is outside its threat model.
+- The FPC batch launcher delegates to PowerShell with fixed arguments. Compiler/output settings remain literal environment values. Output paths accept only ASCII letters, digits, space and `\ : . _ - +`; unsupported characters fail with exit 2 before output creation. Child processes use the per-run working directory and an allowlisted environment, with gate-owned heaptrc logs and an explicit read-only test-data root. WSL invokes the same gate directly.
 - `TimeZoneId` now also accepts IANA names such as `GMT` and `Europe/Warsaw`.
 - Added internal integer-millisecond zone rules and a TZif reader for IANA names
   such as `Europe/Warsaw`, `America/New_York` and `Australia/Sydney`. On Windows,
@@ -20,6 +23,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
 
 ### Changed
+- Consumer projects must also include `maxCron.Internal.Text.pas`.
 - Invalid or unknown `TimeZoneId` values report the rejected value and cause,
   preserving the event's previous zone. Add `maxCron.Internal.TZif.pas` to consumer
   projects. Existing `LOCAL`, `UTC` and fixed-offset behavior is unchanged.

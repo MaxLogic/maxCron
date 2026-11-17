@@ -1,12 +1,20 @@
 unit TestMisfireOnTime;
+{$I maxCron.inc}
 
 interface
 
 uses
+  {$IFDEF FPC}
+  Windows,
+  DateUtils, SysUtils,
+  AutoFree, DUnitX.TestFramework,
+  maxCron
+  {$ELSE}
   System.DateUtils, System.SysUtils,
   Winapi.Windows,
   AutoFree, DUnitX.TestFramework,
-  maxCron;
+  maxCron
+  {$ENDIF};
 
 type
   [TestFixture]
@@ -48,8 +56,8 @@ var
   lCount: Integer;
   lOldEngine: string;
 begin
-  lOldEngine := GetEnvironmentVariable('MAXCRON_ENGINE');
-  Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(aEngine));
+  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
   try
     GC(lCron, TmaxCron.Create(ctPortable), g);
     lCron.DefaultMisfirePolicy := TmaxCronMisfirePolicy.mpSkip;
@@ -85,7 +93,7 @@ begin
     end;
   finally
     g.Clear;
-    Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(lOldEngine));
+    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
   end;
 end;
 
@@ -94,6 +102,7 @@ procedure TTestMisfireOnTime.GeneratedDueInstants(const aEngine: string;
 const
   cSamples = 4096;
 var
+  i: Integer;
   g: TGarbos;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
@@ -102,8 +111,8 @@ var
   lCount, lFailures, lSecond: Integer;
   lOldEngine, lFirstFailure: string;
 begin
-  lOldEngine := GetEnvironmentVariable('MAXCRON_ENGINE');
-  Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(aEngine));
+  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
   try
     GC(lCron, TmaxCron.Create(ctPortable), g);
     lCron.DefaultMisfirePolicy := TmaxCronMisfirePolicy.mpSkip;
@@ -117,7 +126,7 @@ begin
       end;
     lFailures := 0;
     lFirstFailure := '';
-    for var i := 0 to cSamples - 1 do
+    for i := 0 to cSamples - 1 do
     begin
       // Include day/year rollovers and varied binary day fractions, independent of Now.
       lSecond := (i * 7919) mod 86400;
@@ -151,7 +160,7 @@ begin
     Assert.AreEqual(0, lFailures, Format('%d generated instants; %s', [cSamples, lFirstFailure]));
   finally
     g.Clear;
-    Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(lOldEngine));
+    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
   end;
 end;
 

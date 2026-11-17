@@ -20,6 +20,129 @@ unit-qualified RTTI names now use `maxCron.Plan` (for example,
 `TCronSchedulePlan.UnitName`); update reflection that looks up the old qualified names.
 
 
+## Free Pascal (FPC)
+
+The supported target is Windows x64 with FPC trunk 3.3.1, built from
+`https://gitlab.com/freepascal.org/fpc/source` main commit
+`ad23c1f3ddadfe9b82768d4f9f8fa5e5783c21ec` (2026-11-15). FPC 3.2.x lacks the
+anonymous-method support required here. `maxCron.inc` rejects older versions and
+other FPC targets.
+
+The maintainer installation is `F:\Tools\fpc-trunk`. It was built from source
+using the official FPC 3.2.2 x86_64-win64 bootstrap, with the bootstrap's `make`:
+
+```bat
+make clean all install PP=<bootstrap ppcx64.exe> INSTALL_PREFIX=F:\Tools\fpc-trunk OS_TARGET=win64 CPU_TARGET=x86_64
+```
+
+The compiler is `F:\Tools\fpc-trunk\bin\x86_64-win64\fpc.exe`. Invoke it explicitly,
+without loading a different installation's configuration:
+
+```bat
+F:\Tools\fpc-trunk\bin\x86_64-win64\fpc.exe -n @F:\Tools\fpc-trunk\bin\x86_64-win64\fpc.cfg -FDF:\Tools\fpc-trunk\bin\x86_64-win64 "-FuF:\Tools\fpc-trunk\units\x86_64-win64\*" -Fu<maxCron folder> <your program>
+```
+
+The units set `delphiunicode`, `anonymousfunctions` and `functionreferences`
+through `maxCron.inc`, with real constants kept at Double precision.
+Add the same library units listed under Installation,
+including `maxCron.Internal.Text.pas`. MaxLogicFoundation is not needed on FPC.
+Plan text stays Unicode and uses Delphi-compatible numeric syntax.
+
+On FPC, `imMaxAsync` runs on the RTL `System.Threading` pool, as does `imTTask`.
+The tested FPC build has an RTL pool shutdown race that can double-free a worker
+at process exit under `heaptrc`; a program using only `TTask.Run` reproduces it.
+The all-mode smoke therefore runs without heap tracing. The deterministic suite
+and the `imMainThread`/`imThread` smoke run with heap tracing and require zero
+unfreed blocks. This test split does not fix the RTL exit race.
+
+FPC's `TTimeZone.Local` misclassifies DST gaps/overlaps and some UTC conversions.
+FPC LOCAL uses Windows year rules through maxCron's zone engine. Delphi keeps
+its RTL LOCAL implementation. FPC exception messages are AnsiString, so
+characters unavailable in the Windows code page can be replaced in messages.
+
+The tested compiler can report an internal `EListError` for a non-capturing
+anonymous procedure literal passed directly to an overloaded `Add` call. A
+literal capturing only `Self` can bind to the method-pointer overload. Use a
+typed `TmaxCronNotifyProc` local variable before calling `Add`:
+
+```pascal
+lCallback := procedure(aSender: IMaxCronEvent) begin HandleSchedule(aSender); end;
+lEvent := lCron.Add('job', '* * * * *', lCallback);
+```
+
+Run `build-and-run-tests-fpc.bat` from Windows, or
+`./build-and-run-tests-fpc.sh` from WSL (Bash, `wslpath`, and Python 3 for command-line
+test arguments). The batch file is a fixed PowerShell 5.1 launcher; the WSL wrapper
+invokes the same PowerShell gate directly. Neither passes settings through cmd.
+The gate verifies compiler version and
+target before building. The machine's older `fpc` on PATH is rejected.
+`MAXCRON_FPC` overrides the absolute compiler path; `MAXCRON_FPC_OUT` overrides
+the external output directory (default `F:\dev-artifacts\builds\maxCron-main\fpc`
+when available, otherwise `%TEMP%\maxCron-fpc`). Each invocation creates a new
+`run-<GUID>` directory under that root, fails if the name already exists, checks
+its final Windows path identity and writes all build/test outputs below it.
+Pre-existing output children are never reused. The printed `FPC OUTPUT` line
+identifies the run directory. No WSL bridge launcher files are created.
+
+Settings are literal environment strings. Values are never expanded or evaluated.
+Supported output path characters are ASCII letters, digits, space and
+`\ : . _ - +` only. Every other character, including non-ASCII characters and
+shell metacharacters, is rejected with exit 2 before any output directory is
+created. Colons outside the drive prefix and components ending in a space or dot
+are also rejected. Normal `.` and `..` components are resolved before validation.
+The batch launcher accepts no command-line arguments. WSL arguments are encoded
+as a JSON array in `MAXCRON_FPC_ARGS` and passed directly to the native runner as
+an argument array. The current runner rejects all test filters; run the full suite.
+
+Every child process runs in the new run directory with an explicit environment:
+`SystemRoot`, `windir`, run-local `TEMP`/`TMP`, and a `PATH` limited to the
+toolchain and Windows system directories. The gate defines `MAXCRON_TEST_ROOT`
+to the validated absolute repository directory for read-only fixture lookup.
+Shared tests keep their existing lookup when this variable is unset.
+The gate always sets `HEAPTRC` to a
+log file inside the run directory, ignoring inherited settings. Mandatory heap
+checks read those files. `child-processes.jsonl` records each direct launch.
+
+Threat model: protects against misconfiguration and pre-existing links/aliases
+(junction, symlink, SUBST, case/trailing forms) at the root, any ancestor and any
+child; it does not defend against a concurrent malicious process replacing
+directories during the run. Existing directory ancestors must resolve to a
+Windows volume identity; inaccessible or unsupported destinations fail closed.
+`MAXCRON_DEBUG_SAFETY=1` enables range, overflow, stack and I/O checks.
+For WSL, supply Windows paths for the two overrides. The wrapper transfers
+settings using `WSLENV`; when invoking WSL from Windows, append their names to
+`WSLENV` if they must cross that boundary. Do not use its `/p` path conversion
+flag for values already written as Windows paths.
+
+The FPC runner reuses the calculation, corpus, fuzz/oracle, interval-plan,
+deadline queue, TZif/zone, text, time-boundary and deterministic scheduler tests.
+Registration is generated from their DUnitX attributes. Timing, stress,
+invoke-mode, lifecycle, VCL and soak suites remain Delphi tests; the FPC smoke
+checks add/run/fire/shutdown in all four invoke modes. The gate exits 0 only
+after all builds, tests, smokes and required heap checks pass. Exit codes are
+1 for test/heap failure, 2 for tool/output configuration, and 3 for build or
+registration-generation failure.
+
+The registry generator follows nested `IFDEF`/`IFNDEF`/`ELSE`/`ENDIF` branches for
+the fixed FPC Windows x64 test environment and accepts inline fixture attributes.
+Unsupported conditions or fixture/test declarations fail with exit 3. The gate
+also compares generated test names per shared fixture with the real Delphi DUnitX
+discovery snapshot in `tests/fpc/DelphiSharedTests.txt`. Its source hashes make a
+shared-fixture edit fail until the snapshot is refreshed; equal counts with
+different names also fail. The only exclusions are the three FPC shim tests and
+the Delphi-only `MatchesRtlLocal` test.
+
+After editing a shared fixture, regenerate that snapshot with
+`tests/fpc/Export-DelphiTestNames.ps1 -Compiler <dcc64.exe> -DUnitXSource <DUnitX-source-directory> -OutputRoot <external-build-directory>`
+under PowerShell. This compiles a discovery tool using the installed Delphi
+compiler and records actual DUnitX names with their source hashes. Review the
+snapshot diff alongside the test changes. Focused generator, alias and parity
+regressions are in `tests/fpc/FpcGate.Tests.ps1` (Pester 5); pass `Generator` and an
+owned external `ScratchRoot` using `New-PesterContainer -Data`. The generated
+alias-layout and literal-path invariants and Delphi attribute-layout discovery comparison are in
+`tests/fpc/gate_invariants.py` (Windows Python 3.12+, `--help`). Keep its fixtures under
+an owned external output root and clean them with the bounded link-fixture helper.
+
 ## Main features:
 
 - Compatible with most of what CRON is offering

@@ -32,7 +32,7 @@ try {
     }
     # These are the only intentional differences in the declared shared roster.
     $delphiOnly = 'TestLocalZoneOs.TTestLocalZoneOs.MatchesRtlLocal'
-    if ($expected.Count -eq 0 -or $generated.Count -eq 0) {
+    if ($expected.Count -eq 0 -or $generated.Count -eq 0 -or $expected -notcontains $delphiOnly) {
         throw 'Empty or incomplete Delphi/FPC name list'
     }
     $shared = @($generated | Where-Object { -not $_.StartsWith('TestFpcShims.') })
@@ -43,7 +43,7 @@ try {
     if ($difference.Count -gt 0) {
         throw ('Delphi/FPC test names differ: ' + (($difference | ForEach-Object { $_.SideIndicator + ' ' + $_.InputObject }) -join '; '))
     }
-    Write-Output ('Fixture name parity: {0} shared tests in {1} fixtures' -f
+    Write-Output ('Fixture name parity: {0} shared tests in {1} fixtures; 1 Delphi-only LOCAL test' -f
         $shared.Count, @($shared | ForEach-Object { ($_ -split '\.')[0..1] -join '.' } | Sort-Object -Unique).Count)
     exit 0
 } catch {

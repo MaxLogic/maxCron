@@ -1,11 +1,18 @@
 unit TestHashJitter;
+{$I maxCron.inc}
 
 interface
 
 uses
+  {$IFDEF FPC}
+  DateUtils, SysUtils,
+  DUnitX.TestFramework,
+  maxCron
+  {$ELSE}
   System.DateUtils, System.SysUtils,
   DUnitX.TestFramework,
-  maxCron;
+  maxCron
+  {$ENDIF};
 
 type
   [TestFixture]
