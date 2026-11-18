@@ -25,6 +25,7 @@ type
     [Test] procedure LimitsAndEmptyWindows;
     [Test] procedure HashAndExecutionLimit;
     [Test] procedure SyntaxAdditionsExamples;
+    [Test] procedure WeekdayRangeQueries_MatchIndependentCycle;
   end;
 
 implementation
@@ -260,6 +261,105 @@ begin
   end;
 end;
 
+
+procedure TTestCronQuery.WeekdayRangeQueries_MatchIndependentCycle;
+const
+  cSteps: array[0..8] of Integer = (0, 1, 2, 3, 4, 5, 6, 7, 8);
+var
+  lPlan, lExplicit: TCronSchedulePlan;
+  lDialect: TmaxCronDialect;
+  lFrom, lTo, lLow, lRawFrom, lRawTo, lDistance, lOffset, lStep, v, i: Integer;
+  lExpected: array[0..6] of Boolean;
+  lToken, lPrefix, lValues: string;
+  lBase, lWeek, lActual, lExpectedDate: TDateTime;
+  lDates: TDates;
+begin
+  lPlan := TCronSchedulePlan.Create;
+  lExplicit := TCronSchedulePlan.Create;
+  try
+    lWeek := EncodeDate(2026, 11, 15); // Sunday; each anchor is midday, queries are strict.
+    for lDialect := Low(TmaxCronDialect) to High(TmaxCronDialect) do
+    begin
+      FreeAndNil(lPlan);
+      FreeAndNil(lExplicit);
+      lPlan := TCronSchedulePlan.Create;
+      lExplicit := TCronSchedulePlan.Create;
+      lPlan.Dialect := lDialect;
+      lExplicit.Dialect := lDialect;
+      lLow := 0;
+      lPrefix := '0 0 * * ';
+      if lDialect = cdQuartzSecondsFirst then
+      begin
+        lLow := 1;
+        lPrefix := '0 0 0 ? * ';
+      end;
+      for lRawFrom := lLow to 7 do
+      begin
+        for lRawTo := lLow to 7 do
+        begin
+          lFrom := (lRawFrom - lLow) mod 7;
+          lTo := (lRawTo - lLow) mod 7;
+          lDistance := (lTo - lFrom + 7) mod 7;
+          if (lLow = 0) and (lRawFrom = 0) and (lRawTo = 7) then
+            lDistance := 6;
+          for lStep in cSteps do
+          begin
+            lToken := IntToStr(lRawFrom) + '-' + IntToStr(lRawTo);
+            if lStep > 0 then
+              lToken := lToken + '/' + IntToStr(lStep);
+            lPlan.Parse(lPrefix + lToken);
+            lValues := '';
+            for v := 0 to 6 do
+            begin
+              lOffset := (v - lFrom + 7) mod 7;
+              lExpected[v] := lOffset <= lDistance;
+              if lStep > 0 then
+                lExpected[v] := lExpected[v] and (lOffset mod lStep = 0);
+              Assert.AreEqual(lExpected[v], lPlan.Day_of_the_Week.NextVal(v) = v, lToken);
+              if lExpected[v] then
+              begin
+                if lValues <> '' then lValues := lValues + ',';
+                lValues := lValues + IntToStr(v + lLow);
+              end;
+            end;
+            lExplicit.Parse(lPrefix + lValues);
+            Assert.AreEqual(lExplicit.Describe, lPlan.Describe, lToken + ' Describe');
+            for v := 0 to 6 do
+            begin
+              lBase := lWeek + v + 0.5;
+              i := 1;
+              while not lExpected[(v + i) mod 7] do Inc(i);
+              lExpectedDate := lWeek + v + i;
+              Assert.IsTrue(lPlan.FindNextScheduleDate(lBase, lActual), lToken);
+              Assert.AreEqual(Serial(lExpectedDate), Serial(lActual), lToken + ' next');
+              i := 0;
+              while not lExpected[(v - i + 7) mod 7] do Inc(i);
+              lExpectedDate := lWeek + v - i;
+              Assert.IsTrue(lPlan.FindPreviousScheduleDate(lBase, lActual), lToken);
+              Assert.AreEqual(Serial(lExpectedDate), Serial(lActual), lToken + ' previous');
+            end;
+            i := 0;
+            for v := 0 to 6 do if lExpected[v] then Inc(i);
+            Assert.AreEqual(i, lPlan.CountBetween(lWeek, lWeek + 7), lToken + ' count');
+            Assert.AreEqual(i, lPlan.GetOccurrencesBetween(lWeek, lWeek + 7, lDates), lToken + ' between');
+            i := 0;
+            for v := 0 to 6 do
+            begin
+              if lExpected[v] then
+              begin
+                Assert.AreEqual(Serial(lWeek + v), Serial(lDates[i]), lToken + ' occurrence');
+                Inc(i);
+              end;
+            end;
+          end;
+        end;
+      end;
+    end;
+  finally
+    lExplicit.Free;
+    lPlan.Free;
+  end;
+end;
 
 procedure TTestCronQuery.SyntaxAdditionsExamples;
 var

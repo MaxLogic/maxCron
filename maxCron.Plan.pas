@@ -2501,6 +2501,12 @@ begin
       RangeTo := RangeFrom;
   end;
 
+  // In zero-based numbering, 0-7 spans the week, not the singleton Sunday.
+  // Drop the duplicate endpoint before normalization; stepping still starts at 0.
+  if (fPartKind = ckDayOfTheWeek) and not fDowOneBased and
+    (iR > 0) and (RangeFrom = 0) and (RangeTo = 7) then
+    RangeTo := FValidTo;
+
   if not (lIsStar and (fPartKind = ckDayOfTheWeek) and fDowOneBased) then
   begin
     RangeFrom := NormalizeDowValue(RangeFrom);

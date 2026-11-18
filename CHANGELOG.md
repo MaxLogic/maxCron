@@ -23,6 +23,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
 
 ### Changed
+- Day-of-week ranges `0-7` (including `SUN-7`) now span every day in `cdMaxCron` and `cdStandard`, instead of Sunday only. Stepped forms count from Sunday: `0-7/2` selects Sun,Tue,Thu,Sat and `0-7/3` selects Sun,Wed,Sat. Steps of 7 or more still select Sunday only. Quartz numbering is unchanged (`1` = Sun, `7` = Sat).
 - Stepped wrapped day-of-week ranges now count continuously across Sunday in every dialect. For example, `4-2/2` selects Thu,Sat,Mon instead of Thu,Sat,Sun,Tue; `1-7/4` selects Mon,Fri without adding Sun (`cdMaxCron`/`cdStandard`). Quartz `5-3/2` and `2-1/4` use the same rule. Unstepped wraps are unchanged.
 - Consumer projects must also include `maxCron.Internal.Text.pas`.
 - Invalid or unknown `TimeZoneId` values report the rejected value and cause,

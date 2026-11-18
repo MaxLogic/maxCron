@@ -1209,6 +1209,25 @@ in `cdMaxCron` and `cdStandard`. In Quartz numbering, the corresponding ranges
 are `5-3/2` and `2-1/4`. Unstepped wraps such as `FRI-MON` are unchanged.
 Day-of-month, year and `H(...)` ranges do not wrap.
 
+In `cdMaxCron` and `cdStandard`, Sunday may be written as `0` or `7`.
+For a range ending in `7`, starts `1` through `6` run forward through Sunday:
+`1-7` is Monday through Sunday, and `1-7/4` is Monday and Friday.
+`0-7` spans all seven days; `0-7/2` is Sunday, Tuesday, Thursday and Saturday,
+`0-7/3` is Sunday, Wednesday and Saturday, and steps of 7 or more select Sunday only.
+`7-7` and `SUN-SUN` select Sunday only. A range starting at `7` otherwise starts
+at Sunday, so `7-2/2` is Sunday and Tuesday. Lists union the selected days.
+Day names use the dialect's numbers before range expansion: `SUN-7` therefore
+also spans the week, while `0-SUN` is Sunday only in these zero-based dialects.
+
+Quartz numbering remains `1` = Sunday through `7` = Saturday; `0` is invalid.
+`1-7` spans the week and `1-7/2` selects Sunday, Tuesday, Thursday and Saturday.
+For any Quartz start `a` from 1 through 7, `a-7/s` steps forward from `a`
+through Saturday, without restarting the step; `7-7` is Saturday only.
+In either numbering, other ranges advance from the start to the endpoint,
+crossing Sunday when needed, and count the step continuously from the start.
+An omitted step means 1. Singleton values and `n/s` without a dash keep their meaning.
+
+
 Additional syntax we support:
 
 - Quartz-style modifiers for Day-of-Month and Day-of-Week:

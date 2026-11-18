@@ -75,6 +75,7 @@ type
     [Test]
     procedure Plan_Text_RespectsDialect;
     [Test] procedure Parse_WrappedRanges_Expansion;
+    [Test] procedure Parse_DowFullCycleRows;
     [Test] procedure Parse_InvalidIntegerGrammar_UsesParseException;
     [Test] procedure Parse_MonthEndOffsetLists_ErrorPrecedence;
     [Test] procedure Parse_MonthEndOffsets_LaterFieldDiagnostics;
@@ -438,6 +439,53 @@ begin
   AssertDescription('0 10 L-2 2 *', 'Every year on Feb the last day minus 2 days at 10:00');
 end;
 
+procedure TTestCronParsing.Parse_DowFullCycleRows;
+const
+  cTokens: array[0..12] of string = ('0-7', '0-7/1', '0-7/2', '0-7/3', '0-7/4',
+    '0-7/5', '0-7/6', '0-7/7', '0-7/8', '0-7/2147483647', 'SUN-7/2', '00-07/2', '0-7/2,1');
+  cValues: array[0..12] of string = ('0123456', '0123456', '0246', '036', '04',
+    '05', '06', '0', '0', '0', '0246', '0246', '01246');
+var
+  lPlan: TCronSchedulePlan;
+  lDialect: TmaxCronDialect;
+  lRaised: Boolean;
+  i, v: Integer;
+begin
+  lPlan := TCronSchedulePlan.Create;
+  try
+    for lDialect in [cdMaxCron, cdStandard] do
+    begin
+      lPlan.Dialect := lDialect;
+      for i := Low(cTokens) to High(cTokens) do
+      begin
+        lPlan.Parse('0 0 * * ' + cTokens[i]);
+        for v := 0 to 6 do
+          Assert.AreEqual(Pos(IntToStr(v), cValues[i]) > 0,
+            lPlan.Day_of_the_Week.NextVal(v) = v, cTokens[i] + ' value ' + IntToStr(v));
+      end;
+    end;
+    FreeAndNil(lPlan);
+    lPlan := TCronSchedulePlan.Create;
+    lPlan.Dialect := cdQuartzSecondsFirst;
+    lRaised := False;
+    try
+      lPlan.Parse('0 0 0 ? * 0-7');
+    except
+      on E: Exception do
+      begin
+        lRaised := True;
+        Assert.AreEqual('Cron value out of range', E.Message);
+      end;
+    end;
+    Assert.IsTrue(lRaised, 'Quartz rejects 0-7');
+    lPlan.Parse('0 0 0 ? * 1-7/2');
+    for v := 0 to 6 do
+      Assert.AreEqual(v in [0, 2, 4, 6], lPlan.Day_of_the_Week.NextVal(v) = v, 'Quartz 1-7/2');
+  finally
+    lPlan.Free;
+  end;
+end;
+
 procedure TTestCronParsing.Parse_WrappedRanges_Expansion;
 const
   cSteps: array[0..11] of Integer = (1, 2, 3, 4, 5, 6, 7, 10, 15, 30, 59, 61);
@@ -539,9 +587,9 @@ begin
     CheckError('0 0 25-5 * *', 'Invalid cron range');
     CheckError('0 0 1 * * 2030-2026', 'Invalid cron range');
     CheckError('0 H(22-2) * * *', 'Cron value out of range');
-    // The 7 alias and the 0-7 meaning remain unchanged.
+    // Both Sunday aliases bound a full cycle when written as 0-7.
     lPlan.Parse('0 0 * * 0-7');
-    for lValue := 0 to 6 do Assert.AreEqual(lValue = 0, lPlan.Day_of_the_Week.NextVal(lValue) = lValue);
+    for lValue := 0 to 6 do Assert.AreEqual(True, lPlan.Day_of_the_Week.NextVal(lValue) = lValue);
     lPlan.Parse('0 0 * * 1-7/4');
     for lValue := 0 to 6 do Assert.AreEqual(lValue in [1, 5], lPlan.Day_of_the_Week.NextVal(lValue) = lValue);
   finally
