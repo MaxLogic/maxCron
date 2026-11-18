@@ -97,7 +97,6 @@ var
   lFreeThread: TThread;
 begin
   lCron := nil;
-  lFreeThread := nil;
   lCallbackEntered := TEvent.Create(nil, True, False, '');
   lCallbackGate := TEvent.Create(nil, True, False, '');
   lFreeDone := TEvent.Create(nil, True, False, '');
@@ -224,7 +223,6 @@ var
   lFreeThread: TThread;
 begin
   lCron := nil;
-  lFreeThread := nil;
   lBlockEntered := TEvent.Create(nil, True, False, '');
   lBlockGate := TEvent.Create(nil, True, False, '');
   lFreeDone := TEvent.Create(nil, True, False, '');
@@ -315,7 +313,6 @@ var
   lWaitRes: TWaitResult;
 begin
   lCron := nil;
-  lWorker := nil;
   lWorkerDone := nil;
   for lAttempt := 1 to cIterations do
   begin

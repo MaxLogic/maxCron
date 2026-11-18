@@ -21,12 +21,6 @@ type
     function ReadEnvInt(const aName: string; const aDefault, aMin, aMax: Integer): Integer;
     function DialectToText(const aDialect: TmaxCronDialect): string;
     function DayMatchModeToText(const aMode: TmaxCronDayMatchMode): string;
-    function RandomValueToken(const aMinValue, aMaxValue: Integer): string;
-    function RandomValueListToken(const aMinValue, aMaxValue: Integer): string;
-    function RandomRangeToken(const aMinValue, aMaxValue: Integer): string;
-    function RandomStepToken(const aMinValue, aMaxValue: Integer): string;
-    function BuildRandomToken(const aMinValue, aMaxValue: Integer; const aAllowWildcard: Boolean): string;
-    function BuildRandomDayOfWeekToken(const aDialect: TmaxCronDialect): string;
     function PickToken(const aTokens: array of string): string;
     function BuildPlanText(const aDialect: TmaxCronDialect; const aDayMatchMode: TmaxCronDayMatchMode): string;
     function MatchesPart(const aPart: TCronPart; const aValue: Word): Boolean;
@@ -108,96 +102,6 @@ begin
   else
     Result := 'default';
   end;
-end;
-
-function TTestCronFuzzOracle.RandomValueToken(const aMinValue, aMaxValue: Integer): string;
-begin
-  Result := IntToStr(aMinValue + Random((aMaxValue - aMinValue) + 1));
-end;
-
-function TTestCronFuzzOracle.RandomValueListToken(const aMinValue, aMaxValue: Integer): string;
-var
-  lFirst: Integer;
-  lSecond: Integer;
-begin
-  lFirst := aMinValue + Random((aMaxValue - aMinValue) + 1);
-  lSecond := aMinValue + Random((aMaxValue - aMinValue) + 1);
-  if lSecond = lFirst then
-  begin
-    if lSecond < aMaxValue then
-      Inc(lSecond)
-    else if lSecond > aMinValue then
-      Dec(lSecond);
-  end;
-  if lFirst > lSecond then
-  begin
-    lFirst := lFirst xor lSecond;
-    lSecond := lFirst xor lSecond;
-    lFirst := lFirst xor lSecond;
-  end;
-  Result := IntToStr(lFirst) + ',' + IntToStr(lSecond);
-end;
-
-function TTestCronFuzzOracle.RandomRangeToken(const aMinValue, aMaxValue: Integer): string;
-var
-  lStart: Integer;
-  lStop: Integer;
-begin
-  lStart := aMinValue + Random((aMaxValue - aMinValue) + 1);
-  lStop := aMinValue + Random((aMaxValue - aMinValue) + 1);
-  if lStart > lStop then
-  begin
-    lStart := lStart xor lStop;
-    lStop := lStart xor lStop;
-    lStart := lStart xor lStop;
-  end;
-  if lStart = lStop then
-    Exit(IntToStr(lStart));
-  Result := IntToStr(lStart) + '-' + IntToStr(lStop);
-end;
-
-function TTestCronFuzzOracle.RandomStepToken(const aMinValue, aMaxValue: Integer): string;
-var
-  lStep: Integer;
-  lRangeSize: Integer;
-begin
-  lRangeSize := aMaxValue - aMinValue;
-  if lRangeSize < 2 then
-    Exit(IntToStr(aMinValue));
-
-  lStep := 2 + Random(4);
-  if lStep > lRangeSize then
-    lStep := 2;
-  Result := '*/' + IntToStr(lStep);
-end;
-
-function TTestCronFuzzOracle.BuildRandomToken(const aMinValue, aMaxValue: Integer;
-  const aAllowWildcard: Boolean): string;
-var
-  lPick: Integer;
-begin
-  lPick := Random(6);
-  if aAllowWildcard and (lPick = 0) then
-    Exit('*');
-
-  if (lPick = 1) then
-    Exit(RandomValueToken(aMinValue, aMaxValue));
-  if (lPick = 2) then
-    Exit(RandomValueListToken(aMinValue, aMaxValue));
-  if (lPick = 3) then
-    Exit(RandomRangeToken(aMinValue, aMaxValue));
-  if (lPick = 4) then
-    Exit(RandomStepToken(aMinValue, aMaxValue));
-
-  Result := RandomValueToken(aMinValue, aMaxValue);
-end;
-
-function TTestCronFuzzOracle.BuildRandomDayOfWeekToken(const aDialect: TmaxCronDialect): string;
-begin
-  if aDialect = cdQuartzSecondsFirst then
-    Result := BuildRandomToken(1, 7, True)
-  else
-    Result := BuildRandomToken(0, 6, True);
 end;
 
 function TTestCronFuzzOracle.PickToken(const aTokens: array of string): string;

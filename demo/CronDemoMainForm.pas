@@ -3,10 +3,11 @@ Unit CronDemoMainForm;
 Interface
 
 Uses
-  maxCron,
-  Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes, Vcl.Graphics,
-  Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls, Vcl.Buttons,
-  Vcl.ExtCtrls, Vcl.ComCtrls, Vcl.Menus;
+  System.Classes, System.SysUtils, System.Types, System.Variants,
+  Winapi.Messages, Winapi.Windows,
+  Vcl.Buttons, Vcl.ComCtrls, Vcl.Controls, Vcl.Dialogs, Vcl.ExtCtrls, Vcl.Forms, Vcl.Graphics, Vcl.Menus,
+  Vcl.StdCtrls,
+  maxCron;
 
 Type
   TForm2 = Class(TForm)
@@ -387,7 +388,6 @@ Procedure TForm2.prepareSamples;
 Var
   mi: TMenuItem;
   x: Integer;
-  s: String;
 Begin
   // first prepare the list
   // I;ve made it as a simple stringList, in a readable format, we will get rd of the extra spaces later on.

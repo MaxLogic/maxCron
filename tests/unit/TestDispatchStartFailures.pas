@@ -195,8 +195,6 @@ begin
   lFreeDone := TEvent.Create(nil, True, False, '');
   lHookInjectCount := 0;
   lDispatchCount := 0;
-  lWorker := nil;
-  lFreeThread := nil;
   lCanFreeCron := False;
   try
     lEvent := lCron.Add('QueuedPreAcquireFailure');
@@ -401,7 +399,6 @@ begin
       lCanFreeCron := True;
     Assert.IsTrue(TInterlocked.CompareExchange(lDispatchAttempts, 0, 0) >= 2,
       'Expected injected dispatch-start failure in serialized finalize chain');
-    lWaitRes := TWaitResult.wrTimeout;
     lRetryAt := lThirdAt;
     for lRetryIndex := 0 to 5 do
     begin

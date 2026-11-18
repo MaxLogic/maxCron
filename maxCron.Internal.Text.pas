@@ -46,17 +46,15 @@ const
 var
   i: Integer;
   lText: string;
-  lBits: UInt64;
 begin
   i := 1;
   while (i <= Length(s)) and (s[i] = ' ') do Inc(i);
   lText := CronUpperAscii(Copy(s, i, MaxInt));
   // Delphi accepts leading spaces, signed INF and unsigned NAN, without a suffix.
-  if (lText = 'INF') or (lText = '+INF') then lBits := cPositiveInf
-  else if lText = '-INF' then lBits := cNegativeInf
-  else if lText = 'NAN' then lBits := cQuietNan
+  if (lText = 'INF') or (lText = '+INF') then PUInt64(@aValue)^ := cPositiveInf
+  else if lText = '-INF' then PUInt64(@aValue)^ := cNegativeInf
+  else if lText = 'NAN' then PUInt64(@aValue)^ := cQuietNan
   else Exit(False);
-  Move(lBits, aValue, SizeOf(aValue));
   Result := True;
 end;
 
