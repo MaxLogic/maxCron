@@ -75,6 +75,7 @@ type
     [Test]
     procedure Plan_Text_RespectsDialect;
     [Test] procedure Parse_WrappedRanges_Expansion;
+    [Test] procedure Parse_InvalidIntegerGrammar_UsesParseException;
     [Test] procedure Parse_MonthEndOffsetLists_ErrorPrecedence;
     [Test] procedure Parse_MonthEndOffsets_LaterFieldDiagnostics;
     [Test] procedure Parse_MonthEndOffsets;
@@ -552,6 +553,81 @@ begin
   finally
     lPlan.Free;
   end;
+end;
+
+procedure TTestCronParsing.Parse_InvalidIntegerGrammar_UsesParseException;
+const
+  cAtoms: array[0..11] of string = ('1', 'W', 'BAD', '2147483648', 'L-2', 'LW',
+    '15W', 'MON', 'H(1-5)', '?', '*', '');
+var
+  lDialect: TmaxCronDialect;
+  lPlan: TCronSchedulePlan;
+  lFields: TArray<string>;
+  lLeft, lRight, lToken, lText, lClass, lMessage, lFailures: string;
+  lField, lForm, lIndex, lLeaks, lRejected: Integer;
+begin
+  lLeaks := 0;
+  lRejected := 0;
+  lFailures := '';
+  for lDialect := Low(TmaxCronDialect) to High(TmaxCronDialect) do
+  begin
+    case lDialect of
+      cdStandard: lFields := ['0', '0', '1', '1', '1'];
+      cdMaxCron: lFields := ['0', '0', '1', '1', '1', '2025', '0', '0'];
+    else
+      lFields := ['0', '0', '0', '1', '1', '1', '2025'];
+    end;
+    for lField := 0 to Length(lFields) - 1 do
+      for lLeft in cAtoms do
+        for lRight in cAtoms do
+          for lForm := 0 to 4 do
+          begin
+            case lForm of
+              0: lToken := lLeft + ',' + lRight;
+              1: lToken := lLeft + '-' + lRight;
+              2: lToken := lLeft + '/' + lRight;
+              3: lToken := 'H(' + lLeft + '-' + lRight + ')';
+            else
+              lToken := lLeft + ',15,' + lRight;
+            end;
+            lText := '';
+            for lIndex := 0 to Length(lFields) - 1 do
+            begin
+              if lIndex > 0 then lText := lText + ' ';
+              if lIndex = lField then lText := lText + lToken
+              else lText := lText + lFields[lIndex];
+            end;
+            lClass := '';
+            lMessage := '';
+            lPlan := TCronSchedulePlan.Create;
+            try
+              lPlan.Dialect := lDialect;
+              try
+                lPlan.Parse(lText);
+              except
+                on E: Exception do
+                begin
+                  lClass := E.ClassName;
+                  lMessage := E.Message;
+                end;
+              end;
+            finally
+              lPlan.Free;
+            end;
+            if lClass <> '' then
+            begin
+              Inc(lRejected);
+              if lClass <> 'Exception' then
+              begin
+                Inc(lLeaks);
+                if lLeaks <= 10 then
+                  lFailures := lFailures + lText + ': ' + lClass + '|' + lMessage + sLineBreak;
+              end;
+            end;
+          end;
+  end;
+  Assert.IsTrue(lRejected > 0, 'Generated invalid expressions must reach the parser');
+  Assert.AreEqual(0, lLeaks, lFailures);
 end;
 
 procedure TTestCronParsing.Parse_MonthEndOffsetLists_ErrorPrecedence;

@@ -731,6 +731,11 @@ Free the scheduler from outside callback context.
 
 ## Usage contract (required)
 
+Invalid cron expressions raise `Exception` with the parser's existing diagnostic
+messages, such as `Invalid cron token`, `Invalid cron step` and
+`Cron value out of range`. Malformed integer operands no longer leak RTL
+`EConvertError`. Modifier lists remain unsupported.
+
 For safe production use we should follow these lifecycle rules:
 
 - `Add(...)` only registers the event. New events start disabled; call `Run` (preferred) or set `Enabled := True` after configuration.

@@ -301,6 +301,12 @@ const
   cDescribeLastWeekdayMinusWeekdays = 'the last weekday minus %d weekdays';
   cDescribeLastDayNearestMinusDays = 'the nearest weekday to the last day minus %d days';
 
+function ParseCronInteger(const s: string): Integer;
+begin
+  if not CronTryStrToInt(s, Result) then
+    raise Exception.Create('Invalid cron token');
+end;
+
 function CronFloorDiv(const aValue, aDivisor: Int64): Int64;
 begin
   Result := aValue div aDivisor;
@@ -1857,8 +1863,8 @@ begin
     lDashPos := Pos('-', lRangeText);
     if lDashPos <= 1 then
       raise Exception.Create('Invalid cron token');
-    lRangeFrom := CronStrToInt(Copy(lRangeText, 1, lDashPos - 1));
-    lRangeTo := CronStrToInt(Copy(lRangeText, lDashPos + 1, MaxInt));
+    lRangeFrom := ParseCronInteger(Copy(lRangeText, 1, lDashPos - 1));
+    lRangeTo := ParseCronInteger(Copy(lRangeText, lDashPos + 1, MaxInt));
     lHasExplicitRange := True;
     Delete(lText, lOpenPos, lClosePos - lOpenPos + 1);
   end;
@@ -1866,7 +1872,7 @@ begin
   lSlashPos := Pos('/', lText);
   if lSlashPos > 0 then
   begin
-    lStep := CronStrToInt(Copy(lText, lSlashPos + 1, MaxInt));
+    lStep := ParseCronInteger(Copy(lText, lSlashPos + 1, MaxInt));
     if lStep <= 0 then
       raise Exception.Create('Invalid cron step');
     lText := Copy(lText, 1, lSlashPos - 1);
@@ -2464,7 +2470,7 @@ begin
   iSlash := Pos('/', s);
   if iSlash > 0 then
   begin
-    Repeater := CronStrToInt(Copy(s, iSlash + 1, MaxInt));
+    Repeater := ParseCronInteger(Copy(s, iSlash + 1, MaxInt));
     if Repeater <= 0 then
       raise Exception.Create('Invalid cron step');
     s := Copy(s, 1, iSlash - 1);
@@ -2479,11 +2485,11 @@ begin
     RangeTo := FValidTo;
   end else if iR > 0 then
   begin
-    RangeFrom := CronStrToInt(Copy(s, 1, iR - 1));
-    RangeTo := CronStrToInt(Copy(s, iR + 1, MaxInt));
+    RangeFrom := ParseCronInteger(Copy(s, 1, iR - 1));
+    RangeTo := ParseCronInteger(Copy(s, iR + 1, MaxInt));
   end else
   begin
-    RangeFrom := CronStrToInt(s);
+    RangeFrom := ParseCronInteger(s);
     if iSlash > 0 then
     begin
       if (fPartKind = ckDayOfTheWeek) and fDowOneBased then

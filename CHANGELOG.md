@@ -35,6 +35,7 @@ All notable user-visible changes to this project will be documented in this file
 - Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
 
 ### Fixed
+- Invalid integer operands in cron values, ranges, steps and hash expressions now raise the parser's `Exception` with `Invalid cron token` instead of leaking RTL `EConvertError`. Accepted syntax and existing parser diagnostics are unchanged.
 - Validate TZif DST footers across a full Gregorian cycle: signed/extended rules must keep both transitions at least 2 local days from the year boundaries and both DST and standard parts at least 28 days long. Fixed-offset and RFC all-year-DST forms remain supported; rejected rules preserve the event's previous zone.
 - Preserve fixed-delay completion ownership across restarts, plan changes, and serialized handoffs; ignore completions from older runs.
 - Process restored interval deadlines at zero and negative monotonic instants through the misfire policy.
