@@ -826,6 +826,11 @@ uses `MAXCRON_TZDIR`, then `TZDIR`, then `/usr/share/zoneinfo`. No zone database
 is bundled for application use. The reader supports signed and extended POSIX
 footer rule times when both rule-local transitions stay at least 2 local days from the year boundaries and both DST and standard parts last at least 28 days throughout a 400-year Gregorian cycle. Fixed-offset and RFC all-year-DST footers are also supported; unsupported footer rules fail when setting the zone and preserve its previous value.
 Leap-second (`right/`) files are rejected.
+
+The built-in name table is derived from Unicode CLDR 49 data, copyright
+2001-2026 Unicode, Inc., under the Unicode License v3. The full notice is retained
+in `maxCron.Internal.TimeZoneNames.inc`.
+
 Names match ASCII case-insensitively; the returned name preserves the file's
 spelling and aliases such as `US/Eastern`. Unknown names raise on assignment,
 report the cause and leave the previous zone intact. Resolved rules are immutable
