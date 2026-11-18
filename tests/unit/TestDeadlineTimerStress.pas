@@ -129,7 +129,7 @@ begin
       begin TInterlocked.Increment(lCount); lCron.Delete(aSender); end,ivFixedDelay);
     lEvent.InvokeMode := imTTask; lEvent.Run; lCron.StartTimerForTests(1);
     TThread.Sleep(50); Assert.IsTrue(lCron.Shutdown(2000,spWait));
-    Assert.AreEqual(1,lCount); Assert.AreEqual(0,Length(lCron.Snapshot));
+    Assert.AreEqual(1,lCount); Assert.AreEqual<NativeInt>(0, Length(lCron.Snapshot));
     Assert.AreEqual<TDateTime>(0,lEvent.NextSchedule);
     lCron.GetTimerDiagnosticsForTests(lTicks,lSpin,lExceptions);
     lEvent.EventPlan := '@every 2ms'; lEvent.Run; lEvent.Enabled := False;

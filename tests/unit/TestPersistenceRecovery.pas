@@ -129,7 +129,7 @@ begin
     Assert.AreEqual(2, lRestoredCount, 'Expected two events to be restored');
 
     lAfter := lRestoredCron.Snapshot;
-    Assert.AreEqual(2, Length(lAfter), 'Expected restored scheduler to contain two events');
+    Assert.AreEqual<NativeInt>(2, Length(lAfter), 'Expected restored scheduler to contain two events');
 
     lAfterPrimary := FindEventByName(lAfter, 'PersistentPrimary');
     lAfterSecondary := FindEventByName(lAfter, 'PersistentSecondary');

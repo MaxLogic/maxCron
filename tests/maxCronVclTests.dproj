@@ -1,4 +1,4 @@
-﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     <PropertyGroup>
         <ProjectGuid>{B07F4F8A-F795-4202-889B-565C93E08B03}</ProjectGuid>
         <MainSource>maxCronVclTests.dpr</MainSource>

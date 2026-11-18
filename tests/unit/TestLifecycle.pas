@@ -309,7 +309,7 @@ begin
         ; // expected
     end;
 
-    Assert.AreEqual(1, Length(lCron.Snapshot));
+    Assert.AreEqual<NativeInt>(1, Length(lCron.Snapshot));
   finally
     lCron.Free;
   end;
@@ -328,7 +328,7 @@ begin
 
     Assert.AreEqual('', lEventA.Name);
     Assert.AreEqual('', lEventB.Name);
-    Assert.AreEqual(2, Length(lCron.Snapshot));
+    Assert.AreEqual<NativeInt>(2, Length(lCron.Snapshot));
   finally
     lCron.Free;
   end;
@@ -345,11 +345,11 @@ begin
     lNamed := lCron.Add('MyEvent');
     lCron.Add('');
     lSnapshot := lCron.Snapshot;
-    Assert.AreEqual(2, Length(lSnapshot));
+    Assert.AreEqual<NativeInt>(2, Length(lSnapshot));
 
     Assert.IsTrue(lCron.Delete('myevent'));
     lSnapshot := lCron.Snapshot;
-    Assert.AreEqual(1, Length(lSnapshot));
+    Assert.AreEqual<NativeInt>(1, Length(lSnapshot));
     Assert.AreEqual('', lSnapshot[0].Name);
     Assert.IsFalse(lCron.Delete(''));
     Assert.IsFalse(lCron.Delete('missing'));
@@ -370,7 +370,7 @@ begin
     Assert.AreEqual('', lUnnamed.Name);
 
     Assert.IsTrue(lCron.Delete(lUnnamed));
-    Assert.AreEqual(0, Length(lCron.Snapshot));
+    Assert.AreEqual<NativeInt>(0, Length(lCron.Snapshot));
     Assert.IsFalse(lCron.Delete(lUnnamed));
   finally
     lCron.Free;
@@ -419,7 +419,7 @@ begin
     Assert.IsFalse(lCron.Delete(lUnnamedA.Id));
 
     lSnapshot := lCron.Snapshot;
-    Assert.AreEqual(1, Length(lSnapshot));
+    Assert.AreEqual<NativeInt>(1, Length(lSnapshot));
     Assert.AreEqual(lUnnamedB.Id, lSnapshot[0].Id);
   finally
     lCron.Free;
@@ -439,13 +439,13 @@ begin
     lEventB := lCron.Add('SnapB');
 
     lSnapshot := lCron.Snapshot;
-    Assert.AreEqual(2, Length(lSnapshot));
+    Assert.AreEqual<NativeInt>(2, Length(lSnapshot));
     Assert.AreEqual(lEventA.Id, lSnapshot[0].Id);
     Assert.AreEqual(lEventB.Id, lSnapshot[1].Id);
 
     Assert.IsTrue(lCron.Delete('SnapA'));
-    Assert.AreEqual(2, Length(lSnapshot), 'Existing snapshot must stay stable');
-    Assert.AreEqual(1, Length(lCron.Snapshot));
+    Assert.AreEqual<NativeInt>(2, Length(lSnapshot), 'Existing snapshot must stay stable');
+    Assert.AreEqual<NativeInt>(1, Length(lCron.Snapshot));
   finally
     lCron.Free;
   end;

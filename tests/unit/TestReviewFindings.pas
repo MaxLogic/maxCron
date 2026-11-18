@@ -201,7 +201,7 @@ begin
     lWaitRes := lWorkerDone.WaitFor(2000);
     Assert.AreEqual(TWaitResult.wrSignaled, lWaitRes, 'Worker did not queue callback');
     CheckSynchronize(500);
-    Assert.AreEqual(0, Length(lCron.Snapshot));
+    Assert.AreEqual<NativeInt>(0, Length(lCron.Snapshot));
   finally
     SetMaxCronBeforeQueuedAcquireHook(nil);
     lCron.Free;
@@ -362,7 +362,7 @@ begin
       CheckSynchronize(500);
       Assert.IsTrue(TInterlocked.CompareExchange(lHookCalls, 0, 0) > 0,
         Format('Pre-acquire hook did not execute (attempt %d)', [lAttempt]));
-      Assert.AreEqual(0, Length(lCron.Snapshot),
+      Assert.AreEqual<NativeInt>(0, Length(lCron.Snapshot),
         Format('Deleted event should not survive queued acquire path (attempt %d)', [lAttempt]));
     finally
       SetMaxCronBeforeQueuedAcquireHook(nil);
