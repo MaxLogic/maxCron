@@ -1915,6 +1915,9 @@ begin
     while lValue <= lRangeTo do
     begin
       Add2Range(lValue);
+      // Do not increment past the endpoint: an unused final step can overflow.
+      if lStep > lRangeTo - lValue then
+        Break;
       Inc(lValue, lStep);
     end;
   end;
@@ -2435,6 +2438,9 @@ var
     while v <= aTo do
     begin
       Add2Range(v);
+      // The remaining distance is bounded by the validated field range.
+      if aStep > aTo - v then
+        Break;
       Inc(v, aStep);
     end;
   end;

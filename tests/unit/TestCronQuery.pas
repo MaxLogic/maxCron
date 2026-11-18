@@ -264,7 +264,7 @@ end;
 
 procedure TTestCronQuery.WeekdayRangeQueries_MatchIndependentCycle;
 const
-  cSteps: array[0..8] of Integer = (0, 1, 2, 3, 4, 5, 6, 7, 8);
+  cSteps: array[0..9] of Integer = (0, 1, 2, 3, 4, 5, 6, 7, 8, MaxInt);
 var
   lPlan, lExplicit: TCronSchedulePlan;
   lDialect: TmaxCronDialect;

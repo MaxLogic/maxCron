@@ -24,6 +24,28 @@ type
     procedure AssertRaisesOnParseDialect(const aExpr: string; const aDialect: TmaxCronDialect);
     procedure AssertDescription(const aExpr, aExpected: string);
   public
+    [TestCase('minute-standard', '0,0')]
+    [TestCase('minute-maxcron', '0,1')]
+    [TestCase('minute-quartz', '0,2')]
+    [TestCase('hour-standard', '1,0')]
+    [TestCase('hour-maxcron', '1,1')]
+    [TestCase('hour-quartz', '1,2')]
+    [TestCase('dom-standard', '2,0')]
+    [TestCase('dom-maxcron', '2,1')]
+    [TestCase('dom-quartz', '2,2')]
+    [TestCase('month-standard', '3,0')]
+    [TestCase('month-maxcron', '3,1')]
+    [TestCase('month-quartz', '3,2')]
+    [TestCase('dow-standard', '4,0')]
+    [TestCase('dow-maxcron', '4,1')]
+    [TestCase('dow-quartz', '4,2')]
+    [TestCase('year-standard', '5,0')]
+    [TestCase('year-maxcron', '5,1')]
+    [TestCase('year-quartz', '5,2')]
+    [TestCase('second-standard', '6,0')]
+    [TestCase('second-maxcron', '6,1')]
+    [TestCase('second-quartz', '6,2')]
+    procedure Parse_LargeSteps_AllFieldPaths(const aField, aDialect: Integer);
     [Test]
     procedure Parse_AbridgedDefaults_SecondsAndLimit;
 
@@ -84,6 +106,70 @@ type
   end;
 
 implementation
+
+procedure TTestCronParsing.Parse_LargeSteps_AllFieldPaths(const aField, aDialect: Integer);
+const
+  cLows: array[TPartKind] of Integer = (0, 0, 1, 1, 0, 1900, 0);
+  cHighs: array[TPartKind] of Integer = (59, 23, 31, 12, 6, 3000, 59);
+  cSteps: array[0..2] of Integer = (MaxInt, MaxInt - 1, MaxInt - 3000);
+var
+  lPlan: TCronSchedulePlan;
+  lPart: TCronPart;
+  lKind: TPartKind;
+  lLow, lHigh, lStart, lStep, lForm, lExpected, lBase, v: Integer;
+  lToken: string;
+  lSelected: Boolean;
+begin
+  lKind := TPartKind(aField);
+  lLow := cLows[lKind];
+  lHigh := cHighs[lKind];
+  lBase := 0;
+  if (lKind = ckDayOfTheWeek) and (TmaxCronDialect(aDialect) = cdQuartzSecondsFirst) then
+  begin
+    lBase := 1;
+    Inc(lLow);
+    Inc(lHigh);
+  end;
+  lPlan := TCronSchedulePlan.Create;
+  try
+    lPlan.Dialect := TmaxCronDialect(aDialect);
+    lPart := lPlan.parts[lKind];
+    for lStep in cSteps do
+    begin
+      for lStart := lLow + 1 to lHigh do
+      begin
+        if (lKind = ckYear) and not ((lStart = 1901) or (lStart = 1902) or (lStart = 2026) or (lStart = 2999) or (lStart = 3000)) then Continue;
+        for lForm := 0 to 5 do
+        begin
+          lExpected := lStart;
+          case lForm of
+            0: lToken := IntToStr(lStart) + '-' + IntToStr(lStart);
+            1, 5: lToken := IntToStr(lStart) + '-' + IntToStr(lHigh);
+            2: lToken := IntToStr(lStart);
+            3: begin lToken := '*'; lExpected := lLow; end;
+          else
+            begin
+              if lKind in [ckDayOfTheMonth, ckYear] then Continue;
+              lToken := IntToStr(lHigh) + '-' + IntToStr(lLow + 1);
+              lExpected := lHigh;
+            end;
+          end;
+          lToken := lToken + '/' + IntToStr(lStep);
+          if lForm = 5 then lToken := lToken + ',' + IntToStr(lLow);
+          lPart.Data := lToken;
+          for v := cLows[lKind] to cHighs[lKind] do
+          begin
+            lSelected := v = lExpected - lBase;
+            if lForm = 5 then lSelected := lSelected or (v = lLow - lBase);
+            Assert.AreEqual(lSelected, lPart.NextVal(v) = v, lToken + ' value ' + IntToStr(v));
+          end;
+        end;
+      end;
+    end;
+  finally
+    lPlan.Free;
+  end;
+end;
 
 procedure TTestCronParsing.AssertParses(const aExpr: string);
 begin

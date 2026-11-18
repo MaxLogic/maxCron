@@ -1226,6 +1226,10 @@ through Saturday, without restarting the step; `7-7` is Saturday only.
 In either numbering, other ranges advance from the start to the endpoint,
 crossing Sunday when needed, and count the step continuously from the start.
 An omitted step means 1. Singleton values and `n/s` without a dash keep their meaning.
+Steps larger than a range span select only its start, in every field. This also
+applies to `*/n`, `n/k` and stepped hash ranges; a hash range starts at its seeded
+value. For example, weekday `1-1/2147483647` selects Monday only.
+
 
 
 Additional syntax we support:
