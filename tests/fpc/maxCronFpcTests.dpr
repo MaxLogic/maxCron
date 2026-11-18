@@ -26,6 +26,8 @@ uses
   TestTimeBoundaries in '..\unit\TestTimeBoundaries.pas',
   TestTimeZoneRules in '..\unit\TestTimeZoneRules.pas',
   TestTimeZoneTzif in '..\unit\TestTimeZoneTzif.pas',
+  TestTimeZoneWindows in '..\unit\TestTimeZoneWindows.pas',
+  TestWindowsZoneOracle in '..\unit\TestWindowsZoneOracle.pas',
   TestZoneFakes in '..\unit\TestZoneFakes.pas';
 
 {$I maxCronFpcRegistry.inc}

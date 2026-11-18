@@ -4,17 +4,27 @@ All notable user-visible changes to this project will be documented in this file
 
 ## [Unreleased]
 
+- Added Windows 8+ OS time zone resolution for IANA names through a built-in
+  Unicode CLDR 49 name and alias table. No data files are needed on Windows;
+  `MAXCRON_TZDIR` continues to select TZif data. FPC named zones and LOCAL share
+  the Windows rule source. Keep `maxCron.Internal.TimeZoneNames.inc` beside the units.
+- Fixed LOCAL on FPC and named Windows zones to follow Windows' own conversion,
+  including New Year boundaries and years before a zone's first rule change.
+  Windows offsets are sampled at whole seconds and cached by UTC year; outside
+  1602-9998 the nearest edge offset continues unchanged.
+
 ### Added
 - FPC trunk 3.3.1 Windows x64 support, Unicode-safe text compatibility, Windows-rule LOCAL and a separate FPC test gate.
 - The FPC gate isolates each invocation in a fresh validated output directory, handles conditional and tokenized test attributes, and checks shared test names against Delphi discovery. Containment covers misconfiguration and pre-existing aliases; concurrent malicious directory replacement is outside its threat model.
 - The FPC batch launcher delegates to PowerShell with fixed arguments. Compiler/output settings remain literal environment values. Output paths accept only ASCII letters, digits, space and `\ : . _ - +`; unsupported characters fail with exit 2 before output creation. Child processes use the per-run working directory and an allowlisted environment, with gate-owned heaptrc logs and an explicit read-only test-data root. WSL invokes the same gate directly.
 - `TimeZoneId` now also accepts IANA names such as `GMT` and `Europe/Warsaw`.
 - Added internal integer-millisecond zone rules and a TZif reader for IANA names
-  such as `Europe/Warsaw`, `America/New_York` and `Australia/Sydney`. On Windows,
-  set `MAXCRON_TZDIR`; other platforms also use `TZDIR` or `/usr/share/zoneinfo`.
+  such as `Europe/Warsaw`, `America/New_York` and `Australia/Sydney`. Set
+  `MAXCRON_TZDIR` to select TZif data on Windows; other platforms also use
+  `TZDIR` or `/usr/share/zoneinfo`.
   Named zones apply spring/fall policies, preserve aliases and reject leap-second
   files. Dense schedules across 30-minute and two-hour shifts use bounded period-range
-  searches. Native Windows zone lookup remains deferred.
+  searches.
 - Added wrapped ranges with continuous steps in seconds, minutes, hours and months, including month names.
 - Added month-end offsets `L-n`, `LW-n` and `L-nW` (0..30), with descriptions and matching next, previous and range queries.
 - Added monotonic interval events with `AddInterval`, `@every` plans, fixed-rate and fixed-delay modes, read-only interval metadata, wake-on-change, and persistence through the existing schedule store. Existing overlap, retry, execution-limit, and global-cap policies apply.

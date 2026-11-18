@@ -24,6 +24,8 @@ uses
   TestLocalZoneOs in 'unit\TestLocalZoneOs.pas',
   TestZoneFakes in 'unit\TestZoneFakes.pas',
   TestTimeZoneRules in 'unit\TestTimeZoneRules.pas',
+  TestTimeZoneWindows in 'unit\TestTimeZoneWindows.pas',
+  TestWindowsZoneOracle in 'unit\TestWindowsZoneOracle.pas',
   TestTimeZoneTzif in 'unit\TestTimeZoneTzif.pas',
   TestNamedTimeZones in 'unit\TestNamedTimeZones.pas',
   TestPublicApiCompat in 'unit\TestPublicApiCompat.pas',
@@ -65,6 +67,8 @@ begin
     TDUnitX.RegisterTestFixture(TTestCronTextParity);
     TDUnitX.RegisterTestFixture(TTestLocalZoneOs);
     TDUnitX.RegisterTestFixture(TTestTimeZoneRules);
+    TDUnitX.RegisterTestFixture(TTestTimeZoneWindows);
+    TDUnitX.RegisterTestFixture(TTestWindowsZoneOracle);
     TDUnitX.RegisterTestFixture(TTestTimeZoneTzif);
     TDUnitX.RegisterTestFixture(TTestNamedTimeZones);
     TDUnitX.RegisterTestFixture(TTestPublicApiCompat);

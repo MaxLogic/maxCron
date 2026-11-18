@@ -5,11 +5,11 @@ uses
   Classes, StrUtils, SysUtils;
 
 const
-  cUnits: array[0..19] of string = ('TestCronInstant', 'TestCronParsing', 'TestCronInvalidCorpus',
+  cUnits: array[0..21] of string = ('TestCronInstant', 'TestCronParsing', 'TestCronInvalidCorpus',
     'TestCronUtilsCorpus', 'TestCronFuzzOracle', 'TestCronQuery', 'TestIntervalPlan', 'TestDeadlineQueue',
     'TestTimeZoneRules', 'TestTimeZoneTzif', 'TestCronTextParity', 'TestFpcShims', 'TestScheduleNext',
     'TestHashJitter', 'TestCalendarTimeZone', 'TestNamedTimeZones', 'TestTimeBoundaries', 'TestMisfireOnTime',
-    'TestCronPhaseDifferential', 'TestLocalZoneOs');
+    'TestCronPhaseDifferential', 'TestLocalZoneOs', 'TestTimeZoneWindows', 'TestWindowsZoneOracle');
 
 var
   gDeclarations, gBodies, gRegistrations: TStringList;

@@ -23,7 +23,7 @@ implementation
 
 uses
   {$IFDEF FPC} DateUtils, SysUtils, {$ELSE} System.DateUtils, System.SysUtils, System.TimeSpan, {$ENDIF}
-  maxCron.Internal.TimeZone, maxCron.Plan;
+  maxCron.Internal.TimeZone, maxCron.Plan, TestWindowsZoneOracle;
 
 function LocalMs(const aYear, aMonth, aDay, aHour: Word): Int64;
 begin
@@ -58,7 +58,9 @@ var
   lMap: TCronLocalMapping;
 begin
   lRule := SouthernRule;
-  lZone := CreateCronZone('synthetic-south', CreateCronWindowsZoneSourceForTests([lRule]));
+  lZone := CreateCronZone('synthetic-south', CreateCronWindowsZoneSourceForTests(FakeWindowsOracle(39600000,
+    [WindowsFakeChange(LocalMs(2026, 4, 4, 16), 36000000),
+     WindowsFakeChange(LocalMs(2026, 10, 3, 16), 39600000)], [lRule])));
   Assert.AreEqual(Int64(39600000), lZone.GetPeriod(LocalMs(2026, 1, 1, 0)).OffsetMs);
   Assert.AreEqual(Int64(36000000), lZone.GetPeriod(LocalMs(2026, 7, 1, 0)).OffsetMs);
   Assert.AreEqual(Int64(39600000), lZone.GetPeriod(LocalMs(2027, 1, 1, 0)).OffsetMs);
@@ -79,14 +81,11 @@ begin
   lRule := Default(TCronWindowsYearRule);
   lRule.Year := 2026;
   lRule.Bias := -345;
-  lZone := CreateCronZone('no-dst', CreateCronWindowsZoneSourceForTests([lRule]));
+  lZone := CreateCronZone('no-dst', CreateCronWindowsZoneSourceForTests(
+    FakeWindowsOracle(20700000, [], [lRule])));
   Assert.AreEqual(Int64(20700000), lZone.GetPeriod(LocalMs(2026, 1, 1, 0)).OffsetMs);
   Assert.AreEqual(Int64(20700000), lZone.GetPeriod(LocalMs(2026, 7, 1, 0)).OffsetMs);
-  lRule := SouthernRule;
-  lRule.DynamicDaylightTimeDisabled := True;
-  lZone := CreateCronZone('disabled', CreateCronWindowsZoneSourceForTests([lRule]));
-  Assert.AreEqual(Int64(36000000), lZone.GetPeriod(LocalMs(2026, 1, 1, 0)).OffsetMs);
-  Assert.AreEqual<Integer>(Ord(clkUnique), Ord(lZone.MapLocal(LocalMs(2026, 10, 4, 2)).Kind));
+
 end;
 
 procedure TTestLocalZoneOs.MidnightAndAbsoluteRules;
@@ -109,7 +108,9 @@ begin
   lRule.StandardDate.wMonth := 10;
   lRule.StandardDate.wDay := 25;
   lRule.StandardDate.wHour := 2;
-  lZone := CreateCronZone('absolute-midnight', CreateCronWindowsZoneSourceForTests([lRule]));
+  lZone := CreateCronZone('absolute-midnight', CreateCronWindowsZoneSourceForTests(FakeWindowsOracle(0,
+    [WindowsFakeChange(LocalMs(2026, 3, 29, 0) - 1, 3600000),
+     WindowsFakeChange(LocalMs(2026, 10, 25, 1), 0)], [lRule])));
   lTransition := LocalMs(2026, 3, 29, 0);
   Assert.AreEqual(Int64(0), lZone.GetPeriod(lTransition - 1).OffsetMs);
   Assert.AreEqual(Int64(3600000), lZone.GetPeriod(lTransition).OffsetMs);

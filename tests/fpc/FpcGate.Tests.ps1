@@ -12,7 +12,7 @@ BeforeAll {
         'TestCronFuzzOracle', 'TestCronQuery', 'TestIntervalPlan', 'TestDeadlineQueue', 'TestTimeZoneRules',
         'TestTimeZoneTzif', 'TestCronTextParity', 'TestFpcShims', 'TestScheduleNext', 'TestHashJitter',
         'TestCalendarTimeZone', 'TestNamedTimeZones', 'TestTimeBoundaries', 'TestMisfireOnTime',
-        'TestCronPhaseDifferential', 'TestLocalZoneOs'
+        'TestCronPhaseDifferential', 'TestLocalZoneOs', 'TestTimeZoneWindows', 'TestWindowsZoneOracle'
     $repo = Join-Path $ScratchRoot 'registry-source'
     New-Item -ItemType Directory -Path (Join-Path $repo 'tests\unit'), (Join-Path $repo 'tests\fpc') -Force | Out-Null
     foreach ($unit in $units) {
@@ -55,7 +55,7 @@ Describe 'Registration must consume active fixture and test declarations' {
             $registry = [IO.File]::ReadAllText($output)
             $registry | Should -Match "RegisterTest\('TestCronInstant.TExtra.Extra',"
             $registry | Should -Not -Match 'TWrong|\.Wrong|DelphiOnly'
-            $count = if ($Name -eq 'ELSE branch of IFNDEF') { 22 } else { 21 }
+            $count = $units.Count + $(if ($Name -eq 'ELSE branch of IFNDEF') { 2 } else { 1 })
             $registry | Should -Match "cGeneratedTestCount = $count;"
         } else {
             Test-Path -LiteralPath $output | Should -BeFalse

@@ -11,7 +11,7 @@ Add `maxCron.pas`, `maxCron.Plan.pas`, `maxCron.Internal.Platform.pas` and
 `maxCron.Internal.TimeZone.pas`, `maxCron.Internal.TZif.pas` and
 `maxCron.Internal.Text.pas` to your project,
 or add their folder to the unit
-search path. Keep `maxCron.inc` beside these units. The Delphi scheduler requires
+search path. Keep `maxCron.inc` and `maxCron.Internal.TimeZoneNames.inc` beside these units. The Delphi scheduler requires
 the MaxLogicFoundation submodule; the FPC build uses only the RTL. Existing code can continue to use `uses maxCron`.
 Calculation-only consumers can use `maxCron.Plan`, which depends only on the RTL.
 
@@ -816,23 +816,33 @@ Each event can evaluate cron time in its own timezone:
 NewSchedule.TimeZoneId := 'LOCAL';      // default
 NewSchedule.TimeZoneId := 'UTC';
 NewSchedule.TimeZoneId := 'UTC+02:30';  // fixed offset
-NewSchedule.TimeZoneId := 'Europe/Warsaw'; // IANA name (TZif data required)
+NewSchedule.TimeZoneId := 'Europe/Warsaw'; // IANA zone name
 ```
 
-Named zones read TZif files (versions 1-4 and compatible later versions). On Windows,
-set `MAXCRON_TZDIR` to an installed zoneinfo directory before assigning a name;
-the native Windows zone provider is not available yet. On other platforms, lookup
-uses `MAXCRON_TZDIR`, then `TZDIR`, then `/usr/share/zoneinfo`. No zone database
+On Windows 8 or later, named zones use the OS time zone database through a built-in
+CLDR name table, with no data files required. At every whole second, offsets equal
+Windows' own conversion. A transition stored at 23:59:59.999 takes effect at the
+following midnight. Zone data is cached per UTC year on first use; restart the
+process after a Windows time zone update. Delphi and FPC named zones use the same
+provider. FPC LOCAL uses Windows' conversion for the active system zone, including
+its automatic daylight saving setting. Outside UTC years 1602-9998, the offset at
+the nearest edge continues unchanged.
+
+Set `MAXCRON_TZDIR` before assigning a name to select TZif files on Windows or
+other platforms. Other platforms otherwise use `TZDIR`, then `/usr/share/zoneinfo`.
+TZif versions 1-4 and compatible later versions are supported. No TZif database
 is bundled for application use. The reader supports signed and extended POSIX
 footer rule times when both rule-local transitions stay at least 2 local days from the year boundaries and both DST and standard parts last at least 28 days throughout a 400-year Gregorian cycle. Fixed-offset and RFC all-year-DST footers are also supported; unsupported footer rules fail when setting the zone and preserve its previous value.
 Leap-second (`right/`) files are rejected.
 
 The built-in name table is derived from Unicode CLDR 49 data, copyright
 2001-2026 Unicode, Inc., under the Unicode License v3. The full notice is retained
-in `maxCron.Internal.TimeZoneNames.inc`.
-
-Names match ASCII case-insensitively; the returned name preserves the file's
-spelling and aliases such as `US/Eastern`. Unknown names raise on assignment,
+in `maxCron.Internal.TimeZoneNames.inc`. To regenerate it from a verified CLDR
+archive, run `scripts/Update-CronZoneNames.ps1 -CldrCommon <path-to-common>`;
+keep the archive's `LICENSE` beside `common/`.
+Names match ASCII case-insensitively; the returned name uses the table spelling
+on Windows or the file spelling for TZif. Aliases such as `US/Eastern`,
+`Asia/Calcutta` and `Etc/UTC` are accepted and kept. Unknown names raise on assignment,
 report the cause and leave the previous zone intact. Resolved rules are immutable
 and cached; restart the process to pick up data-file changes.
 

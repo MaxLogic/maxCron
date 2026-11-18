@@ -1,5 +1,6 @@
 unit maxCron.Internal.TimeZone;
 {$I maxCron.inc}
+{$IFDEF FPC}{$CODEPAGE UTF8}{$ENDIF}
 
 interface
 
@@ -107,11 +108,24 @@ type
   TCronWindowsYearRule = record
     Year, Bias, StandardBias, DaylightBias: Integer;
     StandardDate, DaylightDate: TCronWindowsSystemTime;
-    DynamicDaylightTimeDisabled: Boolean;
+  end;
+  ICronWindowsZoneOracle = interface
+    ['{44DF7553-4728-4FE2-880D-16653CEDDCCA}']
+    function OffsetAt(const aUtcMs: Int64): Int64;
+    function YearRule(const aYear: Integer): TCronWindowsYearRule;
+    function CanCache: Boolean;
+  end;
+  ICronWindowsZoneSourceStats = interface
+    ['{5858F4D6-843D-4487-A64B-49EB0C51975F}']
+    function SegmentsComputed: Int64;
+    function OracleCalls: Int64;
+    function UnexpectedChanges: Int64;
   end;
 {$IFDEF MAXCRON_TESTS}
 function CreateCronOsLocalTimeZoneForTests: ICronTimeZone;
-function CreateCronWindowsZoneSourceForTests(const aRules: array of TCronWindowsYearRule): ICronZoneRuleSource;
+function CreateCronLocalWindowsSourceForTests: ICronZoneRuleSource;
+function CreateCronWindowsZoneSourceForTests(const aOracle: ICronWindowsZoneOracle): ICronZoneRuleSource;
+function CreateCronNamedWindowsSourceForTests(const aWindowsId: string): ICronZoneRuleSource;
 {$ENDIF}
 {$ENDIF}
 
@@ -127,6 +141,8 @@ uses
   {$IFDEF MSWINDOWS} Winapi.Windows, {$ENDIF}
   {$ENDIF}
   maxCron.Internal.Text, maxCron.Internal.TZif, maxCron.Plan;
+
+{$I maxCron.Internal.TimeZoneNames.inc}
 
 type
   TCronZoneRules = class(TInterfacedObject, ICronZoneRules)
@@ -167,19 +183,58 @@ end;
 
 {$IFDEF MSWINDOWS}
 type
-  TCronWindowsZoneSource = class(TInterfacedObject, ICronZoneRuleSource)
+  TCronWindowsChange = record
+    UtcMs, OffsetMs: Int64;
+  end;
+  TCronWindowsSegment = record
+    StartOffsetMs: Int64;
+    Changes: TArray<TCronWindowsChange>;
+  end;
+  TCronWindowsZoneSource = class(TInterfacedObject, ICronZoneRuleSource, ICronWindowsZoneSourceStats)
   private
-    fRules: TArray<TCronWindowsYearRule>;
-    function RuleForYear(const aYear: Integer): TCronWindowsYearRule;
+    fOracle: ICronWindowsZoneOracle;
+    fLock: TCriticalSection;
+    fSegments: TDictionary<Integer, TCronWindowsSegment>;
+    fSegmentsComputed, fOracleCalls, fUnexpectedChanges: Int64;
+    function ComputeSegment(const aYear: Integer; var aCalls, aUnexpected: Int64): TCronWindowsSegment;
+    function Segment(const aYear: Integer): TCronWindowsSegment;
   public
-    constructor Create(const aRules: array of TCronWindowsYearRule);
+    constructor Create(const aOracle: ICronWindowsZoneOracle);
+    destructor Destroy; override;
     function GetRawPeriod(const aUtcMs: Int64): TCronZonePeriod;
+    function SegmentsComputed: Int64;
+    function OracleCalls: Int64;
+    function UnexpectedChanges: Int64;
   end;
   TCronGetDynamicZone = function(out aInfo: TCronWindowsDynamicInfo): DWORD; stdcall;
+  TCronEnumDynamicZone = function(aIndex: DWORD; out aInfo: TCronWindowsDynamicInfo): DWORD; stdcall;
   TCronGetEffectiveYears = function(const aInfo: TCronWindowsDynamicInfo;
     out aFirst, aLast: DWORD): DWORD; stdcall;
   TCronGetYearInfo = function(aYear: Word; const aInfo: TCronWindowsDynamicInfo;
     out aRule: TCronWindowsZoneInfo): LongBool; stdcall;
+  TCronWindowsForwardEx = function(const aInfo: TCronWindowsDynamicInfo;
+    const aUtc: TCronWindowsSystemTime; out aLocal: TCronWindowsSystemTime): LongBool; stdcall;
+  TCronWindowsForwardLocal = function(aInfo: Pointer; const aUtc: TCronWindowsSystemTime;
+    out aLocal: TCronWindowsSystemTime): LongBool; stdcall;
+  TCronWindowsRecordOracle = class(TInterfacedObject, ICronWindowsZoneOracle)
+  protected
+    fInfo: TCronWindowsDynamicInfo;
+    fRules: TArray<TCronWindowsYearRule>;
+  public
+    constructor Create(const aInfo: TCronWindowsDynamicInfo);
+    function OffsetAt(const aUtcMs: Int64): Int64; virtual; abstract;
+    function YearRule(const aYear: Integer): TCronWindowsYearRule;
+    function CanCache: Boolean; virtual;
+  end;
+  TCronWindowsExOracle = class(TCronWindowsRecordOracle)
+  public
+    function OffsetAt(const aUtcMs: Int64): Int64; override;
+  end;
+  TCronWindowsLocalOracle = class(TCronWindowsRecordOracle)
+  public
+    function OffsetAt(const aUtcMs: Int64): Int64; override;
+    function CanCache: Boolean; override;
+  end;
   TCronOsLocalTimeZone = class(TInterfacedObject, ICronTimeZone)
   private
     fInfo: TCronWindowsDynamicInfo;
@@ -191,16 +246,49 @@ type
     function IsAmbiguousTime(const aLocal: TDateTime): Boolean;
     function IsInvalidTime(const aLocal: TDateTime): Boolean;
   end;
-  TCronWindowsChange = record
-    UtcMs, OffsetMs: Int64;
-    YearStart: Boolean;
-  end;
+
+const
+  cCronWindowsFirstYear = 1602;
+  cCronWindowsLastYear = 9998;
+  cCronWindowsGuardStepMs = cCronMsPerDay;
 
 var
   gGetDynamicZone: TCronGetDynamicZone;
+  gEnumDynamicZone: TCronEnumDynamicZone;
   gGetEffectiveYears: TCronGetEffectiveYears;
   gGetYearInfo: TCronGetYearInfo;
+  gWindowsForwardEx: TCronWindowsForwardEx;
+  gWindowsForwardLocal: TCronWindowsForwardLocal;
   gZoneAdvapi: HMODULE;
+
+// Integer Gregorian calendar on the same 1899-12-30 epoch as the zone engine.
+function WindowsCivilDay(const aYear, aMonth, aDay: Integer): Int64;
+var
+  y, m, lEra, lYearOfEra: Int64;
+begin
+  y := aYear;
+  m := aMonth;
+  if m <= 2 then Dec(y);
+  lEra := CronFloorDiv(y, 400);
+  lYearOfEra := y - lEra * 400;
+  if m > 2 then Dec(m, 3) else Inc(m, 9);
+  Result := lEra * 146097 + lYearOfEra * 365 + lYearOfEra div 4 - lYearOfEra div 100 +
+    (153 * m + 2) div 5 + aDay - 1 - 693899;
+end;
+
+function WindowsCivilYear(const aUtcMs: Int64): Integer;
+var
+  lDay, lEra, lDayOfEra, lYearOfEra, lDayOfYear, m: Int64;
+begin
+  lDay := CronFloorDiv(aUtcMs, cCronMsPerDay) + 693899;
+  lEra := CronFloorDiv(lDay, 146097);
+  lDayOfEra := lDay - lEra * 146097;
+  lYearOfEra := (lDayOfEra - lDayOfEra div 1460 + lDayOfEra div 36524 - lDayOfEra div 146096) div 365;
+  lDayOfYear := lDayOfEra - (365 * lYearOfEra + lYearOfEra div 4 - lYearOfEra div 100);
+  m := (5 * lDayOfYear + 2) div 153;
+  Result := Integer(lYearOfEra + lEra * 400);
+  if m >= 10 then Inc(Result);
+end;
 
 function WindowsTransitionMs(const aYear: Integer; const st: TCronWindowsSystemTime): Int64;
 var
@@ -208,132 +296,67 @@ var
 begin
   if st.wYear = 0 then
   begin
-    lDay := 1 + (7 + st.wDayOfWeek - (DayOfTheWeek(EncodeDate(aYear, st.wMonth, 1)) mod 7)) mod 7 +
+    lDay := 1 + (7 + st.wDayOfWeek - ((WindowsCivilDay(aYear, st.wMonth, 1) + 6) mod 7)) mod 7 +
       (Integer(st.wDay) - 1) * 7;
-    lLast := DaysInAMonth(aYear, st.wMonth);
+    if st.wMonth = 12 then lLast := 31
+    else lLast := Integer(WindowsCivilDay(aYear, st.wMonth + 1, 1) - WindowsCivilDay(aYear, st.wMonth, 1));
     if lDay > lLast then Dec(lDay, 7);
   end else
     lDay := st.wDay;
-  Result := CronDateTimeToMs(EncodeDate(aYear, st.wMonth, lDay)) +
+  Result := WindowsCivilDay(aYear, st.wMonth, lDay) * cCronMsPerDay +
     Int64(st.wHour) * 3600000 + Int64(st.wMinute) * 60000 + Int64(st.wSecond) * 1000;
-  // Windows uses .999 to represent the following midnight; all subsecond rules round up.
-  if st.wMilliseconds <> 0 then Inc(Result, 1000);
+  // Records suggest candidates; the oracle alone determines offsets and boundaries.
+  Inc(Result, st.wMilliseconds);
 end;
 
-constructor TCronWindowsZoneSource.Create(const aRules: array of TCronWindowsYearRule);
+procedure WindowsMsToSystemTime(const aMs: Int64; out aTime: TCronWindowsSystemTime);
 var
-  i: Integer;
+  lDay, lEra, lDayOfEra, lYearOfEra, lDayOfYear, m, y, lRemainder: Int64;
 begin
-  inherited Create;
-  if Length(aRules) = 0 then raise Exception.Create('Windows zone has no year rules');
-  SetLength(fRules, Length(aRules));
-  for i := 0 to High(aRules) do
-  begin
-    if (i > 0) and (aRules[i].Year <= aRules[i - 1].Year) then
-      raise Exception.Create('Windows zone years must be ordered');
-    fRules[i] := aRules[i];
-  end;
+  lDay := CronFloorDiv(aMs, cCronMsPerDay);
+  lRemainder := aMs - lDay * cCronMsPerDay;
+  aTime.wDayOfWeek := Word(((lDay + 6) mod 7 + 7) mod 7);
+  Inc(lDay, 693899);
+  lEra := CronFloorDiv(lDay, 146097);
+  lDayOfEra := lDay - lEra * 146097;
+  lYearOfEra := (lDayOfEra - lDayOfEra div 1460 + lDayOfEra div 36524 - lDayOfEra div 146096) div 365;
+  lDayOfYear := lDayOfEra - (365 * lYearOfEra + lYearOfEra div 4 - lYearOfEra div 100);
+  m := (5 * lDayOfYear + 2) div 153;
+  aTime.wDay := Word(lDayOfYear - (153 * m + 2) div 5 + 1);
+  y := lYearOfEra + lEra * 400;
+  if m < 10 then Inc(m, 3) else Dec(m, 9);
+  if m <= 2 then Inc(y);
+  aTime.wYear := Word(y);
+  aTime.wMonth := Word(m);
+  aTime.wHour := Word(lRemainder div 3600000);
+  aTime.wMinute := Word(lRemainder div 60000 mod 60);
+  aTime.wSecond := Word(lRemainder div 1000 mod 60);
+  aTime.wMilliseconds := Word(lRemainder mod 1000);
 end;
 
-function TCronWindowsZoneSource.RuleForYear(const aYear: Integer): TCronWindowsYearRule;
-var
-  i: Integer;
+function WindowsSystemTimeToMs(const aTime: TCronWindowsSystemTime): Int64;
 begin
-  Result := fRules[0];
-  for i := 1 to High(fRules) do
-    if fRules[i].Year <= aYear then Result := fRules[i] else Break;
+  Result := WindowsCivilDay(aTime.wYear, aTime.wMonth, aTime.wDay) * cCronMsPerDay +
+    Int64(aTime.wHour) * 3600000 + Int64(aTime.wMinute) * 60000 +
+    Int64(aTime.wSecond) * 1000 + aTime.wMilliseconds;
 end;
 
-function TCronWindowsZoneSource.GetRawPeriod(const aUtcMs: Int64): TCronZonePeriod;
-var
-  lRule, lNextRule: TCronWindowsYearRule;
-  lPoints: array[0..8] of TCronWindowsChange;
-  lChange: TCronWindowsChange;
-  lYear, y, i, j, lCount: Integer;
-  lStandard, lDaylight, lStart, lEnd, lSpring, lFall: Int64;
-  lHasDst: Boolean;
+function WindowsSameIdentity(const aFirst, aSecond: TCronWindowsDynamicInfo): Boolean;
 begin
-  lYear := YearOf(CronMsToDateTime(aUtcMs));
-  lCount := 0;
-  for y := lYear - 1 to lYear + 1 do
-  begin
-    lRule := RuleForYear(y);
-    lNextRule := RuleForYear(y + 1);
-    lStandard := -(Int64(lRule.Bias) + lRule.StandardBias) * 60000;
-    lDaylight := -(Int64(lRule.Bias) + lRule.DaylightBias) * 60000;
-    lHasDst := (lRule.DaylightDate.wMonth <> 0) and (lStandard <> lDaylight) and
-      not lRule.DynamicDaylightTimeDisabled;
-    // Model B: each rule year is the year of local standard time.
-    lStart := CronDateTimeToMs(EncodeDate(y, 1, 1)) - lStandard;
-    lEnd := CronDateTimeToMs(EncodeDate(y + 1, 1, 1)) +
-      (Int64(lNextRule.Bias) + lNextRule.StandardBias) * 60000;
-    lPoints[lCount].UtcMs := lStart;
-    lPoints[lCount].OffsetMs := lStandard;
-    lPoints[lCount].YearStart := True;
-    if lHasDst then
-    begin
-      lSpring := WindowsTransitionMs(y, lRule.DaylightDate);
-      lFall := WindowsTransitionMs(y, lRule.StandardDate);
-      if lSpring > lFall then lPoints[lCount].OffsetMs := lDaylight;
-    end else begin
-      lSpring := 0;
-      lFall := 0;
-    end;
-    Inc(lCount);
-    if lHasDst then
-    begin
-      lSpring := lSpring - lStandard;
-      lFall := lFall - lDaylight;
-      if (lSpring >= lStart) and (lSpring < lEnd) then
-      begin
-        lPoints[lCount].UtcMs := lSpring;
-        lPoints[lCount].OffsetMs := lDaylight;
-        lPoints[lCount].YearStart := False;
-        Inc(lCount);
-      end;
-      if (lFall >= lStart) and (lFall < lEnd) then
-      begin
-        lPoints[lCount].UtcMs := lFall;
-        lPoints[lCount].OffsetMs := lStandard;
-        lPoints[lCount].YearStart := False;
-        Inc(lCount);
-      end;
-    end;
-  end;
-  for i := 1 to lCount - 1 do
-  begin
-    lChange := lPoints[i];
-    j := i;
-    while (j > 0) and ((lPoints[j - 1].UtcMs > lChange.UtcMs) or
-      ((lPoints[j - 1].UtcMs = lChange.UtcMs) and lChange.YearStart and not lPoints[j - 1].YearStart)) do
-    begin
-      lPoints[j] := lPoints[j - 1];
-      Dec(j);
-    end;
-    lPoints[j] := lChange;
-  end;
-  Result.StartUtcMs := cCronZoneUnboundedStart;
-  Result.EndUtcMs := cCronZoneUnboundedEnd;
-  Result.OffsetMs := lPoints[0].OffsetMs;
-  for i := 0 to lCount - 1 do
-    if lPoints[i].UtcMs <= aUtcMs then
-    begin
-      Result.StartUtcMs := lPoints[i].UtcMs;
-      Result.OffsetMs := lPoints[i].OffsetMs;
-    end else begin
-      Result.EndUtcMs := lPoints[i].UtcMs;
-      Break;
-    end;
+  Result := (string(PWideChar(@aFirst.TimeZoneKeyName[0])) = string(PWideChar(@aSecond.TimeZoneKeyName[0]))) and
+    (aFirst.Zone.Bias = aSecond.Zone.Bias) and
+    (aFirst.DynamicDaylightTimeDisabled = aSecond.DynamicDaylightTimeDisabled);
 end;
 
-function WindowsSource(const aInfo: TCronWindowsDynamicInfo): ICronZoneRuleSource;
+constructor TCronWindowsRecordOracle.Create(const aInfo: TCronWindowsDynamicInfo);
 var
   lFirst, lLast: DWORD;
-  lRules: TArray<TCronWindowsYearRule>;
   lNative: TCronWindowsZoneInfo;
-  i, y: Integer;
   lDynamic: Boolean;
+  i, y: Integer;
 begin
+  inherited Create;
+  fInfo := aInfo;
   if not Assigned(gGetYearInfo) then raise Exception.Create('Windows year rules API is unavailable');
   lFirst := YearOf(Date);
   lLast := lFirst;
@@ -347,36 +370,376 @@ begin
   end;
   if (lFirst < 2) or (lLast > 9997) or (lFirst > lLast) then
     raise Exception.Create('Invalid Windows effective year range');
-  if lDynamic then SetLength(lRules, lLast - lFirst + 3)
-  else SetLength(lRules, 1);
-  for i := 0 to High(lRules) do
+  if lDynamic then SetLength(fRules, lLast - lFirst + 3)
+  else SetLength(fRules, 1);
+  for i := 0 to High(fRules) do
   begin
     if lDynamic then y := Integer(lFirst) - 1 + i else y := lFirst;
     if not gGetYearInfo(y, aInfo, lNative) then RaiseLastOSError;
-    lRules[i].Year := y;
-    lRules[i].Bias := lNative.Bias;
-    lRules[i].StandardBias := lNative.StandardBias;
-    lRules[i].DaylightBias := lNative.DaylightBias;
-    lRules[i].StandardDate := lNative.StandardDate;
-    lRules[i].DaylightDate := lNative.DaylightDate;
-    lRules[i].DynamicDaylightTimeDisabled := aInfo.DynamicDaylightTimeDisabled <> 0;
+    fRules[i].Year := y;
+    fRules[i].Bias := lNative.Bias;
+    fRules[i].StandardBias := lNative.StandardBias;
+    fRules[i].DaylightBias := lNative.DaylightBias;
+    fRules[i].StandardDate := lNative.StandardDate;
+    fRules[i].DaylightDate := lNative.DaylightDate;
   end;
-  Result := TCronWindowsZoneSource.Create(lRules);
+end;
+
+function TCronWindowsRecordOracle.YearRule(const aYear: Integer): TCronWindowsYearRule;
+var
+  lo, hi, m: Integer;
+begin
+  lo := 0;
+  hi := High(fRules);
+  while lo < hi do
+  begin
+    m := lo + (hi - lo + 1) div 2;
+    if fRules[m].Year <= aYear then lo := m else hi := m - 1;
+  end;
+  Result := fRules[lo];
+end;
+
+function TCronWindowsRecordOracle.CanCache: Boolean;
+begin
+  Result := True;
+end;
+
+function WindowsCheckedOffset(const aLocal: TCronWindowsSystemTime; const aUtcMs: Int64): Int64;
+begin
+  Result := WindowsSystemTimeToMs(aLocal) - aUtcMs;
+  if (Result mod 1000 <> 0) or (Result < -cCronZoneMaxAbsOffsetMs) or
+    (Result > cCronZoneMaxAbsOffsetMs) then
+    raise Exception.Create('Windows time zone conversion returned an invalid offset');
+end;
+
+function TCronWindowsExOracle.OffsetAt(const aUtcMs: Int64): Int64;
+var
+  lUtc, lLocal: TCronWindowsSystemTime;
+begin
+  WindowsMsToSystemTime(aUtcMs, lUtc);
+  if not gWindowsForwardEx(fInfo, lUtc, lLocal) then
+    raise EOSError.CreateFmt('Windows time zone conversion failed for "%s" (error %d)',
+      [string(PWideChar(@fInfo.TimeZoneKeyName[0])), GetLastError]);
+  Result := WindowsCheckedOffset(lLocal, aUtcMs);
+end;
+
+function TCronWindowsLocalOracle.OffsetAt(const aUtcMs: Int64): Int64;
+var
+  lUtc, lLocal: TCronWindowsSystemTime;
+begin
+  WindowsMsToSystemTime(aUtcMs, lUtc);
+  if not gWindowsForwardLocal(nil, lUtc, lLocal) then
+    raise EOSError.CreateFmt('Windows time zone conversion failed for "%s" (error %d)', ['LOCAL', GetLastError]);
+  Result := WindowsCheckedOffset(lLocal, aUtcMs);
+end;
+
+function TCronWindowsLocalOracle.CanCache: Boolean;
+var
+  lInfo: TCronWindowsDynamicInfo;
+begin
+  if gGetDynamicZone(lInfo) = DWORD($FFFFFFFF) then RaiseLastOSError;
+  Result := WindowsSameIdentity(lInfo, fInfo);
+end;
+
+constructor TCronWindowsZoneSource.Create(const aOracle: ICronWindowsZoneOracle);
+begin
+  inherited Create;
+  if aOracle = nil then raise Exception.Create('Windows zone oracle is required');
+  fOracle := aOracle;
+  fLock := TCriticalSection.Create;
+  fSegments := TDictionary<Integer, TCronWindowsSegment>.Create;
+end;
+
+destructor TCronWindowsZoneSource.Destroy;
+begin
+  fSegments.Free;
+  fLock.Free;
+  inherited;
+end;
+
+function TCronWindowsZoneSource.ComputeSegment(const aYear: Integer;
+  var aCalls, aUnexpected: Int64): TCronWindowsSegment;
+var
+  lCandidates, lQueries: TList<Int64>;
+  lChanges: TList<TCronWindowsChange>;
+  lCands, lPoints: TArray<Int64>;
+  lPrev, lCur: TCronWindowsYearRule;
+  lTime: TCronWindowsSystemTime;
+  lChange: TCronWindowsChange;
+  lo, hi, j, lStd, lDst, lValue, lQueryValue, xs, q, a, b, m, lAfter, t: Int64;
+  y, i, k, lLeft, lRight, lMiddle: Integer;
+  function Query(const aInstant: Int64): Int64;
+  begin
+    Inc(aCalls);
+    Result := fOracle.OffsetAt(aInstant);
+  end;
+  procedure Candidate(const aInstant: Int64);
+  var
+    lRounded: Int64;
+  begin
+    lRounded := -CronFloorDiv(-aInstant, 1000) * 1000;
+    if (lRounded > lo) and (lRounded < hi) then lCandidates.Add(lRounded);
+  end;
+begin
+  lo := WindowsCivilDay(aYear, 1, 1) * cCronMsPerDay;
+  hi := WindowsCivilDay(aYear + 1, 1, 1) * cCronMsPerDay;
+  lCandidates := TList<Int64>.Create;
+  lQueries := TList<Int64>.Create;
+  lChanges := TList<TCronWindowsChange>.Create;
+  try
+    for y := aYear - 1 to aYear + 1 do
+    begin
+      lPrev := fOracle.YearRule(y - 1);
+      lCur := fOracle.YearRule(y);
+      j := WindowsCivilDay(y, 1, 1) * cCronMsPerDay;
+      Candidate(j);
+      Candidate(j + (Int64(lPrev.Bias) + lPrev.StandardBias) * 60000);
+      Candidate(j + (Int64(lPrev.Bias) + lPrev.DaylightBias) * 60000);
+      lStd := -(Int64(lCur.Bias) + lCur.StandardBias) * 60000;
+      lDst := -(Int64(lCur.Bias) + lCur.DaylightBias) * 60000;
+      Candidate(j - lStd);
+      Candidate(j - lDst);
+      for k := 0 to 1 do
+      begin
+        if k = 0 then lTime := lCur.DaylightDate else lTime := lCur.StandardDate;
+        if (lTime.wMonth < 1) or (lTime.wMonth > 12) or (lTime.wDay < 1) or
+          (lTime.wHour > 23) or (lTime.wMinute > 59) or (lTime.wSecond > 59) or
+          (lTime.wMilliseconds > 999) then Continue;
+        if lTime.wYear = 0 then
+        begin
+          if (lTime.wDay > 5) or (lTime.wDayOfWeek > 6) then Continue;
+        end else if lTime.wDay > 31 then Continue;
+        t := WindowsTransitionMs(y, lTime);
+        Candidate(t - lStd);
+        Candidate(t - lDst);
+      end;
+    end;
+    lCands := lCandidates.ToArray;
+    {$IFDEF FPC} TArrayHelper<Int64>.Sort(lCands); {$ELSE} TArray.Sort<Int64>(lCands); {$ENDIF}
+    lLeft := 0;
+    for i := 0 to High(lCands) do
+      if (lLeft = 0) or (lCands[i] <> lCands[lLeft - 1]) then
+      begin
+        lCands[lLeft] := lCands[i];
+        Inc(lLeft);
+      end;
+    SetLength(lCands, lLeft);
+    // The query list is sorted and deduplicated independently.
+    for i := 0 to High(lCands) do
+      if (i = 0) or (lCands[i] <> lCands[i - 1]) then
+      begin
+        if lCands[i] - 1000 > lo then lQueries.Add(lCands[i] - 1000);
+        lQueries.Add(lCands[i]);
+      end;
+    q := lo + cCronWindowsGuardStepMs;
+    while q < hi do
+    begin
+      lQueries.Add(q);
+      Inc(q, cCronWindowsGuardStepMs);
+    end;
+    lQueries.Add(hi - 1000);
+    lPoints := lQueries.ToArray;
+    {$IFDEF FPC} TArrayHelper<Int64>.Sort(lPoints); {$ELSE} TArray.Sort<Int64>(lPoints); {$ENDIF}
+    lValue := Query(lo);
+    Result.StartOffsetMs := lValue;
+    xs := lo;
+    for i := 0 to High(lPoints) do
+    begin
+      q := lPoints[i];
+      if (q <= lo) or ((i > 0) and (q = lPoints[i - 1])) then Continue;
+      lQueryValue := Query(q);
+      while lQueryValue <> lValue do
+      begin
+        a := xs;
+        b := q;
+        lAfter := lQueryValue;
+        while b - a > 1000 do
+        begin
+          m := a + ((b - a) div 2000) * 1000;
+          t := Query(m);
+          if t = lValue then a := m
+          else begin
+            b := m;
+            lAfter := t;
+          end;
+        end;
+        lChange.UtcMs := b;
+        lChange.OffsetMs := lAfter;
+        lChanges.Add(lChange);
+        lLeft := 0;
+        lRight := Length(lCands);
+        while lLeft < lRight do
+        begin
+          lMiddle := lLeft + (lRight - lLeft) div 2;
+          if lCands[lMiddle] < b then lLeft := lMiddle + 1 else lRight := lMiddle;
+        end;
+        if (lLeft = Length(lCands)) or (lCands[lLeft] <> b) then Inc(aUnexpected);
+        lValue := lAfter;
+        xs := b;
+      end;
+      xs := q;
+    end;
+    Result.Changes := lChanges.ToArray;
+  finally
+    lChanges.Free;
+    lQueries.Free;
+    lCandidates.Free;
+  end;
+end;
+
+function TCronWindowsZoneSource.Segment(const aYear: Integer): TCronWindowsSegment;
+var
+  lComputed: TCronWindowsSegment;
+  lCanCache: Boolean;
+  lCalls, lUnexpected: Int64;
+begin
+  // CanCache can call Windows for LOCAL. Evaluate it before taking the source lock.
+  lCanCache := fOracle.CanCache;
+  fLock.Acquire;
+  try
+    if lCanCache and fSegments.TryGetValue(aYear, Result) then Exit;
+    Inc(fSegmentsComputed);
+  finally
+    fLock.Release;
+  end;
+  lCalls := 0;
+  lUnexpected := 0;
+  try
+    lComputed := ComputeSegment(aYear, lCalls, lUnexpected);
+  finally
+    fLock.Acquire;
+    try
+      Inc(fOracleCalls, lCalls);
+      Inc(fUnexpectedChanges, lUnexpected);
+    finally
+      fLock.Release;
+    end;
+  end;
+  lCanCache := fOracle.CanCache and lCanCache;
+  fLock.Acquire;
+  try
+    if lCanCache then
+    begin
+      if not fSegments.TryGetValue(aYear, Result) then
+      begin
+        fSegments.Add(aYear, lComputed);
+        Result := lComputed;
+      end;
+    end else Result := lComputed;
+  finally
+    fLock.Release;
+  end;
+end;
+
+function TCronWindowsZoneSource.GetRawPeriod(const aUtcMs: Int64): TCronZonePeriod;
+var
+  y, lo, hi, m: Integer;
+  lSegment: TCronWindowsSegment;
+begin
+  y := WindowsCivilYear(aUtcMs);
+  if y < cCronWindowsFirstYear then
+  begin
+    lSegment := Segment(cCronWindowsFirstYear);
+    Result.StartUtcMs := cCronZoneUnboundedStart;
+    Result.EndUtcMs := WindowsCivilDay(cCronWindowsFirstYear, 1, 1) * cCronMsPerDay;
+    Result.OffsetMs := lSegment.StartOffsetMs;
+    Exit;
+  end;
+  if y > cCronWindowsLastYear then
+  begin
+    lSegment := Segment(cCronWindowsLastYear);
+    Result.StartUtcMs := WindowsCivilDay(cCronWindowsLastYear + 1, 1, 1) * cCronMsPerDay;
+    Result.EndUtcMs := cCronZoneUnboundedEnd;
+    Result.OffsetMs := lSegment.StartOffsetMs;
+    if Length(lSegment.Changes) > 0 then Result.OffsetMs := lSegment.Changes[High(lSegment.Changes)].OffsetMs;
+    Exit;
+  end;
+  lSegment := Segment(y);
+  lo := 0;
+  hi := Length(lSegment.Changes);
+  while lo < hi do
+  begin
+    m := lo + (hi - lo) div 2;
+    if lSegment.Changes[m].UtcMs <= aUtcMs then lo := m + 1 else hi := m;
+  end;
+  Result.StartUtcMs := WindowsCivilDay(y, 1, 1) * cCronMsPerDay;
+  Result.EndUtcMs := WindowsCivilDay(y + 1, 1, 1) * cCronMsPerDay;
+  Result.OffsetMs := lSegment.StartOffsetMs;
+  if lo > 0 then
+  begin
+    Result.StartUtcMs := lSegment.Changes[lo - 1].UtcMs;
+    Result.OffsetMs := lSegment.Changes[lo - 1].OffsetMs;
+  end;
+  if lo < Length(lSegment.Changes) then Result.EndUtcMs := lSegment.Changes[lo].UtcMs;
+end;
+
+function TCronWindowsZoneSource.SegmentsComputed: Int64;
+begin
+  fLock.Acquire;
+  try Result := fSegmentsComputed; finally fLock.Release; end;
+end;
+
+function TCronWindowsZoneSource.OracleCalls: Int64;
+begin
+  fLock.Acquire;
+  try Result := fOracleCalls; finally fLock.Release; end;
+end;
+
+function TCronWindowsZoneSource.UnexpectedChanges: Int64;
+begin
+  fLock.Acquire;
+  try Result := fUnexpectedChanges; finally fLock.Release; end;
+end;
+
+function NamedWindowsSource(const aWindowsId: string): ICronZoneRuleSource;
+var
+  lInfo: TCronWindowsDynamicInfo;
+  lIndex, lStatus: DWORD;
+  lOracle: ICronWindowsZoneOracle;
+begin
+  if not Assigned(gEnumDynamicZone) or not Assigned(gGetEffectiveYears) or not Assigned(gGetYearInfo) or
+    not Assigned(gWindowsForwardEx) then
+    raise Exception.Create('named time zones need Windows 8 or later; set MAXCRON_TZDIR to use TZif data');
+  lIndex := 0;
+  repeat
+    lStatus := gEnumDynamicZone(lIndex, lInfo);
+    if lStatus = ERROR_NO_MORE_ITEMS then
+      raise Exception.CreateFmt('Windows time zone "%s" is not installed', [aWindowsId]);
+    if lStatus <> ERROR_SUCCESS then
+      raise EOSError.CreateFmt('Windows time zone enumeration failed (%d)', [lStatus]);
+    if CronUpperAscii(string(PWideChar(@lInfo.TimeZoneKeyName[0]))) = CronUpperAscii(aWindowsId) then
+    begin
+      lInfo.DynamicDaylightTimeDisabled := 0;
+      lOracle := TCronWindowsExOracle.Create(lInfo);
+      Exit(TCronWindowsZoneSource.Create(lOracle));
+    end;
+    Inc(lIndex);
+  until False;
 end;
 
 function TCronOsLocalTimeZone.CurrentZone: ICronZoneRules;
 var
   lInfo: TCronWindowsDynamicInfo;
+  lCandidate: ICronZoneRules;
+  lOracle: ICronWindowsZoneOracle;
 begin
   if not Assigned(gGetDynamicZone) then raise Exception.Create('Windows dynamic zone API is unavailable');
+  if not Assigned(gWindowsForwardLocal) then raise Exception.Create('Windows local conversion API is unavailable');
   if gGetDynamicZone(lInfo) = DWORD($FFFFFFFF) then RaiseLastOSError;
   gZoneLock.Acquire;
   try
-    if (fZone = nil) or (string(PWideChar(@lInfo.TimeZoneKeyName[0])) <>
-      string(PWideChar(@fInfo.TimeZoneKeyName[0]))) or (lInfo.Zone.Bias <> fInfo.Zone.Bias) or
-      (lInfo.DynamicDaylightTimeDisabled <> fInfo.DynamicDaylightTimeDisabled) then
+    if (fZone <> nil) and WindowsSameIdentity(lInfo, fInfo) then Exit(fZone);
+  finally
+    gZoneLock.Release;
+  end;
+  // Snapshotting records calls Windows. Construct outside the global cache lock.
+  lOracle := TCronWindowsLocalOracle.Create(lInfo);
+  lCandidate := CreateCronZone('LOCAL', TCronWindowsZoneSource.Create(lOracle));
+  gZoneLock.Acquire;
+  try
+    if (fZone = nil) or not WindowsSameIdentity(lInfo, fInfo) then
     begin
-      fZone := CreateCronZone('LOCAL', WindowsSource(lInfo));
+      fZone := lCandidate;
       fInfo := lInfo;
     end;
     Result := fZone;
@@ -424,8 +787,13 @@ begin
   gZoneAdvapi := LoadLibraryW('advapi32.dll');
   gGetDynamicZone := TCronGetDynamicZone(GetProcAddress(lKernel, 'GetDynamicTimeZoneInformation'));
   gGetYearInfo := TCronGetYearInfo(GetProcAddress(lKernel, 'GetTimeZoneInformationForYear'));
+  gWindowsForwardEx := TCronWindowsForwardEx(GetProcAddress(lKernel, 'SystemTimeToTzSpecificLocalTimeEx'));
+  gWindowsForwardLocal := TCronWindowsForwardLocal(GetProcAddress(lKernel, 'SystemTimeToTzSpecificLocalTime'));
   if gZoneAdvapi <> 0 then
+  begin
+    gEnumDynamicZone := TCronEnumDynamicZone(GetProcAddress(gZoneAdvapi, 'EnumDynamicTimeZoneInformation'));
     gGetEffectiveYears := TCronGetEffectiveYears(GetProcAddress(gZoneAdvapi, 'GetDynamicTimeZoneInformationEffectiveYears'));
+  end;
 end;
 
 {$IFDEF MAXCRON_TESTS}
@@ -434,9 +802,26 @@ begin
   Result := TCronOsLocalTimeZone.Create;
 end;
 
-function CreateCronWindowsZoneSourceForTests(const aRules: array of TCronWindowsYearRule): ICronZoneRuleSource;
+function CreateCronLocalWindowsSourceForTests: ICronZoneRuleSource;
+var
+  lInfo: TCronWindowsDynamicInfo;
+  lOracle: ICronWindowsZoneOracle;
 begin
-  Result := TCronWindowsZoneSource.Create(aRules);
+  if not Assigned(gGetDynamicZone) or not Assigned(gWindowsForwardLocal) then
+    raise Exception.Create('Windows local conversion API is unavailable');
+  if gGetDynamicZone(lInfo) = DWORD($FFFFFFFF) then RaiseLastOSError;
+  lOracle := TCronWindowsLocalOracle.Create(lInfo);
+  Result := TCronWindowsZoneSource.Create(lOracle);
+end;
+
+function CreateCronWindowsZoneSourceForTests(const aOracle: ICronWindowsZoneOracle): ICronZoneRuleSource;
+begin
+  Result := TCronWindowsZoneSource.Create(aOracle);
+end;
+
+function CreateCronNamedWindowsSourceForTests(const aWindowsId: string): ICronZoneRuleSource;
+begin
+  Result := NamedWindowsSource(aWindowsId);
 end;
 {$ENDIF}
 {$ENDIF}
@@ -839,6 +1224,24 @@ begin
   Result := True;
 end;
 
+function ZoneNameIndex(const aName: string): Integer;
+var
+  lo, hi, m, c: Integer;
+  lName: string;
+begin
+  lName := CronUpperAscii(aName);
+  lo := Low(cCronZoneNames);
+  hi := High(cCronZoneNames);
+  while lo <= hi do
+  begin
+    m := lo + (hi - lo) div 2;
+    c := CompareStr(CronUpperAscii(cCronZoneNames[m].Name), lName);
+    if c = 0 then Exit(m);
+    if c < 0 then lo := m + 1 else hi := m - 1;
+  end;
+  Result := -1;
+end;
+
 function TryFixedZone(const aName: string; out aOffsetMs: Int64; out aNormalized: string): Boolean;
 var
   lName, lSuffix: string;
@@ -889,6 +1292,7 @@ var
   lSource: ICronZoneRuleSource;
   lOffset: Int64;
   lResolved: ICronZoneRules;
+  lIndex: Integer;
 begin
   aZone := nil;
   aNormalizedName := aName;
@@ -920,15 +1324,39 @@ begin
     lSource := TCronFixedZoneSource.Create(lOffset)
   else
   begin
-    if aDataRoot = '' then
+    lIndex := ZoneNameIndex(aName);
+    if (lIndex >= 0) and (cCronZoneNames[lIndex].WindowsId = '') then
     begin
-      aError := 'Windows named zone provider is not available; set MAXCRON_TZDIR to use TZif data';
+      aNormalizedName := cCronZoneNames[lIndex].Name;
+      lSource := TCronFixedZoneSource.Create(Int64(cCronZoneNames[lIndex].FixedOffsetSeconds) * 1000);
+    end else if aDataRoot = '' then
+    begin
+      if lIndex < 0 then
+      begin
+        aError := 'not in the time zone name table';
+        Exit(False);
+      end;
+      {$IFDEF MSWINDOWS}
+      try
+        lSource := NamedWindowsSource(cCronZoneNames[lIndex].WindowsId);
+      except
+        on E: Exception do
+        begin
+          aError := E.Message;
+          Exit(False);
+        end;
+      end;
+      aNormalizedName := cCronZoneNames[lIndex].Name;
+      {$ELSE}
+      aError := 'set MAXCRON_TZDIR to use TZif data';
       Exit(False);
+      {$ENDIF}
+    end else begin
+      if not TryLoadCronTzifFile(aDataRoot, aName, lSource, lPath, aError) then Exit(False);
+      // The file loader preserves directory spelling, including TZif-only aliases.
+      aNormalizedName := Copy(lPath, Length(IncludeTrailingPathDelimiter(aDataRoot)) + 1, MaxInt);
+      aNormalizedName := StringReplace(aNormalizedName, PathDelim, '/', [rfReplaceAll]);
     end;
-    if not TryLoadCronTzifFile(aDataRoot, aName, lSource, lPath, aError) then Exit(False);
-    // The file loader preserves directory spelling, including TZif-only aliases.
-    aNormalizedName := Copy(lPath, Length(IncludeTrailingPathDelimiter(aDataRoot)) + 1, MaxInt);
-    aNormalizedName := StringReplace(aNormalizedName, PathDelim, '/', [rfReplaceAll]);
   end;
   lResolved := CreateCronZone(aNormalizedName, lSource);
   gZoneLock.Acquire;
