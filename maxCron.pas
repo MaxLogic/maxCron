@@ -14,6 +14,9 @@ uses
   Classes, Generics.Collections, SyncObjs, SysUtils,
   {$ELSE}
   System.Classes, System.Generics.Collections, System.SyncObjs, System.SysUtils,
+  {$IFDEF MAXCRON_TESTS}
+  System.Threading,
+  {$ENDIF}
   {$ENDIF}
   maxCron.Internal.DeadlineQueue, maxCron.Internal.Platform, maxCron.Plan;
 
@@ -576,6 +579,9 @@ procedure SetMaxCronWallClockHook(const aHook: TmaxCronClockHook);
 procedure SetMaxCronAsyncCallHook(const aHook: TmaxCronAsyncCallHook);
 procedure SetMaxCronBeforeQueuedAcquireHook(const aHook: TmaxCronBeforeQueuedAcquireHook);
 procedure SetMaxCronBeforeDispatchHook(const aHook: TmaxCronBeforeDispatchHook);
+{$IFNDEF FPC}
+function ExchangeMaxCronThreadDispatchPoolForTests(const aPool: TThreadPool): TThreadPool;
+{$ENDIF}
 procedure GetMaxCronNamedSearchForTests(const aEvent: IMaxCronEvent; out aCalls, aAttempts: Integer);
 
 {$ENDIF}
@@ -599,7 +605,10 @@ uses
   {$IFDEF FPC}
   DateUtils, Math, StrUtils, System.Diagnostics, System.Threading,
   {$ELSE}
-  System.DateUtils, System.Diagnostics, System.Math, System.StrUtils, System.Threading,
+  System.DateUtils, System.Diagnostics, System.Math, System.StrUtils,
+  {$IFNDEF MAXCRON_TESTS}
+  System.Threading,
+  {$ENDIF}
   {$ENDIF}
   maxCron.Internal.Text, maxCron.Internal.TimeZone;
 
@@ -650,6 +659,24 @@ var
   gMaxCronAsyncCallHook: TmaxCronAsyncCallHook = nil;
   gMaxCronBeforeQueuedAcquireHook: TmaxCronBeforeQueuedAcquireHook = nil;
   gMaxCronBeforeDispatchHook: TmaxCronBeforeDispatchHook = nil;
+  {$IFNDEF FPC}
+  gMaxCronThreadDispatchPoolForTests: TThreadPool = nil;
+  {$ENDIF}
+
+{$IFNDEF FPC}
+function ExchangeMaxCronThreadDispatchPoolForTests(const aPool: TThreadPool): TThreadPool;
+begin
+  Result := gMaxCronThreadDispatchPoolForTests;
+  gMaxCronThreadDispatchPoolForTests := aPool;
+end;
+
+function GetMaxCronThreadDispatchPoolForTests: TThreadPool;
+begin
+  Result := gMaxCronThreadDispatchPoolForTests;
+  if Result = nil then
+    Result := TThreadPool.Default;
+end;
+{$ENDIF}
 
 procedure SetMaxCronMonotonicClockHook(const aHook: TmaxCronClockHook);
 begin
@@ -6431,7 +6458,13 @@ begin
             procedure
             begin
               ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
-            end);
+            end
+            {$IFDEF MAXCRON_TESTS}
+            {$IFNDEF FPC}
+            , GetMaxCronThreadDispatchPoolForTests
+            {$ENDIF}
+            {$ENDIF}
+            );
         end else begin
           lThread := TThread.CreateAnonymousThread(
             procedure

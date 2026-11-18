@@ -3,7 +3,7 @@ unit TestInvokeModes;
 interface
 
 uses
-  System.Classes, System.DateUtils, System.Diagnostics, System.Generics.Collections, System.SyncObjs, System.SysUtils,
+  System.Classes, System.DateUtils, System.Diagnostics, System.Generics.Collections, System.SyncObjs, System.SysUtils, System.Threading,
   Winapi.Windows,
   DUnitX.TestFramework,
   maxCron;
@@ -314,8 +314,11 @@ end;
 procedure TTestInvokeModes.Invoke_ThreadDispatchPool_ReusesWorkers;
 const
   cEventCount = 128;
+  cPoolWorkerLimit = 8;
 var
   lCron: TmaxCron;
+  lPool: TThreadPool;
+  lPreviousPool: TThreadPool;
   lDone: TEvent;
   lLock: TCriticalSection;
   lThreadIds: TDictionary<TThreadID, Integer>;
@@ -329,6 +332,12 @@ var
   lPreviousValue: string;
   lHadPrevious: Boolean;
 begin
+  // Own the pool so earlier tests cannot leave an oversized worker set.
+  lPool := TThreadPool.Create;
+  lPool.MinWorkerThreads := 2;
+  lPool.MaxWorkerThreads := cPoolWorkerLimit;
+  lPool.UnlimitedWorkerThreadsWhenBlocked := False;
+  lPreviousPool := ExchangeMaxCronThreadDispatchPoolForTests(lPool);
   lCompleted := 0;
   lTickAt := Now;
   SetEnvVar('MAXCRON_THREAD_DISPATCH_POOL', '1', lPreviousValue, lHadPrevious);
@@ -364,7 +373,8 @@ begin
               lDone.SetEvent;
           end;
         lEvent.Run;
-        if lIndex = 0 then
+        // Registration can cross a second; tick once when every event is due.
+        if lEvent.NextSchedule > lTickAt then
           lTickAt := lEvent.NextSchedule;
       end;
 
@@ -393,12 +403,18 @@ begin
         Format('Expected fewer worker threads than callbacks (unique workers=%d, callbacks=%d)',
           [lUniqueCount, cEventCount]));
     finally
+      // Drain the owned workers before releasing callback resources.
+      ExchangeMaxCronThreadDispatchPoolForTests(lPreviousPool);
+      lPool.Free;
+      lPool := nil;
       lThreadIds.Free;
       lLock.Free;
       lDone.Free;
       lCron.Free;
     end;
   finally
+    ExchangeMaxCronThreadDispatchPoolForTests(lPreviousPool);
+    lPool.Free;
     RestoreEnvVar('MAXCRON_THREAD_DISPATCH_POOL', lPreviousValue, lHadPrevious);
   end;
 end;
