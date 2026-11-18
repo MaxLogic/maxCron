@@ -15,7 +15,7 @@ All notable user-visible changes to this project will be documented in this file
   Named zones apply spring/fall policies, preserve aliases and reject leap-second
   files. Dense schedules across 30-minute and two-hour shifts use bounded period-range
   searches. Native Windows zone lookup remains deferred.
-- Added wrapped ranges with continuous steps in seconds, minutes, hours and months, including month names. Existing weekday range behavior is unchanged.
+- Added wrapped ranges with continuous steps in seconds, minutes, hours and months, including month names.
 - Added month-end offsets `L-n`, `LW-n` and `L-nW` (0..30), with descriptions and matching next, previous and range queries.
 - Added monotonic interval events with `AddInterval`, `@every` plans, fixed-rate and fixed-delay modes, read-only interval metadata, wake-on-change, and persistence through the existing schedule store. Existing overlap, retry, execution-limit, and global-cap policies apply.
 - Added interval accuracy and CPU benchmarking with `--mode=interval --interval-ms=N`.
@@ -23,6 +23,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
 
 ### Changed
+- Stepped wrapped day-of-week ranges now count continuously across Sunday in every dialect. For example, `4-2/2` selects Thu,Sat,Mon instead of Thu,Sat,Sun,Tue; `1-7/4` selects Mon,Fri without adding Sun (`cdMaxCron`/`cdStandard`). Quartz `5-3/2` and `2-1/4` use the same rule. Unstepped wraps are unchanged.
 - Consumer projects must also include `maxCron.Internal.Text.pas`.
 - Invalid or unknown `TimeZoneId` values report the rejected value and cause,
   preserving the event's previous zone. Add `maxCron.Internal.TZif.pas` to consumer

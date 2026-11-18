@@ -424,6 +424,8 @@ begin
   AssertDescription('30-0/30 * * * *', 'Every 30 minutes');
   AssertDescription('0 8 * * FRI-MON', 'Every week on Sun,Mon,Fri,Sat at 08:00');
   AssertDescription('0 9 * NOV-FEB *', 'Custom schedule');
+  AssertDescription('0 8 * * 4-2/2', 'Every week on Mon,Thu,Sat at 08:00');
+  AssertDescription('0 8 * * 1-7/4', 'Every week on Mon,Fri at 08:00');
   AssertDescription('0 10 L-2 * *', 'Every month on the last day minus 2 days at 10:00');
   AssertDescription('0 10 L-1 * *', 'Every month on the last day minus 1 day at 10:00');
   AssertDescription('0 10 LW-2 * *', 'Every month on the last weekday minus 2 weekdays at 10:00');
@@ -506,20 +508,12 @@ begin
                 // Data parses through the public setter using the configured numbering.
                 lPart.Data := lToken;
                 for lValue := lLow to lHigh do lExpected[lValue] := False;
-                if lKind = 4 then
+                lSpan := lHigh - lFrom + 1 + lTo - lLow + 1;
+                lOffset := 0;
+                while lOffset < lSpan do
                 begin
-                  // Preserve established weekday per-segment stepping.
-                  for lValue := lLow to lHigh do
-                    lExpected[lValue] := ((lValue >= lFrom) and ((lValue - lFrom) mod lStep = 0)) or
-                      ((lValue <= lTo) and ((lValue - lLow) mod lStep = 0));
-                end else begin
-                  lSpan := lHigh - lFrom + 1 + lTo - lLow + 1;
-                  lOffset := 0;
-                  while lOffset < lSpan do
-                  begin
-                    lExpected[lLow + ((lFrom - lLow + lOffset) mod lWidth)] := True;
-                    Inc(lOffset, lStep);
-                  end;
+                  lExpected[lLow + ((lFrom - lLow + lOffset) mod lWidth)] := True;
+                  Inc(lOffset, lStep);
                 end;
                 for lValue := lLow to lHigh do
                   Assert.AreEqual(lExpected[lValue], lPart.NextVal(lValue) = lValue, lToken + ' value ' + IntToStr(lValue));
@@ -535,7 +529,7 @@ begin
           lPlan.Dialect := cdMaxCron;
           lPart.Data := IntToStr(lFrom) + '-' + IntToStr(lTo) + '/' + IntToStr(lWidth + 1);
           for lValue := lLow to lHigh do
-            Assert.AreEqual((lValue = lFrom) or ((lKind = 4) and (lValue = lLow)),
+            Assert.AreEqual(lValue = lFrom,
               lPart.NextVal(lValue) = lValue, 'width+1');
         end;
       end;
@@ -549,7 +543,7 @@ begin
     lPlan.Parse('0 0 * * 0-7');
     for lValue := 0 to 6 do Assert.AreEqual(lValue = 0, lPlan.Day_of_the_Week.NextVal(lValue) = lValue);
     lPlan.Parse('0 0 * * 1-7/4');
-    for lValue := 0 to 6 do Assert.AreEqual(lValue in [0, 1, 5], lPlan.Day_of_the_Week.NextVal(lValue) = lValue);
+    for lValue := 0 to 6 do Assert.AreEqual(lValue in [1, 5], lPlan.Day_of_the_Week.NextVal(lValue) = lValue);
   finally
     lPlan.Free;
   end;

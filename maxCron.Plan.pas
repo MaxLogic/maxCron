@@ -2514,12 +2514,6 @@ begin
 
   if (iR > 0) and (RangeTo < RangeFrom) then
   begin
-    if fPartKind = ckDayOfTheWeek then
-    begin
-      AddRange(RangeFrom, FValidTo, Repeater);
-      AddRange(FValidFrom, RangeTo, Repeater);
-      Exit;
-    end;
     if fPartKind in [ckDayOfTheMonth, ckYear] then
       raise Exception.Create('Invalid cron range');
     AddWrappedRange(RangeFrom, RangeTo, Repeater);

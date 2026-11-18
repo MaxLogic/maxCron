@@ -1203,7 +1203,10 @@ Wrapped ranges in seconds, minutes, hours and months continue through the field 
 Steps count continuously from the range start: `22-2` means hours 22,23,0,1,2;
 `22-2/2` means 22,0,2; `22-2/3` means 22,1. Month names work too:
 `NOV-FEB` means November through February; `NOV-FEB/2` means November and January.
-Day-of-week wraps such as `FRI-MON` retain their existing per-segment step behavior.
+Day-of-week wraps use the same continuous step rule, in every dialect:
+`4-2/2` means Thursday, Saturday and Monday; `1-7/4` means Monday and Friday
+in `cdMaxCron` and `cdStandard`. In Quartz numbering, the corresponding ranges
+are `5-3/2` and `2-1/4`. Unstepped wraps such as `FRI-MON` are unchanged.
 Day-of-month, year and `H(...)` ranges do not wrap.
 
 Additional syntax we support:
