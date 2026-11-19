@@ -8,12 +8,12 @@ uses
   Windows,
   DateUtils, Math, SysUtils,
   AutoFree, DUnitX.TestFramework,
-  maxCron, maxCron.Internal.TimeZone
+  maxCron, maxCron.Internal.TimeZone, TestZoneFakes
   {$ELSE}
   System.DateUtils, System.Math, System.SysUtils,
   Winapi.Windows,
   AutoFree, DUnitX.TestFramework,
-  maxCron, maxCron.Internal.TimeZone
+  maxCron, maxCron.Internal.TimeZone, TestZoneFakes
   {$ENDIF};
 
 type
@@ -62,6 +62,37 @@ type
     [TestCase('hour', '2')]
     [TestCase('day', '3')]
     procedure CalculationApiContract(const aPeriodIndex: Integer);
+    [TestCase('LOCAL-scan', 'LOCAL,scan')]
+    [TestCase('LOCAL-heap', 'LOCAL,heap')]
+    [TestCase('LOCAL-shadow', 'LOCAL,shadow')]
+    [TestCase('Q4-Fixed-scan', 'Q4/Fixed,scan')]
+    [TestCase('Q4-Fixed-heap', 'Q4/Fixed,heap')]
+    [TestCase('Q4-Fixed-shadow', 'Q4/Fixed,shadow')]
+    procedure CronValidityToStopsDispatch(const aZone, aEngine: string);
+    [TestCase('LOCAL-scan', 'LOCAL,scan')]
+    [TestCase('LOCAL-heap', 'LOCAL,heap')]
+    [TestCase('LOCAL-shadow', 'LOCAL,shadow')]
+    [TestCase('Q4-Fixed-scan', 'Q4/Fixed,scan')]
+    [TestCase('Q4-Fixed-heap', 'Q4/Fixed,heap')]
+    [TestCase('Q4-Fixed-shadow', 'Q4/Fixed,shadow')]
+    procedure CronValidityInclusiveDispatch(const aZone, aEngine: string);
+    [TestCase('LOCAL-scan', 'LOCAL,scan')]
+    [TestCase('LOCAL-heap', 'LOCAL,heap')]
+    [TestCase('LOCAL-shadow', 'LOCAL,shadow')]
+    [TestCase('Q4-Fixed-scan', 'Q4/Fixed,scan')]
+    [TestCase('Q4-Fixed-heap', 'Q4/Fixed,heap')]
+    [TestCase('Q4-Fixed-shadow', 'Q4/Fixed,shadow')]
+    procedure CronValidityExclusionAdvances(const aZone, aEngine: string);
+    [TestCase('LOCAL-scan', 'LOCAL,scan')]
+    [TestCase('LOCAL-heap', 'LOCAL,heap')]
+    [TestCase('LOCAL-shadow', 'LOCAL,shadow')]
+    [TestCase('Q4-Fixed-scan', 'Q4/Fixed,scan')]
+    [TestCase('Q4-Fixed-heap', 'Q4/Fixed,heap')]
+    [TestCase('Q4-Fixed-shadow', 'Q4/Fixed,shadow')]
+    procedure CronValidityRestoreAndReschedule(const aZone, aEngine: string);
+    [Test] procedure CronValidityPlanGenerated;
+    [Test] procedure CronValidityPlanToOvershoot;
+    [Test] procedure CronValidityAfterDstConversion;
     [Test] procedure CalculationValidityRepresentation;
     [Test] procedure ExactMsReference;
     [Test] procedure ExactMsQueries;
@@ -593,6 +624,311 @@ begin
   end;
 end;
 
+
+type
+  TValidityStore = class(TInterfacedObject, IMaxCronScheduleStore)
+  private
+    fStates: TArray<TMaxCronPersistedEvent>;
+  public
+    procedure Save(const aEvents: TArray<TMaxCronPersistedEvent>);
+    function TryLoad(out aEvents: TArray<TMaxCronPersistedEvent>): Boolean;
+  end;
+
+procedure TValidityStore.Save(const aEvents: TArray<TMaxCronPersistedEvent>);
+begin
+  fStates := Copy(aEvents);
+end;
+
+function TValidityStore.TryLoad(out aEvents: TArray<TMaxCronPersistedEvent>): Boolean;
+begin
+  aEvents := Copy(fStates);
+  Result := True;
+end;
+
+procedure TTestTimeBoundaries.CronValidityToStopsDispatch(const aZone, aEngine: string);
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lWallUs, lDueMs: Int64;
+  lFires: Integer;
+  lOldEngine: string;
+begin
+  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
+  SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('UTC', TCronFixedZoneSource.Create(0))));
+  RegisterCronZoneForTests('Q4/Fixed', TCronFixedZoneSource.Create(7200000));
+  lDueMs := ZoneMs(2026, 11, 16, 10);
+  lWallUs := (lDueMs - 1800000) * cCronUsPerMs;
+  lFires := 0;
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('valid-to-dispatch');
+    lEvent.TimeZoneId := aZone;
+    if aZone = 'LOCAL' then
+      lEvent.EventPlan := '0 10 * * *'
+    else
+      lEvent.EventPlan := '0 12 * * *';
+    lEvent.InvokeMode := imMainThread;
+    lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lFires); end;
+    lEvent.ValidTo := CronMsToDateTime(lDueMs - 900000);
+    lEvent.Run;
+    lWallUs := lDueMs * cCronUsPerMs;
+    lCron.TickAtUs(lWallUs);
+    // Tick before asserting disabled: the old implementation really dispatches at 10:00.
+    Assert.AreEqual(0, lFires, 'A cron event fired after ValidTo');
+    Assert.IsFalse(lEvent.Enabled, 'An exhausted validity window must disable the event');
+  finally
+    lEvent := nil;
+    g.Clear;
+    SetMaxCronWallClockHook(nil);
+    SetCronSystemTimeZoneForTests(nil);
+    ClearCronZonesForTests;
+    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+  end;
+end;
+
+procedure TTestTimeBoundaries.CronValidityInclusiveDispatch(const aZone, aEngine: string);
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lWallUs, lDueMs: Int64;
+  lFires, k: Integer;
+  lOldEngine: string;
+begin
+  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
+  SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('UTC', TCronFixedZoneSource.Create(0))));
+  RegisterCronZoneForTests('Q4/Fixed', TCronFixedZoneSource.Create(7200000));
+  lDueMs := ZoneMs(2026, 11, 16, 10);
+  lWallUs := (lDueMs - 1800000) * cCronUsPerMs;
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('inclusive-validity');
+    lEvent.TimeZoneId := aZone;
+    lEvent.EventPlan := '0 * * * *';
+    lEvent.InvokeMode := imMainThread;
+    lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lFires); end;
+    for k := -1 to 1 do
+    begin
+      lFires := 0;
+      lWallUs := (lDueMs - 1800000) * cCronUsPerMs;
+      lEvent.Stop;
+      lEvent.ValidFrom := Neighbour(CronMsToDateTime(lDueMs), k);
+      lEvent.ValidTo := Neighbour(CronMsToDateTime(lDueMs), -k);
+      lEvent.Run;
+      Assert.IsTrue(lEvent.Enabled, 'The single-point validity window has an occurrence');
+      Assert.AreEqual(lDueMs, CronDateTimeToMs(lEvent.NextSchedule));
+      lCron.TickAtUs(lWallUs);
+      Assert.AreEqual(0, lFires, 'Do not fire before ValidFrom');
+      lWallUs := lDueMs * cCronUsPerMs;
+      lCron.TickAtUs(lWallUs);
+      Assert.AreEqual(1, lFires, 'Both bounds include nearest-ms equality');
+      lWallUs := (lDueMs + 3600000) * cCronUsPerMs;
+      lCron.TickAtUs(lWallUs);
+      Assert.AreEqual(1, lFires, 'Do not fire after ValidTo');
+      Assert.IsFalse(lEvent.Enabled);
+      // Strict-after-base still wins when base equals ValidFrom.
+      lWallUs := lDueMs * cCronUsPerMs;
+      lEvent.Run;
+      Assert.IsFalse(lEvent.Enabled);
+    end;
+  finally
+    lEvent := nil;
+    g.Clear;
+    SetMaxCronWallClockHook(nil);
+    SetCronSystemTimeZoneForTests(nil);
+    ClearCronZonesForTests;
+    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+  end;
+end;
+
+procedure TTestTimeBoundaries.CronValidityExclusionAdvances(const aZone, aEngine: string);
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lWallUs, lDueMs: Int64;
+  lFires, i: Integer;
+  lOldEngine: string;
+begin
+  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
+  SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('UTC', TCronFixedZoneSource.Create(0))));
+  RegisterCronZoneForTests('Q4/Fixed', TCronFixedZoneSource.Create(7200000));
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('validity-advance');
+    lEvent.TimeZoneId := aZone;
+    lEvent.EventPlan := '0 * * * *';
+    lEvent.InvokeMode := imMainThread;
+    lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lFires); end;
+    for i := 0 to 2 do
+    begin
+      lEvent.Stop;
+      lEvent.WeekdaysOnly := False;
+      lEvent.ExcludedDatesCsv := '';
+      lEvent.BlackoutStartTime := 0;
+      lEvent.BlackoutEndTime := 0;
+      lDueMs := ZoneMs(2026, 11, 16, 10);
+      case i of
+        0: lEvent.ExcludedDatesCsv := '2026-11-16';
+        1:
+          begin
+            lDueMs := ZoneMs(2026, 11, 21, 10);
+            lEvent.WeekdaysOnly := True;
+          end;
+        2:
+          begin
+            lEvent.BlackoutStartTime := EncodeTime(10, 0, 0, 0);
+            lEvent.BlackoutEndTime := EncodeTime(13, 0, 0, 0);
+          end;
+      end;
+      lWallUs := (lDueMs - 1800000) * cCronUsPerMs;
+      lEvent.ValidFrom := CronMsToDateTime(lDueMs);
+      lEvent.ValidTo := CronMsToDateTime(lDueMs + 1800000);
+      lFires := 0;
+      lEvent.Run;
+      lWallUs := (lDueMs + 3 * cCronMsPerDay) * cCronUsPerMs;
+      lCron.TickAtUs(lWallUs);
+      Assert.AreEqual(0, lFires, 'Exclusion advance crossed ValidTo, kind=' + IntToStr(i));
+      Assert.IsFalse(lEvent.Enabled);
+    end;
+  finally
+    lEvent := nil;
+    g.Clear;
+    SetMaxCronWallClockHook(nil);
+    SetCronSystemTimeZoneForTests(nil);
+    ClearCronZonesForTests;
+    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+  end;
+end;
+
+procedure TTestTimeBoundaries.CronValidityRestoreAndReschedule(const aZone, aEngine: string);
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lStore: IMaxCronScheduleStore;
+  lStates: TArray<TMaxCronPersistedEvent>;
+  lWallUs, lDueMs: Int64;
+  lFires: Integer;
+  lOldEngine: string;
+begin
+  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
+  SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('UTC', TCronFixedZoneSource.Create(0))));
+  RegisterCronZoneForTests('Q4/Fixed', TCronFixedZoneSource.Create(7200000));
+  lDueMs := ZoneMs(2026, 11, 16, 10);
+  lWallUs := (lDueMs - 1800000) * cCronUsPerMs;
+  lFires := 0;
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lStore := TValidityStore.Create;
+    lCron.ScheduleStore := lStore;
+    lEvent := lCron.Add('validity-restore');
+    lEvent.TimeZoneId := aZone;
+    lEvent.EventPlan := '0 * * * *';
+    lEvent.InvokeMode := imMainThread;
+    lEvent.Run;
+    lEvent.ValidFrom := CronMsToDateTime(lDueMs);
+    Assert.AreEqual(lDueMs, CronDateTimeToMs(lEvent.NextSchedule), 'Reschedule includes ValidFrom');
+    lEvent.ValidTo := CronMsToDateTime(lDueMs);
+    Assert.IsTrue(lEvent.Enabled);
+    Assert.AreEqual(1, lCron.SaveScheduleState);
+    Assert.IsTrue(lStore.TryLoad(lStates));
+    // A persisted next value from the old overshoot behaviour must be recomputed.
+    lStates[0].NextSchedule := CronMsToDateTime(lDueMs + 3600000);
+    lStore.Save(lStates);
+    lEvent := nil;
+    Assert.AreEqual(1, lCron.RestoreScheduleState(True));
+    lEvent := lCron.Snapshot[0];
+    lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lFires); end;
+    Assert.AreEqual(lDueMs, CronDateTimeToMs(lEvent.NextSchedule), 'Restore rejects out-of-window next');
+    lWallUs := lDueMs * cCronUsPerMs;
+    lCron.TickAtUs(lWallUs);
+    Assert.AreEqual(1, lFires);
+    lWallUs := (lDueMs + 3600000) * cCronUsPerMs;
+    lCron.TickAtUs(lWallUs);
+    Assert.AreEqual(1, lFires);
+    Assert.IsFalse(lEvent.Enabled);
+  finally
+    lEvent := nil;
+    g.Clear;
+    SetMaxCronWallClockHook(nil);
+    SetCronSystemTimeZoneForTests(nil);
+    ClearCronZonesForTests;
+    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+  end;
+end;
+
+procedure TTestTimeBoundaries.CronValidityPlanToOvershoot;
+var
+  g: TGarbos;
+  lPlan: TCronSchedulePlan;
+  lNext: TDateTime;
+  lDates: TDates;
+begin
+  GC(lPlan, TCronSchedulePlan.Create, g);
+  lPlan.Parse('0 10 * * *');
+  Assert.IsFalse(lPlan.FindNextScheduleDate(EncodeDateTime(2026, 11, 16, 9, 30, 0, 0),
+    lNext, 0, EncodeDateTime(2026, 11, 16, 9, 45, 0, 0)), 'Hour push must recheck ValidTo');
+  Assert.AreEqual(0, lPlan.GetNextOccurrences(20, EncodeDateTime(2026, 11, 16, 9, 30, 0, 0),
+    lDates, 0, EncodeDateTime(2026, 11, 16, 9, 45, 0, 0)), 'Preview must recheck ValidTo');
+end;
+
+procedure TTestTimeBoundaries.CronValidityPlanGenerated;
+const
+  cYears: array[0..4] of Word = (1900, 2026, 2079, 2500, 2999);
+  cDeltaMs: array[0..4] of Integer = (-1001, -1, 0, 1, 1001);
+var
+  g: TGarbos;
+  lPlan: TCronSchedulePlan;
+  lNext, lFrom, lTo: TDateTime;
+  lDates: TDates;
+  lDueMs, lFromMs, lToMs, lExpectedMs: Int64;
+  lYear: Word;
+  p, i, j, k: Integer;
+  lFound, lExpectedFound: Boolean;
+  lHint: string;
+begin
+  GC(lPlan, TCronSchedulePlan.Create, g);
+  for lYear in cYears do
+    for p := 0 to 3 do
+    begin
+      lPlan.Parse(cPlans[p]);
+      lDueMs := GridMs(EncodeDateTime(lYear, 11, 16, 0, 0, 0, 0));
+      for i := Low(cDeltaMs) to High(cDeltaMs) do
+        for j := Low(cDeltaMs) to High(cDeltaMs) do
+          for k := -1 to 1 do
+          begin
+            lFrom := Neighbour(CronMsToDateTime(lDueMs + cDeltaMs[i]), k);
+            lTo := Neighbour(CronMsToDateTime(lDueMs + cDeltaMs[j]), -k);
+            lFromMs := CarrierMs(lFrom);
+            lToMs := CarrierMs(lTo);
+            lExpectedMs := CronCeilDiv(lFromMs, Int64(cPeriods[p]) * 1000) * cPeriods[p] * 1000;
+            lExpectedFound := lExpectedMs <= lToMs;
+            lFound := lPlan.FindNextScheduleDate(CronMsToDateTime(lDueMs - 5000), lNext, lFrom, lTo);
+            lHint := Format('year=%d period=%d from=%d to=%d ulp=%d', [lYear, cPeriods[p], lFromMs, lToMs, k]);
+            Assert.AreEqual(lExpectedFound, lFound, lHint);
+            if lFound then
+              Assert.AreEqual(lExpectedMs, CarrierMs(lNext), lHint);
+            Assert.AreEqual(Integer(Ord(lExpectedFound)), lPlan.GetNextOccurrences(1,
+              CronMsToDateTime(lDueMs - 5000), lDates, lFrom, lTo), lHint + ' preview');
+          end;
+      // Original base is exclusive even when it is also the lower bound.
+      Assert.IsFalse(lPlan.FindNextScheduleDate(CronMsToDateTime(lDueMs), lNext,
+        CronMsToDateTime(lDueMs), CronMsToDateTime(lDueMs)));
+      Assert.IsFalse(lPlan.FindNextScheduleDate(CronMsToDateTime(lDueMs + 1), lNext,
+        CronMsToDateTime(lDueMs), CronMsToDateTime(lDueMs)));
+    end;
+end;
+
 procedure TTestTimeBoundaries.CalculationValidityRepresentation;
 var
   y: Int64;
@@ -612,11 +948,10 @@ begin
       'P1 nearest-ms equality year=' + IntToStr(y));
     Assert.AreEqual(lDueMs, GridMs(lNext));
     Assert.IsTrue(lPlan.FindNextScheduleDate(IncSecond(lDue, -10), lNext, lDue, 0));
-    Assert.AreEqual(lDueMs + 1000, GridMs(lNext), 'Q4 exclusive ValidFrom stays');
+    Assert.AreEqual(lDueMs, GridMs(lNext), 'Q4 inclusive ValidFrom');
     lPlan.Parse('0 23 * * *');
-    Assert.IsTrue(lPlan.FindNextScheduleDate(lBase, lNext, 0, lDue));
-    Assert.AreEqual(GridMs(EncodeDateTime(y, 11, 16, 23, 0, 0, 0)), GridMs(lNext),
-      'Q4 ValidTo overshoot stays');
+    Assert.IsFalse(lPlan.FindNextScheduleDate(lBase, lNext, 0, lDue),
+      'Q4 no result after ValidTo');
     lPlan.Parse('* * * * * * *');
   end;
 end;
@@ -713,10 +1048,10 @@ begin
     Assert.AreEqual(lCount, lPlan.GetOccurrencesBetween(CronMsToDateTime(lFloor - 2000), lValue, lDates),
       lHint + ' end count');
     Assert.AreEqual(lCeil - 1000, GridMs(lDates[lCount - 1]), lHint + ' last before end');
-    // Validity inputs: ValidFrom stays exclusive and ValidTo admits nearest-ms equality.
+    // Validity inputs: both bounds admit nearest-ms equality.
     Assert.IsTrue(lPlan.FindNextScheduleDate(CronMsToDateTime(lFloor - 5000), lResult, lValue, 0),
       lHint + ' valid from');
-    Assert.AreEqual(lFloor + 1000, GridMs(lResult), lHint + ' valid from next');
+    Assert.AreEqual(lCeil, GridMs(lResult), lHint + ' valid from next');
     Assert.AreEqual(lCeil = lMs, lPlan.FindNextScheduleDate(CronMsToDateTime(lCeil - 1000), lResult, 0, lValue),
       lHint + ' valid to');
     if lCeil = lMs then
@@ -1301,6 +1636,40 @@ begin
               Format('transition=%d edge=%d policy=%d variant=%d nowUs=%d', [d, e, p, i, lWallUs]));
           end;
   finally
+    g.Clear;
+    SetMaxCronWallClockHook(nil);
+    SetCronSystemTimeZoneForTests(nil);
+  end;
+end;
+
+procedure TTestTimeBoundaries.CronValidityAfterDstConversion;
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lWallUs, lDayMs: Int64;
+  lFires: Integer;
+begin
+  lDayMs := GridMs(EncodeDate(2075, 3, 31));
+  lWallUs := (lDayMs + 3600000) * cCronUsPerMs;
+  lFires := 0;
+  SetCronSystemTimeZoneForTests(TBoundaryZone.Create);
+  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('validity-shift');
+    lEvent.EventPlan := '30 2 * * *';
+    lEvent.DstSpringPolicy := dspRunAtNextValidTime;
+    lEvent.ValidTo := CronMsToDateTime(lDayMs + 9900000); // 02:45, inside the gap.
+    lEvent.InvokeMode := imMainThread;
+    lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lFires); end;
+    lEvent.Run;
+    lWallUs := (lDayMs + 10800000) * cCronUsPerMs;
+    lCron.TickAtUs(lWallUs);
+    Assert.AreEqual(0, lFires, 'Shifted 03:00 result is past ValidTo 02:45');
+    Assert.IsFalse(lEvent.Enabled);
+  finally
+    lEvent := nil;
     g.Clear;
     SetMaxCronWallClockHook(nil);
     SetCronSystemTimeZoneForTests(nil);

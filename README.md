@@ -1126,6 +1126,14 @@ end;
 
 Example how to use From / To valid range. The event will fire for one year, every sunday, every second hour, but only on 1,5 and 10 month in the year.
 
+`ValidFrom` and `ValidTo` are both inclusive for cron and interval events; `0`
+means unbounded. An occurrence exactly at either bound is eligible, including a
+single-point window where both bounds are equal. Searches remain strictly after
+their base time. Validity comparisons read `TDateTime` at the nearest millisecond,
+with ties to even. Cron bounds use system-local time, including for named-zone
+events; calendar exclusions and DST policies still apply. These bounds also
+apply to shifted spring-gap occurrences and to each eligible repeated-hour instance.
+
 ```Delphi
 
   // start time is in 50 seconds

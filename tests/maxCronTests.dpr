@@ -55,6 +55,7 @@ uses
   TestReviewFindings in 'unit\TestReviewFindings.pas',
   TestScheduleNext in 'unit\TestScheduleNext.pas',
   TestStress in 'unit\TestStress.pas',
+  TestValidityZones in 'unit\TestValidityZones.pas',
   TestValidRange in 'unit\TestValidRange.pas';
 
 var
@@ -98,6 +99,7 @@ begin
     TDUnitX.RegisterTestFixture(TTestReviewFindings);
     TDUnitX.RegisterTestFixture(TTestScheduleNext);
     TDUnitX.RegisterTestFixture(TTestStress);
+    TDUnitX.RegisterTestFixture(TTestValidityZones);
     TDUnitX.RegisterTestFixture(TTestValidRange);
     TDUnitX.RegisterTestFixture(TTestIntervalPlan);
     TDUnitX.RegisterTestFixture(TTestDeadlineQueue);

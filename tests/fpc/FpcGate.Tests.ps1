@@ -12,7 +12,8 @@ BeforeAll {
         'TestCronFuzzOracle', 'TestCronQuery', 'TestIntervalPlan', 'TestDeadlineQueue', 'TestTimeZoneRules',
         'TestTimeZoneTzif', 'TestCronTextParity', 'TestFpcShims', 'TestScheduleNext', 'TestHashJitter',
         'TestCalendarTimeZone', 'TestNamedTimeZones', 'TestTimeBoundaries', 'TestMisfireOnTime',
-        'TestCronPhaseDifferential', 'TestLocalZoneOs', 'TestTimeZoneWindows', 'TestWindowsZoneOracle'
+        'TestCronPhaseDifferential', 'TestLocalZoneOs', 'TestTimeZoneWindows', 'TestWindowsZoneOracle',
+        'TestValidityZones'
     $repo = Join-Path $ScratchRoot 'registry-source'
     New-Item -ItemType Directory -Path (Join-Path $repo 'tests\unit'), (Join-Path $repo 'tests\fpc') -Force | Out-Null
     foreach ($unit in $units) {

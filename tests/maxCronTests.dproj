@@ -231,6 +231,7 @@
         <DCCReference Include="unit\TestMaxCron.pas"/>
         <DCCReference Include="unit\TestScheduleNext.pas"/>
         <DCCReference Include="unit\TestStress.pas"/>
+        <DCCReference Include="unit\TestValidityZones.pas"/>
         <DCCReference Include="unit\TestValidRange.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>

@@ -849,7 +849,7 @@ begin
           if FMinute.PushMinute(aNextDateTime) then
             if FSecond.PushSecond(aNextDateTime) then
             begin
-              Exit(True);
+              Exit((aValidTo <= 0) or (CronDateTimeToMs(aNextDateTime) <= lValidToMs));
             end;
 
   end;
@@ -885,17 +885,24 @@ function TCronSchedulePlan.FindNextScheduleDate(const aBaseDate: TDateTime;
   aValidTo: TDateTime): boolean;
 var
   lStartDate: TDateTime;
-  lStartMs: Int64;
+  lStartMs, lValidFromMs: Int64;
   h, m, s, ms: word;
 begin
-  lStartMs := Max(CronDateTimeToMs(aBaseDate), CronDateTimeToMs(aValidFrom));
-  DecodeSearchClockMs(lStartMs, h, m, s, ms);
-  lStartDate := CronFloorDiv(lStartMs, cCronMsPerDay);
-  // Keep ordinary result bytes, but carry midnight as an integer day first.
-  if (h = 23) and (m = 59) and (s = 59) then
-    lStartDate := lStartDate + 1
-  else
-    lStartDate := lStartDate + EncodeTime(h, m, s, 0) + OneSecond;
+  lStartMs := CronDateTimeToMs(aBaseDate);
+  lValidFromMs := CronDateTimeToMs(aValidFrom);
+  if (lValidFromMs > lStartMs) and (lValidFromMs mod cCronMsPerSecond = 0) then
+    // ValidFrom is inclusive; the original base remains strictly exclusive.
+    lStartDate := CronSecondToDateTime(lValidFromMs div cCronMsPerSecond)
+  else begin
+    lStartMs := Max(lStartMs, lValidFromMs);
+    DecodeSearchClockMs(lStartMs, h, m, s, ms);
+    lStartDate := CronFloorDiv(lStartMs, cCronMsPerDay);
+    // Keep ordinary result bytes, but carry midnight as an integer day first.
+    if (h = 23) and (m = 59) and (s = 59) then
+      lStartDate := lStartDate + 1
+    else
+      lStartDate := lStartDate + EncodeTime(h, m, s, 0) + OneSecond;
+  end;
 
   Result := FindNextFromCandidate(lStartDate, aValidTo, aNextDateTime);
 end;

@@ -27,6 +27,7 @@ uses
   TestTimeZoneRules in '..\unit\TestTimeZoneRules.pas',
   TestTimeZoneTzif in '..\unit\TestTimeZoneTzif.pas',
   TestTimeZoneWindows in '..\unit\TestTimeZoneWindows.pas',
+  TestValidityZones in '..\unit\TestValidityZones.pas',
   TestWindowsZoneOracle in '..\unit\TestWindowsZoneOracle.pas',
   TestZoneFakes in '..\unit\TestZoneFakes.pas';
 

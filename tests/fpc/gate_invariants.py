@@ -18,7 +18,8 @@ UNITS = ('TestCronInstant TestCronParsing TestCronInvalidCorpus TestCronUtilsCor
          'TestCronFuzzOracle TestCronQuery TestIntervalPlan TestDeadlineQueue '
          'TestTimeZoneRules TestTimeZoneTzif TestCronTextParity TestFpcShims '
          'TestScheduleNext TestHashJitter TestCalendarTimeZone TestNamedTimeZones '
-         'TestTimeBoundaries TestMisfireOnTime TestCronPhaseDifferential TestLocalZoneOs').split()
+         'TestTimeBoundaries TestMisfireOnTime TestCronPhaseDifferential TestLocalZoneOs '
+         'TestTimeZoneWindows TestWindowsZoneOracle TestValidityZones').split()
 
 
 def run(out, label, args, cwd, env=None):
@@ -358,7 +359,7 @@ def registry(args):
     expected = sorted(re.findall(r'^Test\w+\.\w+\.[^\r\n]+', Path(discovery['log']).read_text(), re.M))
     generated = run(out, 'generator', [args.generator, repo, out / 'registry.inc'], out)
     actual = sorted(re.findall(r"RegisterTest\('([^']+)'", (out / 'registry.inc').read_text(encoding='utf-8-sig'))) if generated['exit'] == 0 else []
-    good = generated['exit'] == 0 and expected == actual and len(expected) == 56
+    good = generated['exit'] == 0 and expected == actual and len(expected) == 59
     rejected = []
     if not args.red_case:
         target = repo / 'tests/unit/TestCronInstant.pas'

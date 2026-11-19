@@ -185,6 +185,9 @@ begin
     lEvent.ValidFrom := EncodeDate(2031, 1, 1);
     lEvent.Run;
 
+    Assert.AreEqual(EncodeDateTime(2031, 1, 1, 0, 0, 0, 0), lEvent.NextSchedule, 0.0,
+      'ValidFrom is inclusive before the excluded dates');
+    lCron.TickAt(lEvent.NextSchedule);
     Assert.AreEqual(EncodeDateTime(2031, 1, 4, 0, 0, 0, 0), lEvent.NextSchedule, 0.0);
   finally
     lCron.Free;

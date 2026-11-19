@@ -84,8 +84,12 @@ begin
     StartAt := EncodeDateTime(2025, 1, 1, 0, 0, 5, 0);
     StopAt := EncodeDateTime(2025, 1, 1, 0, 0, 6, 0);
     Assert.IsTrue(Plan.FindNextScheduleDate(Base, NextDt, StartAt, StopAt));
+    Assert.AreEqual(StartAt, NextDt, 0.0);
+    Assert.IsTrue(Plan.FindNextScheduleDate(StartAt, NextDt, StartAt, StopAt));
     Assert.AreEqual(StopAt, NextDt, 0.0);
-    Assert.IsFalse(Plan.FindNextScheduleDate(Base, NextDt, StartAt, StartAt));
+    Assert.IsTrue(Plan.FindNextScheduleDate(Base, NextDt, StartAt, StartAt));
+    Assert.AreEqual(StartAt, NextDt, 0.0);
+    Assert.IsFalse(Plan.FindNextScheduleDate(StopAt, NextDt, StartAt, StopAt));
   finally
     Plan.Free;
   end;

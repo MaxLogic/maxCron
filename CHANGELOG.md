@@ -33,6 +33,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
 
 ### Changed
+- Cron events now include an occurrence exactly at `ValidFrom` when it is after the search base. Both validity bounds are inclusive, as for interval events.
 - Day-of-week ranges `0-7` (including `SUN-7`) now span every day in `cdMaxCron` and `cdStandard`, instead of Sunday only. Stepped forms count from Sunday: `0-7/2` selects Sun,Tue,Thu,Sat and `0-7/3` selects Sun,Wed,Sat. Steps of 7 or more still select Sunday only. Quartz numbering is unchanged (`1` = Sun, `7` = Sat).
 - Stepped wrapped day-of-week ranges now count continuously across Sunday in every dialect. For example, `4-2/2` selects Thu,Sat,Mon instead of Thu,Sat,Sun,Tue; `1-7/4` selects Mon,Fri without adding Sun (`cdMaxCron`/`cdStandard`). Quartz `5-3/2` and `2-1/4` use the same rule. Unstepped wraps are unchanged.
 - Consumer projects must also include `maxCron.Internal.Text.pas`.
@@ -47,6 +48,9 @@ All notable user-visible changes to this project will be documented in this file
 - Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
 
 ### Fixed
+- Avoided excessive scanning before a future `ValidFrom` for dense LOCAL schedules that skip invalid gap times.
+- Fixed validity windows across timezone gaps and repeated hours. Original bounds apply to final scheduler-clock occurrences; an eligible second instance is retained when `ValidFrom` falls between the two instances, fixing a pre-existing named-zone search defect.
+- Cron events no longer schedule or fire an occurrence after `ValidTo`, including searches advanced by calendar exclusions, DST shifts and restored schedules.
 - Large step values no longer overflow in ordinary or hashed range expansion in any cron field. For example, weekday `1-1/2147483647` selects Monday only. Steps larger than the remaining range select only its start, including `n/k`, `*/k`, `H/k` and `H(a-b)/k`; wrapped ranges keep their continuous step rule.
 - Invalid integer operands in cron values, ranges, steps and hash expressions now raise the parser's `Exception` with `Invalid cron token` instead of leaking RTL `EConvertError`. Accepted syntax and existing parser diagnostics are unchanged.
 - Validate TZif DST footers across a full Gregorian cycle: signed/extended rules must keep both transitions at least 2 local days from the year boundaries and both DST and standard parts at least 28 days long. Fixed-offset and RFC all-year-DST forms remain supported; rejected rules preserve the event's previous zone.

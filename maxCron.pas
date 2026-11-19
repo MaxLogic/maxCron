@@ -838,7 +838,7 @@ type
     fEventZone: ICronZoneRules;
     fNamedNextUtcMs, fNamedConsumedUtcMs: Int64;
     fNamedHoldForRollback: Boolean;
-    fNamedValidFrom, fNamedValidTo: TDateTime;
+    fNamedPlanLower, fNamedPlanUpper: TDateTime;
     fNamedSearchAttempts, fNamedSearchCalls: Integer;
     fUtcToLocalCacheOffsetMs: Int64;
     fTimeZoneId: string;
@@ -958,10 +958,12 @@ type
       const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64 = 0): Boolean;
     procedure MarkPendingDestroy;
     function CanFreeNow: Boolean;
+    function IsWithinValidityWindow(const aSchedule: TDateTime): Boolean;
+    procedure GetPlanValidityBounds(const aBaseSystemLocal: TDateTime; out aLower, aUpper: TDateTime);
     function IsTimeInBlackout(const aEventLocalDateTime: TDateTime): Boolean;
     function TryGetExclusionAdvance(const aEventNextMs: Int64; out aAdvanceSecond: Int64): Boolean;
     function NamedFirstOccurrence(const aFromLocalMs: Int64; out aLocalMs: Int64): TCronInstantSearchResult;
-    function FindNextNamedInstant(const aBaseUtcMs: Int64; const aValidFrom, aValidTo: TDateTime;
+    function FindNextNamedInstant(const aBaseUtcMs: Int64; const aPlanLower, aPlanUpper: TDateTime;
       out aUtcMs: Int64): TFindNextScheduleResult;
     function SystemLocalToUtcMsEarliest(const aSystemLocal: TDateTime): Int64;
     function UtcMsToSystemLocal(const aUtcMs: Int64): TDateTime;
@@ -4081,9 +4083,14 @@ begin
           if lCronEvent.fScheduleKind = TmaxCronEvent.TCronScheduleKind.Interval then
             lCronEvent.RestoreIntervalDueLocked(lState.NextSchedule)
           else begin
-            if lState.NextSchedule > 0 then
-              lCronEvent.fNextSchedule := lState.NextSchedule;
-            lCronEvent.fNextScheduleNeedsResolve := lState.NextScheduleNeedsResolve;
+            // Reuse a saved due only within the current inclusive window. Otherwise
+            // keep the result just recomputed by Run, including its resolve state.
+            if (lState.NextSchedule <= 0) or lCronEvent.IsWithinValidityWindow(lState.NextSchedule) then
+            begin
+              if lState.NextSchedule > 0 then
+                lCronEvent.fNextSchedule := lState.NextSchedule;
+              lCronEvent.fNextScheduleNeedsResolve := lState.NextScheduleNeedsResolve;
+            end;
           end;
         finally
           lCronEvent.fLock.Release;
@@ -5333,6 +5340,44 @@ begin
   end;
 end;
 
+function TmaxCronEvent.IsWithinValidityWindow(const aSchedule: TDateTime): Boolean;
+var
+  lScheduleMs: Int64;
+begin
+  lScheduleMs := CronDateTimeToMs(aSchedule);
+  Result := ((FValidFrom <= 0) or (lScheduleMs >= CronDateTimeToMs(FValidFrom))) and
+    ((FValidTo <= 0) or (lScheduleMs <= CronDateTimeToMs(FValidTo)));
+end;
+
+procedure TmaxCronEvent.GetPlanValidityBounds(const aBaseSystemLocal: TDateTime; out aLower, aUpper: TDateTime);
+const
+  // Both nominal event time and final system time are within one maximum
+  // supported offset of the UTC fire instant, including a nominal gap time.
+  cMaxDifferenceMs = 2 * cCronZoneMaxAbsOffsetMs;
+var
+  lLowerWidenMs, lUpperWidenMs: Int64;
+begin
+  lLowerWidenMs := cMaxDifferenceMs;
+  lUpperWidenMs := cMaxDifferenceMs;
+  if fTimeZoneKind = TCronTimeZoneKind.ctzLocal then
+  begin
+    // LOCAL fires at its nominal wall value, or shifts forward out of a gap.
+    // It never maps an above-To nominal value backwards into the window.
+    lUpperWidenMs := 0;
+    if fDstSpringPolicy = TmaxCronDstSpringPolicy.dspSkip then
+      // With gaps skipped, every eligible LOCAL mapping is the identity.
+      // Exact pruning avoids enumerating offset-window seconds before From.
+      lLowerWidenMs := 0;
+  end;
+  aLower := 0;
+  aUpper := 0;
+  // Dropping an obsolete lower plan bound is conservative and avoids work.
+  if (FValidFrom > 0) and (CronDateTimeToMs(FValidFrom) > CronDateTimeToMs(aBaseSystemLocal)) then
+    aLower := CronMsToDateTime(Max(Int64(0), CronDateTimeToMs(FValidFrom) - lLowerWidenMs));
+  if FValidTo > 0 then
+    aUpper := CronMsToDateTime(CronDateTimeToMs(FValidTo) + lUpperWidenMs);
+end;
+
 function TmaxCronEvent.IsTimeInBlackout(const aEventLocalDateTime: TDateTime): Boolean;
 var
   lTimeMs, lStartMs, lEndMs: Int64;
@@ -5485,7 +5530,7 @@ begin
   begin
     Inc(fNamedSearchAttempts);
     if fNamedSearchAttempts > cMaxAttempts then Exit(cisLimit);
-    if not fScheduler.FindNextScheduleDate(CronMsToDateTime(lCursor), lNext, fNamedValidFrom, fNamedValidTo) then
+    if not fScheduler.FindNextScheduleDate(CronMsToDateTime(lCursor), lNext, fNamedPlanLower, fNamedPlanUpper) then
       Exit(cisNotFound);
     aLocalMs := CronDateTimeToMs(lNext);
     if not TryGetExclusionAdvance(aLocalMs, lAdvance) then Exit(cisFound);
@@ -5494,53 +5539,95 @@ begin
 end;
 
 function TmaxCronEvent.FindNextNamedInstant(const aBaseUtcMs: Int64;
-  const aValidFrom, aValidTo: TDateTime; out aUtcMs: Int64): TFindNextScheduleResult;
+  const aPlanLower, aPlanUpper: TDateTime; out aUtcMs: Int64): TFindNextScheduleResult;
+const
+  // Rejected instants lie in the two edge bands around From/To. Even the
+  // wider nominal/system bands contain at most 8 * max-offset whole seconds.
+  cMaxValidityCandidates = 8 * cCronZoneMaxAbsOffsetMs div cCronMsPerSecond + 8;
 var
   lFall: TCronFallChoice;
+  lAfterUtcMs, lLastUtcMs: Int64;
+  lCalls, lValidityCandidates: Integer;
 begin
-  fNamedValidFrom := aValidFrom;
-  fNamedValidTo := aValidTo;
+  fNamedPlanLower := aPlanLower;
+  fNamedPlanUpper := aPlanUpper;
   fNamedSearchAttempts := 0;
+  // The test hook retains the last instant search's callback count.
+  fNamedSearchCalls := 0;
+  lValidityCandidates := 0;
+  lAfterUtcMs := aBaseUtcMs;
+  if aPlanLower > 0 then
+    // Any fire reaching From must be at least From - max-system-offset UTC.
+    lAfterUtcMs := Max(lAfterUtcMs, CronCeilDiv(CronDateTimeToMs(FValidFrom) -
+      cCronZoneMaxAbsOffsetMs, cCronMsPerSecond) * cCronMsPerSecond - cCronMsPerSecond);
+  lLastUtcMs := High(Int64);
+  if FValidTo > 0 then lLastUtcMs := CronDateTimeToMs(FValidTo) + cCronZoneMaxAbsOffsetMs;
   lFall := cfcFirst;
   case fDstFallPolicy of
     TmaxCronDstFallPolicy.dfpRunOncePreferSecondInstance: lFall := cfcSecond;
     TmaxCronDstFallPolicy.dfpRunTwice: lFall := cfcBoth;
   end;
-  case CronZoneFindNextInstant(fEventZone, aBaseUtcMs,
-    fDstSpringPolicy = TmaxCronDstSpringPolicy.dspRunAtNextValidTime, lFall, NamedFirstOccurrence,
-    aUtcMs, fNamedSearchCalls) of
-    cisFound: Result := TFindNextScheduleResult.fnsFound;
-    cisNotFound: Result := TFindNextScheduleResult.fnsNotFound;
-  else Result := TFindNextScheduleResult.fnsSearchLimitReached;
+  while True do
+  begin
+    case CronZoneFindNextInstant(fEventZone, lAfterUtcMs,
+      fDstSpringPolicy = TmaxCronDstSpringPolicy.dspRunAtNextValidTime, lFall, NamedFirstOccurrence,
+      aUtcMs, lCalls) of
+      cisFound:
+        begin
+          fNamedSearchCalls := lCalls;
+          // UTC is strictly increasing. Beyond To + max-system-offset,
+          // every possible projected system value is above the original To.
+          if aUtcMs > lLastUtcMs then Exit(TFindNextScheduleResult.fnsNotFound);
+          if IsWithinValidityWindow(UtcMsToSystemLocal(aUtcMs)) then
+            Exit(TFindNextScheduleResult.fnsFound);
+          Inc(lValidityCandidates);
+          if lValidityCandidates > cMaxValidityCandidates then
+            Exit(TFindNextScheduleResult.fnsSearchLimitReached);
+          // Each callback charges one initial lookup plus exclusion advances.
+          // Successfully generated but out-of-window instants have their own
+          // finite budget; exclusion advances retain the original 4096 limit.
+          Dec(fNamedSearchAttempts, lCalls);
+          lAfterUtcMs := aUtcMs;
+        end;
+      cisNotFound:
+        begin
+          fNamedSearchCalls := lCalls;
+          Exit(TFindNextScheduleResult.fnsNotFound);
+        end;
+    else
+      fNamedSearchCalls := lCalls;
+      Exit(TFindNextScheduleResult.fnsSearchLimitReached);
+    end;
   end;
 end;
 
 function TmaxCronEvent.FindNextScheduleWithPolicies(const aBaseSystemLocal: TDateTime; out aNextSystemLocal: TDateTime): TFindNextScheduleResult;
 const
   cMaxAttempts = 4096;
+  cMaxValidityCandidates = 8 * cCronZoneMaxAbsOffsetMs div cCronMsPerSecond + 8;
 var
   lEventBase: TDateTime;
   lEventCursor: TDateTime;
   lEventNext: TDateTime;
-  lEventValidFrom: TDateTime;
-  lEventValidTo: TDateTime;
-  lAttempt: Integer;
+  lPlanLower: TDateTime;
+  lPlanUpper: TDateTime;
+  lAttempt, lValidityCandidates: Integer;
   lEventNextMs, lAdvanceSecond, lBaseUtcMs, lUtcMs: Int64;
 begin
+  if (FValidFrom > 0) and (FValidTo > 0) and
+    (CronDateTimeToMs(FValidFrom) > CronDateTimeToMs(FValidTo)) then
+    Exit(TFindNextScheduleResult.fnsNotFound);
+  GetPlanValidityBounds(aBaseSystemLocal, lPlanLower, lPlanUpper);
   if fTimeZoneKind = TCronTimeZoneKind.ctzNamed then
   begin
     lBaseUtcMs := SystemLocalToUtcMsEarliest(aBaseSystemLocal);
     if (fNamedConsumedUtcMs <> Low(Int64)) and (fNamedConsumedUtcMs > lBaseUtcMs) then
       lBaseUtcMs := fNamedConsumedUtcMs;
-    lEventValidFrom := 0;
-    lEventValidTo := 0;
-    if FValidFrom > 0 then lEventValidFrom := SystemLocalToEventLocal(FValidFrom);
-    if FValidTo > 0 then lEventValidTo := SystemLocalToEventLocal(FValidTo);
-    Result := FindNextNamedInstant(lBaseUtcMs, lEventValidFrom, lEventValidTo, lUtcMs);
+    Result := FindNextNamedInstant(lBaseUtcMs, lPlanLower, lPlanUpper, lUtcMs);
     if Result = TFindNextScheduleResult.fnsFound then
     begin
-      fNamedNextUtcMs := lUtcMs;
       aNextSystemLocal := UtcMsToSystemLocal(lUtcMs);
+      fNamedNextUtcMs := lUtcMs;
       UpdateNamedHold(aNextSystemLocal, lUtcMs);
     end else begin
       fNamedNextUtcMs := Low(Int64);
@@ -5554,36 +5641,26 @@ begin
   begin
     aNextSystemLocal := fPendingDstSecondSchedule;
     fPendingDstSecondSchedule := 0;
-    if (fTimeZoneKind = TCronTimeZoneKind.ctzLocal) and (fDstFallPolicy = TmaxCronDstFallPolicy.dfpRunTwice) then
-      ArmAmbiguousSecondGate(aNextSystemLocal)
-    else
-      ClearAmbiguousSecondGate;
-    Exit(TFindNextScheduleResult.fnsFound);
-  end;
-
-  lEventBase := SystemLocalToEventLocal(aBaseSystemLocal);
-  lEventValidFrom := 0;
-  lEventValidTo := 0;
-  if FValidFrom > 0 then
-    lEventValidFrom := SystemLocalToEventLocal(FValidFrom);
-  if FValidTo > 0 then
-    lEventValidTo := SystemLocalToEventLocal(FValidTo);
-  lEventCursor := lEventBase;
-
-  for lAttempt := 1 to cMaxAttempts do
-  begin
-    if fPendingDstSecondSchedule > 0 then
+    if IsWithinValidityWindow(aNextSystemLocal) then
     begin
-      aNextSystemLocal := fPendingDstSecondSchedule;
-      fPendingDstSecondSchedule := 0;
       if (fTimeZoneKind = TCronTimeZoneKind.ctzLocal) and (fDstFallPolicy = TmaxCronDstFallPolicy.dfpRunTwice) then
         ArmAmbiguousSecondGate(aNextSystemLocal)
       else
         ClearAmbiguousSecondGate;
       Exit(TFindNextScheduleResult.fnsFound);
     end;
+    ClearAmbiguousSecondGate;
+  end;
 
-    if not fScheduler.FindNextScheduleDate(lEventCursor, lEventNext, lEventValidFrom, lEventValidTo) then
+  lEventBase := SystemLocalToEventLocal(aBaseSystemLocal);
+  lEventCursor := lEventBase;
+
+  lAttempt := 0;
+  lValidityCandidates := 0;
+  while lAttempt < cMaxAttempts do
+  begin
+    Inc(lAttempt);
+    if not fScheduler.FindNextScheduleDate(lEventCursor, lEventNext, lPlanLower, lPlanUpper) then
       Exit(TFindNextScheduleResult.fnsNotFound);
 
     lEventNextMs := CronDateTimeToMs(lEventNext);
@@ -5595,6 +5672,18 @@ begin
 
     if not EventLocalToSystemLocal(lEventNext, aNextSystemLocal) then
     begin
+      lEventCursor := lEventNext;
+      Continue;
+    end;
+    if not IsWithinValidityWindow(aNextSystemLocal) then
+    begin
+      fPendingDstSecondSchedule := 0;
+      ClearAmbiguousSecondGate;
+      // Nominal candidates are increasing. Their conservative plan ceiling,
+      // not a rejected projected wall value, proves exhaustion across rollback.
+      Inc(lValidityCandidates);
+      if lValidityCandidates > cMaxValidityCandidates then Break;
+      Dec(lAttempt); // Validity filtering does not spend the exclusion budget.
       lEventCursor := lEventNext;
       Continue;
     end;
