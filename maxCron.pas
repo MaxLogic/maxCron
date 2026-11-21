@@ -375,6 +375,9 @@ type
     fTimer: ICronTickSource;
     fIntervalQueue: TCronDeadlineQueue;
     fLastCronPassKey: Int64;
+    {$IFDEF MAXCRON_TESTS}
+    fWallMapHighUs: Int64;
+    {$ENDIF}
     fPreferredTimerResolution: TCronWaitResolution;
     fItems: TList<IMaxCronEvent>;
     fItemsById: TDictionary<Int64, Integer>;
@@ -493,7 +496,9 @@ type
     procedure SetIntervalWake(const aEventId, aWakeUs: Int64; const aHasDeadline: Boolean);
     procedure DoIntervalTickAt(const aMonoNowUs, aWallNowUs: Int64);
     function GetActiveTimerResolution: TmaxCronTimerResolution;
-    procedure DoTickAtUs(const aNowUs: TCronInstantUs);
+    procedure DoTickAtUs(const aNowUtcUs: TCronInstantUs);
+    function SchedulerUtcNowUs: Int64;
+    function UtcUsToWallUs(const aUtcUs: Int64): Int64;
     procedure QueueTick;
     procedure KeepAsyncAlive(const aAsync: IInterface);
     procedure ReleaseAsyncAlive(const aAsync: IInterface);
@@ -559,6 +564,9 @@ type
     {$IFDEF MAXCRON_TESTS}
     procedure TickAt(const aNow: TDateTime);
     procedure TickAtUs(const aNowUs: TCronInstantUs);
+    procedure TickAtUtcUs(const aUtcUs: TCronInstantUs);
+    function WallUsToUtcUsForTests(const aWallUs: Int64): Int64;
+    function UtcNowUsForTests: Int64;
     procedure StartTimerForTests(const aIntervalMs: Cardinal);
     procedure GetTimerDiagnosticsForTests(out aTicksDelivered, aSpinGuardHits, aTickExceptions: UInt64);
     procedure ResetTickMetricsForTests;
@@ -575,6 +583,7 @@ function MakePreview(const SchedulePlan: string; const Dialect: TmaxCronDialect;
 
 {$IFDEF MAXCRON_TESTS}
 procedure SetMaxCronMonotonicClockHook(const aHook: TmaxCronClockHook);
+procedure SetMaxCronUtcClockHook(const aHook: TmaxCronClockHook);
 procedure SetMaxCronWallClockHook(const aHook: TmaxCronClockHook);
 procedure SetMaxCronAsyncCallHook(const aHook: TmaxCronAsyncCallHook);
 procedure SetMaxCronBeforeQueuedAcquireHook(const aHook: TmaxCronBeforeQueuedAcquireHook);
@@ -660,6 +669,7 @@ end;
 var
   gMaxCronMonotonicClockHook: TmaxCronClockHook = nil;
   gMaxCronWallClockHook: TmaxCronClockHook = nil;
+  gMaxCronUtcClockHook: TmaxCronClockHook = nil;
   gMaxCronNamedFastPathForTests: Boolean = True;
   gMaxCronAsyncCallHook: TmaxCronAsyncCallHook = nil;
   gMaxCronBeforeQueuedAcquireHook: TmaxCronBeforeQueuedAcquireHook = nil;
@@ -686,6 +696,11 @@ end;
 procedure SetMaxCronMonotonicClockHook(const aHook: TmaxCronClockHook);
 begin
   gMaxCronMonotonicClockHook := aHook;
+end;
+
+procedure SetMaxCronUtcClockHook(const aHook: TmaxCronClockHook);
+begin
+  gMaxCronUtcClockHook := aHook;
 end;
 
 procedure SetMaxCronWallClockHook(const aHook: TmaxCronClockHook);
@@ -720,6 +735,7 @@ type
     function TryGetDefaultInvokeMode(out aInvokeMode: TmaxCronInvokeMode): Boolean;
     function TryGetDefaultDayMatchMode(out aDayMatchMode: TmaxCronDayMatchMode): Boolean;
     function TryGetMisfireDefaults(out aMisfirePolicy: TmaxCronMisfirePolicy; out aCatchUpLimit: Cardinal): Boolean;
+    function UtcNowUs: Int64;
     procedure RecordWallPass(const aNowUs: TCronInstantUs);
     function TryGetLastWallRollback(out aFromUs, aToUs: TCronInstantUs): Boolean;
     function TryGetOwnerPointer(out aOwnerPointer: Pointer): Boolean;
@@ -761,6 +777,7 @@ type
     function TryGetDefaultInvokeMode(out aInvokeMode: TmaxCronInvokeMode): Boolean;
     function TryGetDefaultDayMatchMode(out aDayMatchMode: TmaxCronDayMatchMode): Boolean;
     function TryGetMisfireDefaults(out aMisfirePolicy: TmaxCronMisfirePolicy; out aCatchUpLimit: Cardinal): Boolean;
+    function UtcNowUs: Int64;
     procedure RecordWallPass(const aNowUs: TCronInstantUs);
     function TryGetLastWallRollback(out aFromUs, aToUs: TCronInstantUs): Boolean;
     function TryGetOwnerPointer(out aOwnerPointer: Pointer): Boolean;
@@ -1130,6 +1147,55 @@ begin
   {$ENDIF}
   Result := CronPreciseLocalNowUs;
 end;
+
+function TmaxCron.SchedulerUtcNowUs: Int64;
+begin
+  {$IFDEF MAXCRON_TESTS}
+  if Assigned(gMaxCronUtcClockHook) then Exit(gMaxCronUtcClockHook());
+  if Assigned(gMaxCronWallClockHook) then Exit(WallUsToUtcUsForTests(gMaxCronWallClockHook()));
+  {$ENDIF}
+  Result := CronPreciseUtcNowUs;
+end;
+
+function TmaxCron.UtcUsToWallUs(const aUtcUs: Int64): Int64;
+var
+  lUtcMs: Int64;
+begin
+  lUtcMs := CronFloorDiv(aUtcUs, cCronUsPerMs);
+  Result := aUtcUs + CronSystemZoneRules.GetPeriod(lUtcMs).OffsetMs * cCronUsPerMs;
+end;
+
+{$IFDEF MAXCRON_TESTS}
+function TmaxCron.WallUsToUtcUsForTests(const aWallUs: Int64): Int64;
+var
+  lWallMs, lSubUs, lUtcMs: Int64;
+  lZone: ICronZoneRules;
+  lMap: TCronLocalMapping;
+begin
+  lWallMs := CronFloorDiv(aWallUs, cCronUsPerMs);
+  lSubUs := aWallUs - lWallMs * cCronUsPerMs;
+  lZone := CronSystemZoneRules;
+  lMap := lZone.MapLocal(lWallMs);
+  fDefaultsLock.Acquire;
+  try
+    lUtcMs := lMap.FirstUtcMs;
+    case lMap.Kind of
+      clkGap: lUtcMs := lWallMs - lZone.GetPeriod(lMap.FirstUtcMs).OffsetMs;
+      clkOverlap:
+        if fWallMapHighUs > lMap.FirstUtcMs * cCronUsPerMs + lSubUs then lUtcMs := lMap.SecondUtcMs;
+    end;
+    Result := lUtcMs * cCronUsPerMs + lSubUs;
+    if Result > fWallMapHighUs then fWallMapHighUs := Result;
+  finally
+    fDefaultsLock.Release;
+  end;
+end;
+
+function TmaxCron.UtcNowUsForTests: Int64;
+begin
+  Result := SchedulerUtcNowUs;
+end;
+{$ENDIF}
 
 function CronPassKey(const aWallUs: Int64): Int64;
 begin
@@ -1877,6 +1943,18 @@ begin
   end;
 end;
 
+function TCronSharedState.UtcNowUs: Int64;
+var
+  lOwner: TmaxCron;
+begin
+  if not TryAcquireOwner(lOwner) then Exit(CronPreciseUtcNowUs);
+  try
+    Result := lOwner.SchedulerUtcNowUs;
+  finally
+    ReleaseOwner;
+  end;
+end;
+
 procedure TCronSharedState.RecordWallPass(const aNowUs: TCronInstantUs);
 begin
   fLock.Acquire;
@@ -2257,6 +2335,9 @@ begin
   fGlobalDispatchLock := TCriticalSection.Create;
   fItemsLock := TCriticalSection.Create;
   fDefaultsLock := TCriticalSection.Create;
+  {$IFDEF MAXCRON_TESTS}
+  fWallMapHighUs := Low(Int64);
+  {$ENDIF}
   fPendingFree := TList<IMaxCronEvent>.Create;
   fNextId := 0;
   fTickDepth := 0;
@@ -3767,9 +3848,13 @@ begin
   fTimer := CreateCronTickSource(fPreferredTimerResolution);
   fTimer.SetOnTick(TimerTimer);
   fTimer.SetDelayProvider(ComputeNextTickDelayUs);
-  TInterlocked.Exchange(fLastCronPassKey, CronPassKey(SchedulerWallNowUs));
   {$IFNDEF MAXCRON_TESTS}
+  TInterlocked.Exchange(fLastCronPassKey, CronPassKey(SchedulerUtcNowUs));
   fTimer.Start(1000);
+  {$ELSE}
+  // Tests construct a stopped timer before assigning their synthetic time.
+  // StartTimerForTests initializes its UTC pass key when the timer is started.
+  TInterlocked.Exchange(fLastCronPassKey, Low(Int64));
   {$ENDIF}
 end;
 
@@ -4256,31 +4341,32 @@ end;
 
 procedure TmaxCron.DoTick;
 var
-  lWallUs, lKey: Int64;
+  lUtcUs, lWallUs, lKey: Int64;
 begin
   if IsShutdownRequested then
     Exit;
+  lUtcUs := SchedulerUtcNowUs;
   lWallUs := SchedulerWallNowUs;
   DoIntervalTickAt(SchedulerMonoNowUs, lWallUs);
-  lKey := CronPassKey(lWallUs);
+  lKey := CronPassKey(lUtcUs);
   if lKey <> TInterlocked.Read(fLastCronPassKey) then
   begin
     TInterlocked.Exchange(fLastCronPassKey, lKey);
-    DoTickAtUs(lWallUs);
+    DoTickAtUs(lUtcUs);
   end;
 end;
 
 function TmaxCron.ComputeNextTickDelayUs: Int64;
 var
-  lWallUs, lKey, lWakeUs, lDelayUs: Int64;
+  lUtcUs, lKey, lWakeUs, lDelayUs: Int64;
 begin
   if IsShutdownRequested or (TInterlocked.CompareExchange(fTickQueued, 0, 0) <> 0) then
     Exit(High(Int64));
-  lWallUs := SchedulerWallNowUs;
-  lKey := CronPassKey(lWallUs);
+  lUtcUs := SchedulerUtcNowUs;
+  lKey := CronPassKey(lUtcUs);
   if lKey <> TInterlocked.Read(fLastCronPassKey) then
     Exit(0);
-  Result := (lKey + 1) * cCronUsPerSecond + cCronPassOffsetUs - lWallUs;
+  Result := (lKey + 1) * cCronUsPerSecond + cCronPassOffsetUs - lUtcUs;
   if fIntervalQueue.TryPeek(lWakeUs) then
   begin
     lDelayUs := lWakeUs - SchedulerMonoNowUs;
@@ -4366,7 +4452,7 @@ begin
   end;
 end;
 
-procedure TmaxCron.DoTickAtUs(const aNowUs: TCronInstantUs);
+procedure TmaxCron.DoTickAtUs(const aNowUtcUs: TCronInstantUs);
 var
   lElapsedMicroseconds: Int64;
   lElapsedTicks: Int64;
@@ -4374,15 +4460,17 @@ var
   lEventCount: Integer;
   lDueCount: Integer;
   lStartTicks: Int64;
-  lWallUs: TCronInstantUs;
+  lWallUs, lNowWallUs: TCronInstantUs;
 begin
   if IsShutdownRequested then
     Exit;
 
-  (fSharedState as ICronSharedState).RecordWallPass(aNowUs);
+  // C2 preserves the old decision code. C3 removes this wall bridge.
+  lNowWallUs := UtcUsToWallUs(aNowUtcUs);
+  (fSharedState as ICronSharedState).RecordWallPass(lNowWallUs);
   lDueCount := 0;
   lEventCount := 0;
-  lWallUs := SchedulerWallNowUs;
+  lWallUs := SchedulerUtcNowUs;
 
   if fSchedulerEngine = TSchedulerEngine.seAuto then
   begin
@@ -4406,22 +4494,22 @@ begin
 
   case fSchedulerEngine of
     TSchedulerEngine.seHeap:
-      DoTickAtHeap(aNowUs, lDueCount);
+      DoTickAtHeap(lNowWallUs, lDueCount);
     TSchedulerEngine.seShadow:
       begin
-        ValidateShadowParity(aNowUs);
-        DoTickAtHeap(aNowUs, lDueCount);
+        ValidateShadowParity(lNowWallUs);
+        DoTickAtHeap(lNowWallUs, lDueCount);
         lEngineUsed := TSchedulerEngine.seHeap;
       end;
     TSchedulerEngine.seAuto:
       case lEngineUsed of
         TSchedulerEngine.seHeap:
-          DoTickAtHeap(aNowUs, lDueCount);
+          DoTickAtHeap(lNowWallUs, lDueCount);
       else
-        DoTickAtScan(aNowUs, lDueCount);
+        DoTickAtScan(lNowWallUs, lDueCount);
       end;
   else
-    DoTickAtScan(aNowUs, lDueCount);
+    DoTickAtScan(lNowWallUs, lDueCount);
   end;
 
   lElapsedTicks := TStopwatch.GetTimeStamp - lStartTicks;
@@ -4432,7 +4520,7 @@ begin
   else
     lElapsedMicroseconds := 0;
 
-  UpdateWatchdogAfterTick(aNowUs, lWallUs, lElapsedMicroseconds);
+  UpdateWatchdogAfterTick(aNowUtcUs, lWallUs, lElapsedMicroseconds);
 
   if fSchedulerEngine = TSchedulerEngine.seAuto then
     EvaluateAutoController(lEngineUsed, lEventCount, lDueCount, lElapsedMicroseconds);
@@ -4651,7 +4739,13 @@ end;
 procedure TmaxCron.TickAtUs(const aNowUs: TCronInstantUs);
 begin
   DoIntervalTickAt(SchedulerMonoNowUs, aNowUs);
-  DoTickAtUs(aNowUs);
+  DoTickAtUs(WallUsToUtcUsForTests(aNowUs));
+end;
+
+procedure TmaxCron.TickAtUtcUs(const aUtcUs: TCronInstantUs);
+begin
+  DoIntervalTickAt(SchedulerMonoNowUs, UtcUsToWallUs(aUtcUs));
+  DoTickAtUs(aUtcUs);
 end;
 
 procedure TmaxCron.TickAt(const aNow: TDateTime);
@@ -4663,7 +4757,7 @@ procedure TmaxCron.StartTimerForTests(const aIntervalMs: Cardinal);
 begin
   if fTimer <> nil then
   begin
-    TInterlocked.Exchange(fLastCronPassKey, CronPassKey(SchedulerWallNowUs));
+    TInterlocked.Exchange(fLastCronPassKey, CronPassKey(SchedulerUtcNowUs));
     fTimer.Start(aIntervalMs);
   end;
 end;

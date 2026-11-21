@@ -63,9 +63,17 @@ type
     function IsInvalidTime(const aLocal: TDateTime): Boolean;
   end;
 
-// Re-reads the RTL system zone on every call, including its exception behavior.
+type
+  ICronTimeZoneRules = interface
+    ['{386A2461-06EF-4CB5-BF7C-1D4C082B39D1}']
+    function GetRules: ICronZoneRules;
+  end;
+
+// Re-reads the system zone on every call, including its exception behavior.
 function CronSystemTimeZone: ICronTimeZone;
+function CronSystemZoneRules: ICronZoneRules;
 {$IFDEF MAXCRON_TESTS}
+function CreateCronProbeZoneForTests(const aZone: ICronTimeZone): ICronZoneRules;
 // Set before creating a scheduler; nil restores the RTL zone. Tests run serially.
 procedure SetCronSystemTimeZoneForTests(const aZone: ICronTimeZone);
 {$ENDIF}
@@ -135,9 +143,9 @@ uses
   {$IFDEF FPC}
   // Windows before SyncObjs to retain the critical-section class.
   {$IFDEF MSWINDOWS} Windows, {$ENDIF}
-  DateUtils, Generics.Collections, SyncObjs,
+  DateUtils, Generics.Collections, Math, SyncObjs,
   {$ELSE}
-  System.DateUtils, System.Generics.Collections, System.SyncObjs,
+  System.DateUtils, System.Generics.Collections, System.Math, System.SyncObjs,
   {$IFDEF MSWINDOWS} Winapi.Windows, {$ENDIF}
   {$ENDIF}
   maxCron.Internal.Text, maxCron.Internal.TZif, maxCron.Plan;
@@ -157,6 +165,20 @@ type
     function UtcToLocalMs(const aUtcMs: Int64): Int64;
     function MapLocal(const aLocalMs: Int64): TCronLocalMapping;
   end;
+  // ICronTimeZone-only adapters must have offset changes at least 15 minutes apart.
+  TCronTimeZoneProbeSource = class(TInterfacedObject, ICronZoneRuleSource)
+  private
+    fZone: ICronTimeZone;
+    fLock: TCriticalSection;
+    fCached: TCronZonePeriod;
+    fHasCached: Boolean;
+    function OffsetAt(const aUtcMs: Int64): Int64;
+    function FindBoundary(const aLeft, aRight, aOffset: Int64; const aBackwards: Boolean): Int64;
+  public
+    constructor Create(const aZone: ICronTimeZone);
+    destructor Destroy; override;
+    function GetRawPeriod(const aUtcMs: Int64): TCronZonePeriod;
+  end;
   TCronRtlLocalTimeZone = class(TInterfacedObject, ICronTimeZone)
   public
     function ToUniversalTime(const aLocal: TDateTime; const aForceDaylight: Boolean): TDateTime;
@@ -167,6 +189,8 @@ type
 
 var
   gSystemTimeZone: ICronTimeZone;
+  gProbeTimeZone: ICronTimeZone;
+  gProbeZoneRules: ICronZoneRules;
   gZoneLock: TCriticalSection;
   gZoneCache: TDictionary<string, ICronZoneRules>;
 {$IFDEF MAXCRON_TESTS}
@@ -235,12 +259,13 @@ type
     function OffsetAt(const aUtcMs: Int64): Int64; override;
     function CanCache: Boolean; override;
   end;
-  TCronOsLocalTimeZone = class(TInterfacedObject, ICronTimeZone)
+  TCronOsLocalTimeZone = class(TInterfacedObject, ICronTimeZone, ICronTimeZoneRules)
   private
     fInfo: TCronWindowsDynamicInfo;
     fZone: ICronZoneRules;
     function CurrentZone: ICronZoneRules;
   public
+    function GetRules: ICronZoneRules;
     function ToUniversalTime(const aLocal: TDateTime; const aForceDaylight: Boolean): TDateTime;
     function ToLocalTime(const aUtc: TDateTime): TDateTime;
     function IsAmbiguousTime(const aLocal: TDateTime): Boolean;
@@ -748,6 +773,11 @@ begin
   end;
 end;
 
+function TCronOsLocalTimeZone.GetRules: ICronZoneRules;
+begin
+  Result := CurrentZone;
+end;
+
 function TCronOsLocalTimeZone.ToUniversalTime(const aLocal: TDateTime;
   const aForceDaylight: Boolean): TDateTime;
 var
@@ -833,6 +863,117 @@ begin
     Exit(gTestTimeZone);
 {$ENDIF}
   Result := gSystemTimeZone;
+end;
+
+function CronSystemZoneRules: ICronZoneRules;
+var
+  lZone: ICronTimeZone;
+  lProvider: ICronTimeZoneRules;
+begin
+  lZone := CronSystemTimeZone;
+  if Supports(lZone, ICronTimeZoneRules, lProvider) then Exit(lProvider.GetRules);
+  gZoneLock.Acquire;
+  try
+    if (gProbeZoneRules = nil) or (gProbeTimeZone <> lZone) then
+    begin
+      gProbeTimeZone := lZone;
+      gProbeZoneRules := CreateCronZone('LOCAL', TCronTimeZoneProbeSource.Create(lZone));
+    end;
+    Result := gProbeZoneRules;
+  finally
+    gZoneLock.Release;
+  end;
+end;
+
+{$IFDEF MAXCRON_TESTS}
+function CreateCronProbeZoneForTests(const aZone: ICronTimeZone): ICronZoneRules;
+begin
+  Result := CreateCronZone('LOCAL probe', TCronTimeZoneProbeSource.Create(aZone));
+end;
+{$ENDIF}
+
+constructor TCronTimeZoneProbeSource.Create(const aZone: ICronTimeZone);
+begin
+  inherited Create;
+  if aZone = nil then raise Exception.Create('System zone is required');
+  fZone := aZone;
+  fLock := TCriticalSection.Create;
+end;
+
+destructor TCronTimeZoneProbeSource.Destroy;
+begin
+  fLock.Free;
+  inherited;
+end;
+
+function TCronTimeZoneProbeSource.OffsetAt(const aUtcMs: Int64): Int64;
+begin
+  Result := CronDateTimeToMs(fZone.ToLocalTime(CronMsToDateTime(aUtcMs))) - aUtcMs;
+end;
+
+function TCronTimeZoneProbeSource.FindBoundary(const aLeft, aRight, aOffset: Int64;
+  const aBackwards: Boolean): Int64;
+var
+  lo, hi, m: Int64;
+begin
+  lo := aLeft;
+  hi := aRight;
+  while hi - lo > cCronMsPerSecond do
+  begin
+    m := lo + ((hi - lo) div (2 * cCronMsPerSecond)) * cCronMsPerSecond;
+    if (OffsetAt(m) = aOffset) = aBackwards then hi := m
+    else lo := m;
+  end;
+  Result := hi;
+end;
+
+function TCronTimeZoneProbeSource.GetRawPeriod(const aUtcMs: Int64): TCronZonePeriod;
+const
+  cProbeStepMs = Int64(15) * 60000;
+var
+  lUtcMs, lCursor, lNext, lLimit: Int64;
+begin
+  fLock.Acquire;
+  try
+    if fHasCached and (aUtcMs >= fCached.StartUtcMs) and (aUtcMs < fCached.EndUtcMs) then Exit(fCached);
+  finally
+    fLock.Release;
+  end;
+  lUtcMs := CronFloorDiv(aUtcMs, cCronMsPerSecond) * cCronMsPerSecond;
+  Result.OffsetMs := OffsetAt(lUtcMs);
+  lCursor := lUtcMs;
+  lLimit := lUtcMs - cCronZoneWindowMs;
+  Result.StartUtcMs := lLimit;
+  while lCursor > lLimit do
+  begin
+    lNext := Max(lLimit, lCursor - cProbeStepMs);
+    if OffsetAt(lNext) <> Result.OffsetMs then
+    begin
+      Result.StartUtcMs := FindBoundary(lNext, lCursor, Result.OffsetMs, True);
+      Break;
+    end;
+    lCursor := lNext;
+  end;
+  lCursor := lUtcMs;
+  lLimit := lUtcMs + cCronZoneWindowMs;
+  Result.EndUtcMs := lLimit;
+  while lCursor < lLimit do
+  begin
+    lNext := Min(lLimit, lCursor + cProbeStepMs);
+    if OffsetAt(lNext) <> Result.OffsetMs then
+    begin
+      Result.EndUtcMs := FindBoundary(lCursor, lNext, Result.OffsetMs, False);
+      Break;
+    end;
+    lCursor := lNext;
+  end;
+  fLock.Acquire;
+  try
+    fCached := Result;
+    fHasCached := True;
+  finally
+    fLock.Release;
+  end;
 end;
 
 function TCronRtlLocalTimeZone.ToUniversalTime(const aLocal: TDateTime;
@@ -1399,7 +1540,7 @@ end;
 
 initialization
   {$IFDEF MSWINDOWS} InitializeWindowsZone; {$ENDIF}
-  {$IFDEF FPC}
+  {$IFDEF MSWINDOWS}
   gSystemTimeZone := TCronOsLocalTimeZone.Create;
   {$ELSE}
   gSystemTimeZone := TCronRtlLocalTimeZone.Create;
@@ -1414,6 +1555,8 @@ finalization
 {$IFDEF MAXCRON_TESTS}
   gTestZones.Free;
 {$ENDIF}
+  gProbeZoneRules := nil;
+  gProbeTimeZone := nil;
   gZoneCache.Free;
   gZoneLock.Free;
   {$IFDEF MSWINDOWS} if gZoneAdvapi <> 0 then FreeLibrary(gZoneAdvapi); {$ENDIF}

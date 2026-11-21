@@ -24,9 +24,22 @@ type
     constructor Create(const aInitial: Int64; const aChanges: array of TZoneChange);
     function GetRawPeriod(const aUtcMs: Int64): TCronZonePeriod;
   end;
-  TZoneAsSystemZone = class(TInterfacedObject, ICronTimeZone)
+  TZoneAsSystemZone = class(TInterfacedObject, ICronTimeZone, ICronTimeZoneRules)
   private
     fZone: ICronZoneRules;
+  public
+    constructor Create(const aZone: ICronZoneRules);
+    function GetRules: ICronZoneRules;
+    function ToUniversalTime(const aLocal: TDateTime; const aForceDaylight: Boolean): TDateTime;
+    function ToLocalTime(const aUtc: TDateTime): TDateTime;
+    function IsAmbiguousTime(const aLocal: TDateTime): Boolean;
+    function IsInvalidTime(const aLocal: TDateTime): Boolean;
+  end;
+
+type
+  TZoneOnlyTimeZone = class(TInterfacedObject, ICronTimeZone)
+  private
+    fZone: ICronTimeZone;
   public
     constructor Create(const aZone: ICronZoneRules);
     function ToUniversalTime(const aLocal: TDateTime; const aForceDaylight: Boolean): TDateTime;
@@ -227,6 +240,37 @@ constructor TZoneAsSystemZone.Create(const aZone: ICronZoneRules);
 begin
   inherited Create;
   fZone := aZone;
+end;
+
+function TZoneAsSystemZone.GetRules: ICronZoneRules;
+begin
+  Result := fZone;
+end;
+
+constructor TZoneOnlyTimeZone.Create(const aZone: ICronZoneRules);
+begin
+  inherited Create;
+  fZone := TZoneAsSystemZone.Create(aZone);
+end;
+
+function TZoneOnlyTimeZone.ToUniversalTime(const aLocal: TDateTime; const aForceDaylight: Boolean): TDateTime;
+begin
+  Result := fZone.ToUniversalTime(aLocal, aForceDaylight);
+end;
+
+function TZoneOnlyTimeZone.ToLocalTime(const aUtc: TDateTime): TDateTime;
+begin
+  Result := fZone.ToLocalTime(aUtc);
+end;
+
+function TZoneOnlyTimeZone.IsAmbiguousTime(const aLocal: TDateTime): Boolean;
+begin
+  Result := fZone.IsAmbiguousTime(aLocal);
+end;
+
+function TZoneOnlyTimeZone.IsInvalidTime(const aLocal: TDateTime): Boolean;
+begin
+  Result := fZone.IsInvalidTime(aLocal);
 end;
 
 function TZoneAsSystemZone.ToUniversalTime(const aLocal: TDateTime;

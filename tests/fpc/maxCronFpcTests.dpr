@@ -20,6 +20,7 @@ uses
   TestHashJitter in '..\unit\TestHashJitter.pas',
   TestIntervalPlan in '..\unit\TestIntervalPlan.pas',
   TestLocalZoneOs in '..\unit\TestLocalZoneOs.pas',
+  TestLocalOverlap in '..\unit\TestLocalOverlap.pas',
   TestMisfireOnTime in '..\unit\TestMisfireOnTime.pas',
   TestNamedTimeZones in '..\unit\TestNamedTimeZones.pas',
   TestScheduleNext in '..\unit\TestScheduleNext.pas',

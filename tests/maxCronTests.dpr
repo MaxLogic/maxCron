@@ -22,6 +22,7 @@ uses
   maxCron in '..\maxCron.pas',
   TestCronTextParity in 'unit\TestCronTextParity.pas',
   TestLocalZoneOs in 'unit\TestLocalZoneOs.pas',
+  TestLocalOverlap in 'unit\TestLocalOverlap.pas',
   TestZoneFakes in 'unit\TestZoneFakes.pas',
   TestTimeZoneRules in 'unit\TestTimeZoneRules.pas',
   TestTimeZoneWindows in 'unit\TestTimeZoneWindows.pas',
@@ -67,6 +68,7 @@ begin
     TDUnitX.CheckCommandLine;
     TDUnitX.RegisterTestFixture(TTestCronTextParity);
     TDUnitX.RegisterTestFixture(TTestLocalZoneOs);
+    TDUnitX.RegisterTestFixture(TTestLocalOverlap);
     TDUnitX.RegisterTestFixture(TTestTimeZoneRules);
     TDUnitX.RegisterTestFixture(TTestTimeZoneWindows);
     TDUnitX.RegisterTestFixture(TTestWindowsZoneOracle);

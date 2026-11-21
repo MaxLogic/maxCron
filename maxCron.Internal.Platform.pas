@@ -36,6 +36,7 @@ type
 function CreateCronTickSource(const aPreferred: TCronWaitResolution): ICronTickSource;
 function CronMonotonicNowUs: Int64;
 function CronPreciseLocalNowUs: Int64;
+function CronPreciseUtcNowUs: Int64;
 function CronMaxAsyncCall(const aProc: TThreadProcedure; const aTaskName: string): IInterface;
 procedure CronDebugOutput(const aText: string);
 function CronGetEnvironmentVariable(const aName: string): string;
@@ -52,6 +53,7 @@ uses
   {$IFDEF MSWINDOWS} Winapi.MMSystem, Winapi.Windows, {$ENDIF}
   maxAsync,
   {$ENDIF}
+  {$IFNDEF MSWINDOWS} Posix.Time, {$ENDIF}
   maxCron.Internal.Text;
 
 {$IFDEF FPC}
@@ -122,6 +124,25 @@ begin
   lFrequency := TStopwatch.Frequency;
   Result := (lTicks div lFrequency) * 1000000 +
     ((lTicks mod lFrequency) * 1000000) div lFrequency;
+end;
+
+function CronPreciseUtcNowUs: Int64;
+{$IFDEF MSWINDOWS}
+var
+  lUtc: TFileTime;
+  lValue: UInt64;
+begin
+  if Assigned(gCronPreciseTime) then gCronPreciseTime(lUtc)
+  else GetSystemTimeAsFileTime(lUtc);
+  lValue := (UInt64(lUtc.dwHighDateTime) shl 32) or lUtc.dwLowDateTime;
+  Result := Int64(lValue div 10) - Int64(109205) * 86400000000;
+{$ELSE}
+var
+  lTime: timespec;
+begin
+  if clock_gettime(CLOCK_REALTIME, lTime) <> 0 then RaiseLastOSError;
+  Result := Int64(lTime.tv_sec) * 1000000 + lTime.tv_nsec div 1000 + Int64(25569) * 86400000000;
+{$ENDIF}
 end;
 
 function CronPreciseLocalNowUs: Int64;
