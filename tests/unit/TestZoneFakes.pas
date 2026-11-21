@@ -166,6 +166,12 @@ begin
         Result[0].UtcMs := ZoneMs(2026, 1, 1, 1); Result[0].OffsetMs := 3600000;
         Result[1].UtcMs := ZoneMs(2026, 1, 1, 2); Result[1].OffsetMs := 0;
       end;
+    6:
+      begin
+        aInitial := 0;
+        Result[0].UtcMs := ZoneMs(2026, 3, 29, 1); Result[0].OffsetMs := 7200000;
+        Result[1].UtcMs := ZoneMs(2026, 10, 25, 1); Result[1].OffsetMs := 0;
+      end;
   else raise Exception.Create('Unknown fake zone index');
   end;
 end;

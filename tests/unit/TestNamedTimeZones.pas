@@ -23,6 +23,12 @@ type
     procedure CheckNamedSequence(const aName, aPlan: string; const aBase: Int64;
       const aExpected: array of Int64; const aSpring, aFall: Integer);
   public
+    [Test] procedure FastPathAvoidsRangeWalk;
+    [Test] procedure FastPathMatchesWalk;
+    [TestCase('2047 exclusions', '2047')]
+    [TestCase('2048 exclusions', '2048')]
+    [TestCase('never matching', '0')]
+    procedure FastPathPreservesBudget(const aExcluded: Integer);
     [Test] procedure NamedSetterAccepts;
     [Test] procedure GmtFixedOffsetIndependentOfDataRoot;
     [Test] procedure TrollRegression;
@@ -55,6 +61,13 @@ const
     'Australia/Lord_Howe', 'America/Sao_Paulo', 'Synthetic/Three');
 
 type
+  TCountingZoneSource = class(TInterfacedObject, ICronZoneRuleSource)
+  private
+    fSource: ICronZoneRuleSource;
+  public
+    constructor Create(const aSource: ICronZoneRuleSource);
+    function GetRawPeriod(const aUtcMs: Int64): TCronZonePeriod;
+  end;
   TNamedStore = class(TInterfacedObject, IMaxCronScheduleStore)
   private
     fStates: TArray<TMaxCronPersistedEvent>;
@@ -62,6 +75,184 @@ type
     procedure Save(const aEvents: TArray<TMaxCronPersistedEvent>);
     function TryLoad(out aEvents: TArray<TMaxCronPersistedEvent>): Boolean;
   end;
+
+var
+  gFastPathPeriodCalls: Integer;
+
+constructor TCountingZoneSource.Create(const aSource: ICronZoneRuleSource);
+begin
+  inherited Create;
+  fSource := aSource;
+end;
+
+function TCountingZoneSource.GetRawPeriod(const aUtcMs: Int64): TCronZonePeriod;
+begin
+  Inc(gFastPathPeriodCalls);
+  Result := fSource.GetRawPeriod(aUtcMs);
+end;
+
+procedure TTestNamedTimeZones.FastPathAvoidsRangeWalk;
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lUtc, lBase: Int64;
+  lCalls, lAttempts, lWalkPeriodCalls: Integer;
+begin
+  SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('UTC', TCronFixedZoneSource.Create(0))));
+  RegisterCronZoneForTests('Test/Counted', TCountingZoneSource.Create(FakeZoneSource(0)));
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('fast');
+    lEvent.EventPlan := '* * * * * * *';
+    lEvent.TimeZoneId := 'Test/Counted';
+    lBase := ZoneMs(2026, 7, 1, 0);
+    SetMaxCronNamedFastPathForTests(False);
+    gFastPathPeriodCalls := 0;
+    Assert.AreEqual(0, FindMaxCronNamedInstantForTests(lEvent, lBase, lUtc));
+    Assert.AreEqual(lBase + 1000, lUtc);
+    lWalkPeriodCalls := gFastPathPeriodCalls;
+    SetMaxCronNamedFastPathForTests(True);
+    gFastPathPeriodCalls := 0;
+    Assert.AreEqual(0, FindMaxCronNamedInstantForTests(lEvent, lBase, lUtc));
+    Assert.AreEqual(lBase + 1000, lUtc);
+    Assert.AreEqual(1, gFastPathPeriodCalls, 'safe interior search needs only its containing period');
+    Assert.IsTrue(lWalkPeriodCalls > gFastPathPeriodCalls, 'range walk must make additional period queries');
+    GetMaxCronNamedSearchForTests(lEvent, lCalls, lAttempts);
+    Assert.AreEqual(1, lCalls);
+    Assert.AreEqual(1, lAttempts);
+  finally
+    lEvent := nil;
+    g.Clear;
+    SetMaxCronNamedFastPathForTests(True);
+    ClearCronZonesForTests;
+    SetCronSystemTimeZoneForTests(nil);
+  end;
+end;
+
+procedure TTestNamedTimeZones.FastPathPreservesBudget(const aExcluded: Integer);
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lCsv: string;
+  lBase, lWalkUtc, lFastUtc: Int64;
+  i, lWalkResult, lFastResult: Integer;
+begin
+  SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('UTC', TCronFixedZoneSource.Create(0))));
+  RegisterCronZoneForTests('Test/Budget', FakeZoneSource(0));
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('budget');
+    lEvent.EventPlan := '0 0 * * *';
+    if aExcluded = 0 then lEvent.EventPlan := '0 0 31 2 *';
+    lEvent.TimeZoneId := 'Test/Budget';
+    lBase := ZoneMs(2026, 7, 1, 0);
+    lCsv := '';
+    for i := 1 to aExcluded do
+    begin
+      if lCsv <> '' then lCsv := lCsv + ',';
+      lCsv := lCsv + FormatDateTime('yyyy-mm-dd', CronMsToDateTime(lBase + Int64(i) * cCronMsPerDay));
+    end;
+    lEvent.ExcludedDatesCsv := lCsv;
+    SetMaxCronNamedFastPathForTests(False);
+    lWalkResult := FindMaxCronNamedInstantForTests(lEvent, lBase, lWalkUtc);
+    SetMaxCronNamedFastPathForTests(True);
+    lFastResult := FindMaxCronNamedInstantForTests(lEvent, lBase, lFastUtc);
+    Assert.AreEqual(lWalkResult, lFastResult, 'fallback preserves the original exclusion budget');
+    if lWalkResult = 0 then Assert.AreEqual(lWalkUtc, lFastUtc, 'fallback instant');
+    if aExcluded = 0 then Assert.AreEqual(1, lWalkResult, 'impossible February date has no occurrence')
+    else Assert.AreEqual(0, lWalkResult, 'excluded-date corpus has a later occurrence');
+  finally
+    lEvent := nil;
+    g.Clear;
+    SetMaxCronNamedFastPathForTests(True);
+    ClearCronZonesForTests;
+    SetCronSystemTimeZoneForTests(nil);
+  end;
+end;
+
+procedure TTestNamedTimeZones.FastPathMatchesWalk;
+const
+  cPlans: array[0..6] of string = ('* * * * * * *', '*/15 * * * *', '0 * * * *',
+    '30 * * * *', '59 * * * * * 59', '0 0 * * *', '0 0 1 1 * 2030');
+var
+  g: TGarbos;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lChanges: TArray<TZoneChange>;
+  lChange: TZoneChange;
+  lInitial, lBase, lWalkUtc, lFastUtc, lSeed: Int64;
+  lZone, lSpring, lFall, lPattern, lSecond, lStep, i, lSide: Integer;
+  lChecks: Int64;
+  lWalkResult, lFastResult: Integer;
+begin
+  SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('UTC', TCronFixedZoneSource.Create(0))));
+  try
+    GC(lCron, TmaxCron.Create(ctPortable), g);
+    lEvent := lCron.Add('equivalence');
+    lStep := 600;
+    if {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_FULL_ZONE_PROPERTIES') = '1' then lStep := 1;
+    lSeed := 20261118;
+    lChecks := 0;
+    for lZone := 0 to 6 do
+    begin
+      RegisterCronZoneForTests('Test/FastPath', FakeZoneSource(lZone));
+      lEvent.TimeZoneId := 'Test/FastPath';
+      lChanges := FakeZoneChanges(lZone, lInitial);
+      for lSpring := 0 to 1 do
+        for lFall := 0 to 3 do
+          for lPattern := Low(cPlans) to High(cPlans) do
+          begin
+            lEvent.EventPlan := cPlans[lPattern];
+            lEvent.DstSpringPolicy := TmaxCronDstSpringPolicy(lSpring);
+            lEvent.DstFallPolicy := TmaxCronDstFallPolicy(lFall);
+            for lChange in lChanges do
+            begin
+              lSecond := -10800;
+              while lSecond <= 10800 + 128 do
+              begin
+                if lSecond <= 10800 then lBase := lChange.UtcMs + Int64(lSecond) * 1000
+                else begin
+                  lSeed := (lSeed * 48271) mod 2147483647;
+                  lBase := lChange.UtcMs + (lSeed mod (120 * 86400) - 60 * 86400) * 1000;
+                end;
+                SetMaxCronNamedFastPathForTests(False);
+                lWalkResult := FindMaxCronNamedInstantForTests(lEvent, lBase, lWalkUtc);
+                SetMaxCronNamedFastPathForTests(True);
+                lFastResult := FindMaxCronNamedInstantForTests(lEvent, lBase, lFastUtc);
+                Assert.AreEqual(lWalkResult, lFastResult, 'fast/walk result');
+                if lFastResult = 0 then Assert.AreEqual(lWalkUtc, lFastUtc, 'fast/walk instant');
+                Inc(lChecks);
+                if lSecond < 10800 then Inc(lSecond, lStep)
+                else Inc(lSecond);
+              end;
+              // Exact +/-52 h guards, including their immediate second neighbours.
+              for lSide := 0 to 1 do
+                for i := -1 to 1 do
+                begin
+                  lBase := lChange.UtcMs + (2 * lSide - 1) * 2 * cCronZoneMaxAbsOffsetMs + Int64(i) * 1000;
+                  SetMaxCronNamedFastPathForTests(False);
+                  lWalkResult := FindMaxCronNamedInstantForTests(lEvent, lBase, lWalkUtc);
+                  SetMaxCronNamedFastPathForTests(True);
+                  lFastResult := FindMaxCronNamedInstantForTests(lEvent, lBase, lFastUtc);
+                  Assert.AreEqual(lWalkResult, lFastResult, 'fast/walk guard result');
+                  if lFastResult = 0 then Assert.AreEqual(lWalkUtc, lFastUtc, 'fast/walk guard instant');
+                  Inc(lChecks);
+                end;
+            end;
+          end;
+      ClearCronZonesForTests;
+    end;
+    System.WriteLn('Fast path/walk comparisons: ', lChecks, ', seed=20261118, step=', lStep, ' seconds');
+  finally
+    lEvent := nil;
+    g.Clear;
+    SetMaxCronNamedFastPathForTests(True);
+    ClearCronZonesForTests;
+    SetCronSystemTimeZoneForTests(nil);
+  end;
+end;
 
 procedure TNamedStore.Save(const aEvents: TArray<TMaxCronPersistedEvent>);
 begin

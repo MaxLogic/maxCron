@@ -583,6 +583,10 @@ procedure SetMaxCronBeforeDispatchHook(const aHook: TmaxCronBeforeDispatchHook);
 function ExchangeMaxCronThreadDispatchPoolForTests(const aPool: TThreadPool): TThreadPool;
 {$ENDIF}
 procedure GetMaxCronNamedSearchForTests(const aEvent: IMaxCronEvent; out aCalls, aAttempts: Integer);
+procedure SetMaxCronNamedFastPathForTests(const aEnabled: Boolean);
+function FindMaxCronNamedInstantForTests(const aEvent: IMaxCronEvent; const aBaseUtcMs: Int64;
+  out aUtcMs: Int64): Integer;
+
 
 {$ENDIF}
 
@@ -656,6 +660,7 @@ end;
 var
   gMaxCronMonotonicClockHook: TmaxCronClockHook = nil;
   gMaxCronWallClockHook: TmaxCronClockHook = nil;
+  gMaxCronNamedFastPathForTests: Boolean = True;
   gMaxCronAsyncCallHook: TmaxCronAsyncCallHook = nil;
   gMaxCronBeforeQueuedAcquireHook: TmaxCronBeforeQueuedAcquireHook = nil;
   gMaxCronBeforeDispatchHook: TmaxCronBeforeDispatchHook = nil;
@@ -839,7 +844,7 @@ type
     fNamedNextUtcMs, fNamedConsumedUtcMs: Int64;
     fNamedHoldForRollback: Boolean;
     fNamedPlanLower, fNamedPlanUpper: TDateTime;
-    fNamedSearchAttempts, fNamedSearchCalls: Integer;
+    fNamedSearchAttempts, fNamedSearchCalls, fNamedFastSearchAttempts: Integer;
     fUtcToLocalCacheOffsetMs: Int64;
     fTimeZoneId: string;
     fTimeZoneKind: TCronTimeZoneKind;
@@ -963,6 +968,8 @@ type
     function IsTimeInBlackout(const aEventLocalDateTime: TDateTime): Boolean;
     function TryGetExclusionAdvance(const aEventNextMs: Int64; out aAdvanceSecond: Int64): Boolean;
     function NamedFirstOccurrence(const aFromLocalMs: Int64; out aLocalMs: Int64): TCronInstantSearchResult;
+    function SearchNextZoneInstant(const aZone: ICronZoneRules; const aBaseUtcMs: Int64;
+      const aFall: TCronFallChoice; out aUtcMs: Int64; out aCalls, aBudgetCalls: Integer): TCronInstantSearchResult;
     function FindNextNamedInstant(const aBaseUtcMs: Int64; const aPlanLower, aPlanUpper: TDateTime;
       out aUtcMs: Int64): TFindNextScheduleResult;
     function SystemLocalToUtcMsEarliest(const aSystemLocal: TDateTime): Int64;
@@ -4606,6 +4613,27 @@ begin
 end;
 
 {$IFDEF MAXCRON_TESTS}
+procedure SetMaxCronNamedFastPathForTests(const aEnabled: Boolean);
+begin
+  gMaxCronNamedFastPathForTests := aEnabled;
+end;
+
+function FindMaxCronNamedInstantForTests(const aEvent: IMaxCronEvent; const aBaseUtcMs: Int64;
+  out aUtcMs: Int64): Integer;
+var
+  lEvent: TmaxCronEvent;
+  lLower, lUpper: TDateTime;
+begin
+  if not TryGetCronEvent(aEvent, lEvent) then raise Exception.Create('Expected a maxCron event');
+  lEvent.fLock.Acquire;
+  try
+    lEvent.GetPlanValidityBounds(CronMsToDateTime(aBaseUtcMs), lLower, lUpper);
+    Result := Ord(lEvent.FindNextNamedInstant(aBaseUtcMs, lLower, lUpper, aUtcMs));
+  finally
+    lEvent.fLock.Release;
+  end;
+end;
+
 procedure GetMaxCronNamedSearchForTests(const aEvent: IMaxCronEvent; out aCalls, aAttempts: Integer);
 var
   lEvent: TmaxCronEvent;
@@ -4614,7 +4642,7 @@ begin
   lEvent.fLock.Acquire;
   try
     aCalls := lEvent.fNamedSearchCalls;
-    aAttempts := lEvent.fNamedSearchAttempts;
+    aAttempts := lEvent.fNamedSearchAttempts + lEvent.fNamedFastSearchAttempts;
   finally
     lEvent.fLock.Release;
   end;
@@ -5538,6 +5566,57 @@ begin
   end;
 end;
 
+function TmaxCronEvent.SearchNextZoneInstant(const aZone: ICronZoneRules; const aBaseUtcMs: Int64;
+  const aFall: TCronFallChoice; out aUtcMs: Int64; out aCalls, aBudgetCalls: Integer): TCronInstantSearchResult;
+var
+  lPeriod: TCronZonePeriod;
+  lStartUtcMs, lOccurrenceMs, lCandidateMs: Int64;
+  lWalkCalls, lSavedAttempts: Integer;
+  lFastResult: TCronInstantSearchResult;
+begin
+  aCalls := 0;
+  aBudgetCalls := 0;
+  {$IFDEF MAXCRON_TESTS}
+  if gMaxCronNamedFastPathForTests then
+  {$ENDIF}
+  begin
+    lStartUtcMs := aBaseUtcMs + cCronMsPerSecond;
+    lPeriod := aZone.GetPeriod(lStartUtcMs);
+    if lPeriod.StartUtcMs + 2 * cCronZoneMaxAbsOffsetMs <= lStartUtcMs then
+    begin
+      Inc(aCalls);
+      // The speculative query owns a separate bounded budget. A failed
+      // shortcut must not consume any of the unchanged walk's attempts.
+      lSavedAttempts := fNamedSearchAttempts;
+      fNamedSearchAttempts := 0;
+      try
+        lFastResult := NamedFirstOccurrence(lStartUtcMs + lPeriod.OffsetMs, lOccurrenceMs);
+        Inc(fNamedFastSearchAttempts, fNamedSearchAttempts);
+      finally
+        fNamedSearchAttempts := lSavedAttempts;
+      end;
+      case lFastResult of
+        cisFound:
+          begin
+            lCandidateMs := lOccurrenceMs - lPeriod.OffsetMs;
+            // The entire possible instance window lies in one constant-offset
+            // period. No overlap role or gap instant can precede this answer.
+            if lCandidateMs + 2 * cCronZoneMaxAbsOffsetMs < lPeriod.EndUtcMs then
+            begin
+              aUtcMs := lCandidateMs;
+              Exit(cisFound);
+            end;
+          end;
+      end;
+    end;
+  end;
+  Result := CronZoneFindNextInstant(aZone, aBaseUtcMs,
+    fDstSpringPolicy = TmaxCronDstSpringPolicy.dspRunAtNextValidTime, aFall, NamedFirstOccurrence,
+    aUtcMs, lWalkCalls);
+  Inc(aCalls, lWalkCalls);
+  aBudgetCalls := lWalkCalls;
+end;
+
 function TmaxCronEvent.FindNextNamedInstant(const aBaseUtcMs: Int64;
   const aPlanLower, aPlanUpper: TDateTime; out aUtcMs: Int64): TFindNextScheduleResult;
 const
@@ -5547,11 +5626,12 @@ const
 var
   lFall: TCronFallChoice;
   lAfterUtcMs, lLastUtcMs: Int64;
-  lCalls, lValidityCandidates: Integer;
+  lCalls, lBudgetCalls, lValidityCandidates: Integer;
 begin
   fNamedPlanLower := aPlanLower;
   fNamedPlanUpper := aPlanUpper;
   fNamedSearchAttempts := 0;
+  fNamedFastSearchAttempts := 0;
   // The test hook retains the last instant search's callback count.
   fNamedSearchCalls := 0;
   lValidityCandidates := 0;
@@ -5569,9 +5649,7 @@ begin
   end;
   while True do
   begin
-    case CronZoneFindNextInstant(fEventZone, lAfterUtcMs,
-      fDstSpringPolicy = TmaxCronDstSpringPolicy.dspRunAtNextValidTime, lFall, NamedFirstOccurrence,
-      aUtcMs, lCalls) of
+    case SearchNextZoneInstant(fEventZone, lAfterUtcMs, lFall, aUtcMs, lCalls, lBudgetCalls) of
       cisFound:
         begin
           fNamedSearchCalls := lCalls;
@@ -5586,7 +5664,7 @@ begin
           // Each callback charges one initial lookup plus exclusion advances.
           // Successfully generated but out-of-window instants have their own
           // finite budget; exclusion advances retain the original 4096 limit.
-          Dec(fNamedSearchAttempts, lCalls);
+          Dec(fNamedSearchAttempts, lBudgetCalls);
           lAfterUtcMs := aUtcMs;
         end;
       cisNotFound:
