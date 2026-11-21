@@ -119,9 +119,11 @@ deadline queue, TZif/zone, text, time-boundary and deterministic scheduler tests
 Registration is generated from their DUnitX attributes. Timing, stress,
 invoke-mode, lifecycle, VCL and soak suites remain Delphi tests; the FPC smoke
 checks add/run/fire/shutdown in all four invoke modes. The gate exits 0 only
-after all builds, tests, smokes and required heap checks pass. Exit codes are
-1 for test/heap failure, 2 for tool/output configuration, and 3 for build or
-registration-generation failure.
+after all builds, tests, smokes and required heap checks pass. Its exit codes
+are 1 for test/heap failure, 2 for tool/output configuration, 3 for build/helper
+infrastructure failure, 5 for a roster violation, and 124 for a phase timeout.
+The complete wrapper and native-phase propagation tables are in the testing
+section below.
 
 The registry generator follows nested `IFDEF`/`IFNDEF`/`ELSE`/`ENDIF` branches for
 the fixed FPC Windows x64 test environment and accepts inline fixture attributes.
@@ -405,12 +407,11 @@ Additional benchmark scenarios (stress runner):
   - Scenario: adversarial oscillation pressure (`auto` with budget disabled vs enabled).
   - Expected: budget-enabled run should show lower switch count, fewer rebuilds, and lower candidate work; elapsed time should improve or remain competitive.
 
-Run benchmark scenarios directly:
+Run these scenarios as part of the complete stress roster:
 
 ```cmd
-tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineBenchmark_ScanVsHeap_HighN
-tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineBenchmark_AutoVsScan_SparseHighN
-tests\maxCronStressTests.exe --run:TestHeavyStressMixed.TTestHeavyStressMixed.EngineBenchmark_AutoSwitchBudget_AdversarialChurn
+set MAXCRON_STRESS=1
+tests\maxCronStressTests.exe
 ```
 
 ### Standalone benchmark runner (CSV + Markdown)
@@ -955,6 +956,173 @@ running the gate; otherwise the scripts search `PATH`, then
 explicit override fails immediately. No persistent environment setting is needed.
 For an override exported inside WSL, also export `WSLENV=DAK_EXE/w` so it reaches Windows. Build output paths stay as configured in the projects. Release is the default;
 `MAXCRON_DEBUG_SAFETY=1` selects Debug.
+Default gates keep all curated UTC/DST regressions and the repeated-hour restore
+reviewer cases, plus deterministic matrix samples (seed `20261118`).
+
+Run `./build-and-run-tests-long.sh` (or `build-and-run-tests-long.bat`) whenever
+time-zone, search, restore or dispatch code changes, and before qualifying a
+release that includes such changes. It rebuilds the same unit runner with
+`MAXCRON_LONG_TESTS`: full fake/TZif host matrices on scan, heap and shadow,
+all 1,584 deferred validity rows, full restore matrices, every-second fast/walk
+equivalence and minute-by-minute probe/mapping/consumer walks. No test is skipped.
+Default Windows RTL checks cover every host transition in 2000-2040 at
+T-1 s, T and T+1 s, gap edges, both repeated-hour instances and one UTC
+sample per day (seed `20261118`). The full probe-over-RTL comparison for
+2000-2040 runs unchanged in long qualification.
+
+Use `./build-and-run-tests-long.sh fpc` for the equivalent FPC qualification,
+and set `MAXCRON_LONG_PLATFORM=Win64` for Delphi Win64 (Win32 is the default).
+`MAXCRON_LONG_OUT` selects the Delphi long build directory; the default is
+`F:\dev-artifacts\builds\maxCron-main\long` when that drive is available,
+otherwise `%TEMP%\maxCron-long`. Long and default binaries use separate outputs.
+
+Every test runner checks complete executed identities, including case names,
+against its checked-in manifest. `tests/rosters/` contains separate Delphi
+unit, stress, VCL and long rosters, FPC default and long rosters, an explicit
+FPC-only list, and both FPC smoke rosters. `tests/LongTests.txt` is the
+compatibility copy of the Delphi long roster. Missing, renamed, extra,
+duplicated or filtered tests fail. Source hashes also reject stale test sources,
+including `TestFpcShims.pas`, included `.inc` vectors, and every checked-in
+corpus or fixture under `tests/data`. The dependency set is conservative across
+the runners, so changing any of those inputs requires an explicit refresh:
+
+```powershell
+./tests/Export-TestRosters.ps1 -Compiler '<Delphi bin>/dcc64.exe' `
+  -DUnitXSource '<DUnitX>/Source' -OutputRoot '<external discovery output>'
+```
+
+The exporter uses native DUnitX discovery, native FPC registration and the real
+smoke checks; gates never regenerate manifests. Review identity changes before
+accepting them. The FPC gate also checks the union of its Delphi shared list and
+explicit FPC-only list. Combined gate manifests also pin every child run, with
+entry prefixes distinguishing the normal and heap smoke identities. The Delphi
+default wrappers execute the child roster declared by their combined manifest.
+Run binaries from the checkout, or set `MAXCRON_TEST_ROOT`
+to it when using external build outputs. Test selectors are rejected; Delphi
+default runners still accept quiet console formatting.
+`tests/RosterContract.Tests.ps1` runs native membership regressions through all
+default/long wrappers, runners and smokes, for shared and FPC-only fixture
+families, including controls with current source hashes and unchanged expected
+names. It requires `ScratchRoot`, `Compiler` and `DUnitXSource` parameters.
+Before the full matrix, run the setup preflight:
+
+```powershell
+python -X utf8=0 tests/roster_contract_regression.py --repository . `
+  --scratch '<fresh external output>' --compiler '<Delphi bin>/dcc64.exe' `
+  --dunitx '<DUnitX>/Source' --setup-only --contract-variant enabled
+```
+
+Repeat with `--contract-variant disabled` and a different fresh output directory.
+Each preflight discovers the roster, runs two positive controls, checks WSL
+startup and script syntax, and compiles all 72 distinct native fixture forms
+with Delphi Win32/Win64 and FPC.
+The disabled variant removes roster guards only in negative-case copies;
+discovery and positive controls keep the contract enabled. The preflight writes
+`setup.json` and subprocess receipts. Both preflights must pass before the full
+RED and GREEN matrix runs; compilation failure is infrastructure failure.
+
+`tests/roster_source_regression.py` additionally changes every include/data input
+in an owned copy and checks stale rejection through the native and wrapper
+manifest loaders. Build failures abort the membership matrix; they never count
+as rejected test selections.
+FPC continues to use fresh directories under `MAXCRON_FPC_OUT`.
+Long qualification accepts no test-selection arguments (apart from the `fpc`
+routing token). Empty, partial, ignored or failed runs return nonzero; Delphi
+and FPC check execution against their complete discovered/generated rosters.
+
+Roster contract violations use reserved exit code 5 and one fixed
+`ROSTER_REJECTED reason=... detail=...` verdict. Only the roster comparison
+helpers can originate that result. Build, generator, parity and runner phases
+record their native completion codes; infrastructure failures never count as
+roster rejection. The matrix requires the expected verdict reason and owner,
+with every preceding phase successful. It refreshes unchanged source stamps
+on every route under a non-UTF-8 locale, preserving UTF-8 BOM identities.
+`tests/RosterHarness.Tests.ps1` covers the native compiler, generator and parity
+failure reproductions, plus the table of compiler, linker, generator, parity,
+runner and roster-helper failures (nonzero exit, crash, timeout and misleading
+output).
+
+The roster contract guards against accidental false success, including stale or
+incomplete test inventories and failed tools. Test definitions, native runners
+and gate scripts are trusted project code. Deliberately modifying a runner or
+helper to forge or replay a verdict is outside this threat model.
+
+#### Test exit codes and propagation
+
+These tables describe a successfully started wrapper or native program. Each
+`.sh` entry delegates to the same Windows gate as its `.bat` counterpart and
+preserves its defined status.
+
+| Entry point | Success | Ordinary test or infrastructure failure | Roster violation | Timeout |
+| --- | ---: | --- | ---: | ---: |
+| Delphi default `build-and-run-tests.bat` / `.sh` | 0 | 3, including a native runner returning 1 or 2 | 5 | 124 |
+| Delphi stress `build-and-run-tests-stress.bat` / `.sh` | 0 | 3, including a native runner returning 1 or 2 | 5 | 124 |
+| Delphi long `build-and-run-tests-long.bat` / `.sh` | 0 | 3, including build failure, native runner error 2, or invalid helper output | 5 | 124 |
+| FPC gate `build-and-run-tests-fpc.bat` / `.sh` | 0 | 1 for test/heap/result failure; 2 for tool/output configuration; 3 for build, generator or parity infrastructure failure | 5 | 124 |
+| FPC long `build-and-run-tests-long.bat fpc` / `.sh fpc` | 0 | The same FPC 1/2/3 meanings; preflight infrastructure failure is 3 | 5 | 124 |
+| FPC smoke binaries, normal and heap variants | 0 | Native 2 for a caught test/runtime/result exception; 1 is the retained final unsuccessful-result guard. The FPC gate maps either to 1 | 5 | No internal watchdog; the FPC gate supervises them and returns 124 |
+
+A shell, OS loader, or PowerShell startup failure before orchestration can
+return its platform status instead (for example Windows 9009 or shell 126/127).
+The WSL launcher rejects unsupported argument quoting/newlines with 2. Such
+bootstrap failures have no roster verdict and never qualify as roster rejection.
+
+| Native phase or result | Native completion | How the wrapper propagates it |
+| --- | --- | --- |
+| Tool/version/CPU/target query | 0 or the tool's native status | Recorded in its tool receipt; invalid tool/configuration maps to FPC 2; a supervised deadline returns 124 |
+| Build, including compiler/linker | 0 or the tool's actual nonzero exit | Recorded in the build receipt. Failure maps to Delphi 3 or FPC 3, even if the tool itself returned 5 |
+| FPC registry generator | 0; parser/generation errors normally 3; a crash retains its actual native status | Recorded in the generator receipt. A non-timeout failure maps to FPC 3; native 124 propagates as 124. Generator output cannot originate roster status 5 |
+| Parity helper | 0; roster violation 5; ordinary exception 3; a crash retains its native status | Recorded in the parity receipt. Explicit roster verdict plus native 5 propagates 5; another failure maps to FPC 3, except timeout status 124 which propagates |
+| Delphi native unit/stress/VCL runner | 0; caught ordinary test/runtime/result error 2; retained final unsuccessful-result guard 1; roster violation 5 | Recorded in the runner receipt. Native 1/2 or a crash maps to Delphi wrapper 3; a verified roster 5 propagates 5, and timeout 124 propagates 124 |
+| FPC native test runner | 0; caught ordinary test/runtime/result error 2; retained final unsuccessful-result guard 1; roster violation 5 | Recorded in the runner receipt. Native 1/2 or a crash maps to FPC gate 1; a verified roster 5 propagates 5, and timeout 124 propagates 124 |
+| Roster/source/execution check | 0 or typed roster violation 5; non-contract exceptions remain native 2 or PowerShell helper 3 | Only this comparison code originates 5, immediately preceded by its check receipt and accompanied by one fixed verdict. A wrapper propagates 5 only after checking that result; arbitrary native 5 without the verdict is infrastructure failure |
+| Ordinary test failure | Usually native 2 through the current result checker; final unsuccessful-result guards retain 1 | Delphi wrappers return 3; the FPC gate returns 1. It is not a roster verdict |
+| Other infrastructure failure | The producer's nonzero status is retained in its phase receipt | Delphi orchestration maps it to 3; FPC uses the current configuration/build/test stage's 2/3/1. No roster status is synthesized |
+| Phase deadline | The killed process's actual native exit remains in the receipt, which can be 0 if it exited but left a child holding a pipe | The supervising wrapper returns 124; enclosing wrappers preserve 124. Timeout never becomes 5 |
+
+For example, Delphi native runner 2 becomes Delphi wrapper 3. A generator
+returning 37 remains 37 in its receipt and becomes FPC wrapper 3. A genuine
+parity violation returns native 5 with its verdict and becomes wrapper 5. Child
+124 is preserved by runner/helper propagation; compiler/query nonzero statuses
+still use the build/configuration mapping unless the supervising deadline
+itself expired.
+
+#### Production phase deadlines
+
+Deadlines cover both process completion and draining redirected output, using
+a monotonic clock. Every supervised Windows child starts suspended and joins
+a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` before it can execute.
+On expiry the gate terminates the job, including descendants whose parents
+have exited, allows up to 10 seconds to confirm the job is empty, and allows
+up to 5 seconds to finish its asynchronous stdout/stderr reads. It records
+the native status and returns 124. Incomplete termination or stream draining
+is recorded as `ROSTER_TIMEOUT_INCOMPLETE` and still returns 124, never success
+or roster status 5. Directly launching a native executable supplies no internal
+watchdog; use the wrappers for supervision.
+
+Windows Job Objects do not own processes inside the WSL virtual machine.
+Terminating `wsl.exe` stops the foreground Linux probe, but a detached Linux
+process can survive. The `.sh` routes delegate builds and tests to the
+supervised Windows wrappers; this timeout guarantee covers their Windows
+children. Linux work added to those routes needs its own Linux deadline and
+cleanup. Killing the WSL client alone is not a guarantee for detached Linux
+descendants.
+
+| Phase | Deadline |
+| --- | --- |
+| Compiler version/CPU/target queries | 2 minutes each |
+| Build, including compiler/linker | 30 minutes each |
+| Registry generator, parity and ordinary roster/preflight helpers | 10 minutes each |
+| Default Delphi/FPC test runner | 2 hours each |
+| FPC smoke or heap smoke | 10 minutes each |
+| Exhaustive Delphi/FPC long test runner | 48 hours each |
+| Enclosing Delphi default/stress three-runner gate | 8 hours |
+
+These are hang limits, not timing acceptance thresholds. The default unit
+wrapper must still finish within 10 minutes on the qualification machine. The
+48-hour long-run cap is deliberately conservative: the earlier long Win32 run
+was cancelled after hours, so a completed full-run baseline is not yet available.
+
 The maxCron syntax corpus is stored in `tests/data/cron-valid.txt`.
 
 Our upstream-derived cron corpus used by tests is stored in `tests/data/cron-utils-unix-5field.txt`.
@@ -970,7 +1138,7 @@ Optional runners:
 We can run the deterministic cron fuzz-oracle fixture (dialect/day-match combinations with brute-force oracle comparison):
 
 ```bash
-tests/maxCronTests.exe --consolemode:quiet --run:TestCronFuzzOracle.TTestCronFuzzOracle.NextOccurrences_MatchBruteForceOracle
+tests/maxCronTests.exe --consolemode:quiet
 ```
 
 Replay knobs:
@@ -990,7 +1158,7 @@ leaving the existing forward oracle's random stream unchanged.
 We can run async-boundary chaos coverage (queue-acquire injection, dispatch-start failure, callback exceptions, cancellation races):
 
 ```bash
-tests/maxCronTests.exe --consolemode:quiet --run:TestChaosFaultInjection.TTestChaosFaultInjection
+tests/maxCronTests.exe --consolemode:quiet
 ```
 
 ### Long soak harness (24h logical window)
@@ -1005,7 +1173,8 @@ Useful options:
 - `--modes=scan,heap,auto` to select engines.
 - `--hours=N` to override the logical soak window (defaults to `MAXCRON_LONG_SOAK_HOURS` or `24`).
 
-The harness executes `TestLongSoak24h.EngineModes_LogicalSoak_NoMisses`, which validates:
+The harness executes the complete default rosters, including
+`TestLongSoak24h.EngineModes_LogicalSoak_NoMisses`, which validates:
 - no callback loss/duplication envelope violations per mode,
 - auto-mode switch envelope bounds,
 - report artifact generation with full console output and exit code.

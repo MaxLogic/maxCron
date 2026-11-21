@@ -2,10 +2,12 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '..\RosterManifest.ps1')
 $repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $step = 1
 $failureExit = 2
 $childNumber = 0
+$executedGateIdentities = @()
 
 function ConvertTo-NativeArgument {
     param([AllowEmptyString()][string]$Value)
@@ -30,7 +32,7 @@ function ConvertTo-NativeArgument {
 }
 
 function Invoke-GateProcess {
-    param([string]$Executable, [string[]]$ArgumentList, [string]$LogPath)
+    param([string]$Executable, [string[]]$ArgumentList, [string]$LogPath, [string]$Phase, [string]$Name)
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $Executable
     $start.Arguments = (($ArgumentList | ForEach-Object { ConvertTo-NativeArgument $_ }) -join ' ')
@@ -51,13 +53,11 @@ function Invoke-GateProcess {
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    $process = [Diagnostics.Process]::new()
-    $process.StartInfo = $start
+    $process = Start-RosterProcess -StartInfo $start
     try {
-        [void]$process.Start()
-        $stdout = $process.StandardOutput.ReadToEndAsync()
-        $stderr = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
+        $stdout = $process.Stdout
+        $stderr = $process.Stderr
+        Wait-RosterProcess -Process $process -Stdout $stdout -Stderr $stderr -TimeoutMs (Get-RosterPhaseTimeout -Phase $Phase -Name $Name) -Phase $Phase -Name $Name
         $text = $stdout.Result + $stderr.Result
         if ($LogPath) { [IO.File]::WriteAllText($LogPath, $text) }
         [Console]::Write($text)
@@ -72,14 +72,20 @@ function Invoke-GateBuild {
     $destination = Join-Path $script:runOutput $Name
     [void][IO.Directory]::CreateDirectory($destination)
     $arguments = $script:common + @('-vw', ('-FU' + $destination), ('-FE' + $destination)) + $Options + @((Join-Path $repository $Source))
-    $result = Invoke-GateProcess $script:compiler $arguments (Join-Path $destination 'build.log')
+    $result = Invoke-GateProcess $script:compiler $arguments (Join-Path $destination 'build.log') -Phase build -Name $Name
+    Write-RosterPhase build $Name $result.ExitCode
     if ($result.ExitCode -ne 0) { throw "Compiler failed for $Name (native exit $($result.ExitCode))" }
 }
 
 function Invoke-GateTest {
     param([string]$Name, [string]$Program, [string[]]$TestArguments, [switch]$Heap)
-    $result = Invoke-GateProcess (Join-Path $script:runOutput "$Name\$Program.exe") $TestArguments (Join-Path $script:runOutput "$Name\last-run.log")
-    if ($result.ExitCode -ne 0) { throw "Runner failed for $Name (native exit $($result.ExitCode))" }
+    $result = Invoke-GateProcess (Join-Path $script:runOutput "$Name\$Program.exe") $TestArguments (Join-Path $script:runOutput "$Name\last-run.log") -Phase runner -Name $Name
+    Write-RosterPhase runner $Name $result.ExitCode
+    if ($result.ExitCode -ne 0) {
+        if ($result.ExitCode -eq 124) { exit 124 }
+        if (Test-RosterRejection $result.ExitCode $result.Text) { exit 5 }
+        throw "Runner failed for $Name (native exit $($result.ExitCode))"
+    }
     $counts = @{}
     foreach ($kind in 'Found', 'Passed', 'Ignored', 'Failed', 'Errored') {
         $summaries = [regex]::Matches($result.Text, ('(?m)^Tests ' + $kind + '\s*:\s*(\d+)\s*$'))
@@ -88,6 +94,19 @@ function Invoke-GateTest {
     }
     if ($counts.Found -le 0 -or $counts.Passed -ne $counts.Found -or
         $counts.Ignored -ne 0 -or $counts.Failed -ne 0 -or $counts.Errored -ne 0) { throw "Invalid test counts for $Name" }
+    # Each native runner checks source stamps and executed identities itself.
+    # Independently check its transcript against the checked-in expectation too.
+    $entry = switch ($Name) {
+        'tests' { if ($env:MAXCRON_LONG_TESTS -eq '1') { 'FpcLong' } else { 'FpcDefault' } }
+        'smoke' { 'FpcSmoke' }
+        'smoke-heaptrc' { 'FpcSmokeHeap' }
+        default { throw ('Unknown test entry: ' + $Name) }
+    }
+    $executed = @([regex]::Matches($result.Text, '(?m)^ROSTER_TEST ([^\r\n]+)\r?$') | ForEach-Object { $_.Groups[1].Value })
+    $expected = (Read-RosterManifest -Repository $repository -Entry $entry).Names
+    if ($executed.Count -ne $counts.Found) { throw (New-RosterViolation count 'Executed count differs from Found' $entry) }
+    Assert-RosterIdentity -Expected $expected -Actual $executed -Name $entry
+    $script:executedGateIdentities += @($executed | ForEach-Object { $entry + '::' + $_ })
     if ($Heap) {
         if (-not [IO.File]::Exists($result.HeapPath)) { throw "Missing heaptrc log for $Name" }
         $heapText = [IO.File]::ReadAllText($result.HeapPath)
@@ -122,6 +141,18 @@ try {
         if ($decoded -isnot [array] -or @($decoded | Where-Object { $_ -isnot [string] }).Count -gt 0) { throw 'MAXCRON_FPC_ARGS must be a JSON array of strings' }
         $testArguments = [string[]]$decoded
     }
+    if ($testArguments.Count -ne 0) {
+        throw (New-RosterViolation count 'FPC qualification requires the complete roster; test selection arguments are not accepted.' arguments)
+    }
+    if ($env:MAXCRON_LONG_TESTS -eq '1') {
+        $failureExit = 3
+        $preflight = Invoke-RosterChild -Executable (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoProfile','-NonInteractive','-File',(Join-Path $PSScriptRoot '..\Test-LongManifest.ps1')) -WorkingDirectory $repository -Phase roster-check -Name long-preflight -TimeoutMs (Get-RosterPhaseTimeout -Phase roster-check -Name long-preflight)
+        if ($preflight.ExitCode -ne 0) {
+            if ($preflight.ExitCode -eq 124) { exit 124 }
+            if (Test-RosterRejection $preflight.ExitCode $preflight.Text) { exit 5 }
+            throw ('Long preflight failed, native exit ' + $preflight.ExitCode)
+        }
+    }
     $compiler = $env:MAXCRON_FPC
     if (-not $compiler) {
         $compiler = 'F:\Tools\fpc-trunk\bin\x86_64-win64\fpc.exe'
@@ -146,9 +177,12 @@ try {
         # Test data is read here; process cwd and all outputs remain run-local.
         MAXCRON_TEST_ROOT = $repository
     }
-    $version = Invoke-GateProcess $compiler @('-iV')
-    $cpu = Invoke-GateProcess $compiler @('-iTP')
-    $target = Invoke-GateProcess $compiler @('-iTO')
+    $version = Invoke-GateProcess $compiler @('-iV') -Phase tool -Name version
+    $cpu = Invoke-GateProcess $compiler @('-iTP') -Phase tool -Name cpu
+    $target = Invoke-GateProcess $compiler @('-iTO') -Phase tool -Name target
+    Write-RosterPhase tool version $version.ExitCode
+    Write-RosterPhase tool cpu $cpu.ExitCode
+    Write-RosterPhase tool target $target.ExitCode
     [Console]::WriteLine("FPC $($version.Text.Trim()) $($cpu.Text.Trim())-$($target.Text.Trim()) at $compiler")
     if ($version.ExitCode -ne 0 -or $cpu.ExitCode -ne 0 -or $target.ExitCode -ne 0 -or
         $version.Text.Trim() -ne '3.3.1' -or $cpu.Text.Trim() -ne 'x86_64' -or $target.Text.Trim() -ne 'win64' -or
@@ -157,17 +191,29 @@ try {
     $optimization = @('-O2', '-gl')
     if ($env:MAXCRON_DEBUG_SAFETY -eq '1') { $optimization = @('-O-', '-gl', '-Cr', '-Co', '-Ct', '-Ci', '-Sa') }
     $common = @('-n', ('@' + (Join-Path $bin 'fpc.cfg')), ('-FD' + (Join-Path $bin '.')),
-        ('-Fu' + (Join-Path $compilerRoot 'units\x86_64-win64\*')), ('-Fu' + $repository), ('-Fi' + $repository)) + $optimization
+        ('-Fu' + (Join-Path $compilerRoot 'units\x86_64-win64\*')), ('-Fu' + $repository),
+        ('-Fu' + (Join-Path $repository 'tests')), ('-Fi' + $repository)) + $optimization
+    # Same exhaustive test loops as Delphi's --define MAXCRON_LONG_TESTS.
+    if ($env:MAXCRON_LONG_TESTS -eq '1') { $common += '-dMAXCRON_LONG_TESTS' }
     $step = 3; $failureExit = 3
     Invoke-GateBuild 'check-public' 'tests\fpc\maxCronFpcCompileCheck.dpr' @('-Sew')
     Invoke-GateBuild 'check-tests' 'tests\fpc\maxCronFpcCompileCheck.dpr' @('-Sew', '-dMAXCRON_TESTS')
     $step = 4
     Invoke-GateBuild 'gen' 'tests\fpc\maxCronFpcRegistryGen.dpr' @('-Sew', '-vm4104,4105')
     $registry = Join-Path $runOutput 'gen\maxCronFpcRegistry.inc'
-    $generated = Invoke-GateProcess (Join-Path $runOutput 'gen\maxCronFpcRegistryGen.exe') @($repository, $registry)
+    $generated = Invoke-GateProcess (Join-Path $runOutput 'gen\maxCronFpcRegistryGen.exe') @($repository, $registry) -Phase generator -Name registry
+    Write-RosterPhase generator registry $generated.ExitCode
+    if ($generated.ExitCode -eq 124) { exit 124 }
     if ($generated.ExitCode -ne 0) { throw 'Registry generator failed' }
-    $parity = Invoke-GateProcess $powershell @('-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'Check-FixtureParity.ps1'), '-Registry', $registry)
-    if ($parity.ExitCode -ne 0) { throw 'Fixture parity failed' }
+    $parity = Invoke-GateProcess $powershell @('-NoProfile', '-NonInteractive', '-File', (Join-Path $PSScriptRoot 'Check-FixtureParity.ps1'), '-Registry', $registry) -Phase parity -Name fixture-parity
+    Write-RosterPhase parity fixture-parity $parity.ExitCode
+    if ($parity.ExitCode -ne 0) {
+        if ($parity.ExitCode -eq 124) { exit 124 }
+        if (Test-RosterRejection $parity.ExitCode $parity.Text) { exit 5 }
+        throw 'Fixture parity failed'
+    }
+    $gateEntry = if ($env:MAXCRON_LONG_TESTS -eq '1') { 'FpcLongGate' } else { 'FpcDefaultGate' }
+    $gateExpected = (Read-RosterManifest -Repository $repository -Entry $gateEntry).Names
     $step = 5
     Invoke-GateBuild 'tests' 'tests\fpc\maxCronFpcTests.dpr' @('-Sew', '-dMAXCRON_TESTS', '-gh', '-vm4104,4105', ('-Fu' + $PSScriptRoot), ('-Fu' + (Join-Path $repository 'tests\unit')), ('-Fi' + (Join-Path $runOutput 'gen')))
     $failureExit = 1
@@ -180,10 +226,12 @@ try {
     Invoke-GateBuild 'smoke-heaptrc' 'tests\fpc\maxCronFpcSmoke.dpr' @('-Sew', '-gh', '-dMAXCRON_FPC_SMOKE_NOPOOL')
     $failureExit = 1
     [void](Invoke-GateTest 'smoke-heaptrc' 'maxCronFpcSmoke' @() -Heap)
+    Assert-RosterIdentity -Expected $gateExpected -Actual $executedGateIdentities -Name $gateEntry
+    [Console]::WriteLine('ROSTER_GATE_VERIFIED ' + $gateEntry + ' ' + $executedGateIdentities.Count)
     [Console]::WriteLine("FPC GATE PASSED ($testCount tests, compiler 3.3.1 x86_64-win64 at $compiler)")
     exit 0
 } catch {
-    [Console]::Error.WriteLine($_.Exception.Message)
-    [Console]::Error.WriteLine("FPC GATE FAILED at step $step (exit $failureExit)")
-    exit $failureExit
+    $nativeExit = Complete-RosterFailure $_.Exception -InfrastructureExit $failureExit
+    if ($nativeExit -ne 5) { [Console]::Error.WriteLine("FPC GATE FAILED at step $step (exit $nativeExit)") }
+    exit $nativeExit
 }

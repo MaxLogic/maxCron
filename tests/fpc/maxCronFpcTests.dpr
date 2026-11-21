@@ -23,6 +23,7 @@ uses
   TestLocalOverlap in '..\unit\TestLocalOverlap.pas',
   TestMisfireOnTime in '..\unit\TestMisfireOnTime.pas',
   TestNamedTimeZones in '..\unit\TestNamedTimeZones.pas',
+  TestRoster in '..\TestRoster.pas',
   TestScheduleNext in '..\unit\TestScheduleNext.pas',
   TestTimeBoundaries in '..\unit\TestTimeBoundaries.pas',
   TestTimeZoneRules in '..\unit\TestTimeZoneRules.pas',
@@ -36,14 +37,18 @@ uses
 
 begin
   try
+    {$IFDEF MAXCRON_LONG_TESTS}
+    BeginRoster('FpcLong');
+    {$ELSE}
+    BeginRoster('FpcDefault');
+    {$ENDIF}
     if ParamCount <> 0 then raise Exception.Create('The FPC runner currently accepts no test filters');
     RegisterGeneratedTests;
     ExitCode := RunTests(cGeneratedTestCount);
   except
     on E: Exception do
     begin
-      WriteLn('RUNNER ERROR ', string(E.ClassName), ': ', string(E.Message));
-      ExitCode := 2;
+      ExitCode := ReportRosterFailure(E);
     end;
   end;
 end.

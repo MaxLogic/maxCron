@@ -13,7 +13,7 @@ function RunTests(const aExpectedCount: Integer): Integer;
 implementation
 
 uses
-  SysUtils, DUnitX.TestFramework;
+  SysUtils, DUnitX.TestFramework, TestRoster;
 
 type
   TFpcTest = record
@@ -94,10 +94,12 @@ begin
           WriteLn('ERROR ', gTests[i].Name, ': ', string(E.ClassName), ': ', string(E.Message));
         end;
       end;
+      RecordRosterTest(gTests[i].Name);
     end;
     if lFixture <> '' then
       WriteLn('FIXTURE ', lFixture, ' found=', lFixtureCount, ' passed=', lFixturePassed);
     Summary(Length(gTests), lPassed, lFailed, lErrored);
+    EndRoster(Length(gTests), lPassed, lFailed, lErrored, 0);
     if (Length(gTests) = 0) or (Length(gTests) <> aExpectedCount) or (lPassed <> Length(gTests)) then
       Result := 1
     else
@@ -105,8 +107,7 @@ begin
   except
     on E: Exception do
     begin
-      WriteLn('RUNNER ERROR ', string(E.ClassName), ': ', string(E.Message));
-      Result := 2;
+      Result := ReportRosterFailure(E);
     end;
   end;
 end;

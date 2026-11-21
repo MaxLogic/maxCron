@@ -14,6 +14,9 @@ All notable user-visible changes to this project will be documented in this file
   1602-9998 the nearest edge offset continues unchanged.
 
 ### Added
+- Production test wrappers enforce per-phase deadlines, terminate timed-out child trees, and return non-roster timeout status 124.
+- Test entry points reserve exit 5 for typed roster violations and report native phase completion codes; compiler, generator and runner failures cannot count as roster rejection.
+- Separate long test qualification for exhaustive UTC/DST search, dispatch and restore matrices on Delphi and FPC; default gates keep deterministic regression samples. Every default, long and FPC smoke runner checks its complete independent roster and rejects stale manifests, including FPC-only tests.
 - FPC trunk 3.3.1 Windows x64 support, Unicode-safe text compatibility, Windows-rule LOCAL and a separate FPC test gate.
 - The FPC gate isolates each invocation in a fresh validated output directory, handles conditional and tokenized test attributes, and checks shared test names against Delphi discovery. Containment covers misconfiguration and pre-existing aliases; concurrent malicious directory replacement is outside its threat model.
 - The FPC batch launcher delegates to PowerShell with fixed arguments. Compiler/output settings remain literal environment values. Output paths accept only ASCII letters, digits, space and `\ : . _ - +`; unsupported characters fail with exit 2 before output creation. Child processes use the per-run working directory and an allowlisted environment, with gate-owned heaptrc logs and an explicit read-only test-data root. WSL invokes the same gate directly.

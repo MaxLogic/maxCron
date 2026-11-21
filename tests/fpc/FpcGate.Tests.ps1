@@ -72,6 +72,7 @@ Describe 'The gate rejects output aliases before writing' {
         Copy-Item -LiteralPath $Gate -Destination (Join-Path $source 'build-and-run-tests-fpc.bat')
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Check-OutputPath.ps1') -Destination $helperDir
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Run-FpcGate.ps1') -Destination $helperDir
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\RosterManifest.ps1') -Destination (Join-Path $source 'tests\RosterManifest.ps1')
         [IO.File]::WriteAllText((Join-Path $helperDir 'maxCronFpcCompileCheck.dpr'), 'program Broken; begin invalid syntax end.')
         $junction = Join-Path $ScratchRoot 'source-junction'
         New-Item -ItemType Junction -Path $junction -Target $source | Out-Null
@@ -156,20 +157,32 @@ Describe 'Fixture parity compares names and binds the Delphi source snapshot' {
             ('# SHA256 tests/unit/TestLocalZoneOs.pas ' + $sourceHash),
             'TestLocalZoneOs.TTestLocalZoneOs.Shared',
             'TestLocalZoneOs.TTestLocalZoneOs.MatchesRtlLocal'
-        ))
+        ), [Text.UTF8Encoding]::new($true))
+        New-Item -ItemType Directory -Path (Join-Path $parityRepo 'tests\fpc') -Force | Out-Null
+        $shimSource = Join-Path $parityRepo 'tests\fpc\TestFpcShims.pas'
+        [IO.File]::WriteAllText($shimSource, 'independently exported FPC-only source')
+        $shimHash = (Get-FileHash -LiteralPath $shimSource -Algorithm SHA256).Hash.ToLowerInvariant()
+        $shimManifest = Join-Path $ScratchRoot 'fpc-only-names.txt'
+        [IO.File]::WriteAllLines($shimManifest, @(
+            ('# SHA256 tests/fpc/TestFpcShims.pas ' + $shimHash),
+            'TestFpcShims.TTestFpcShims.Probe'
+        ), [Text.UTF8Encoding]::new($true))
         $parityCheck = Join-Path $PSScriptRoot 'Check-FixtureParity.ps1'
         $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     }
     It '<Name>' -ForEach @(
-        @{ Name = 'accepts matching names'; Names = @('TestLocalZoneOs.TTestLocalZoneOs.Shared'); Stale = $false; Expected = 0 },
-        @{ Name = 'rejects an omitted test'; Names = @('TestFpcShims.TTestFpcShims.Probe'); Stale = $false; Expected = 3 },
-        @{ Name = 'rejects equal counts with different names'; Names = @('TestLocalZoneOs.TTestLocalZoneOs.Wrong'); Stale = $false; Expected = 3 },
-        @{ Name = 'rejects a stale source snapshot'; Names = @('TestLocalZoneOs.TTestLocalZoneOs.Shared'); Stale = $true; Expected = 3 }
+        @{ Name = 'accepts matching names'; Names = @('TestLocalZoneOs.TTestLocalZoneOs.Shared', 'TestFpcShims.TTestFpcShims.Probe'); Stale = $false; Expected = 0 },
+        @{ Name = 'rejects an omitted test'; Names = @('TestFpcShims.TTestFpcShims.Probe'); Stale = $false; Expected = 5 },
+        @{ Name = 'rejects equal counts with different names'; Names = @('TestLocalZoneOs.TTestLocalZoneOs.Wrong', 'TestFpcShims.TTestFpcShims.Probe'); Stale = $false; Expected = 5 },
+        @{ Name = 'rejects a stale source snapshot'; Names = @('TestLocalZoneOs.TTestLocalZoneOs.Shared', 'TestFpcShims.TTestFpcShims.Probe'); Stale = $true; Expected = 5 },
+        @{ Name = 'rejects an omitted FPC-only test'; Names = @('TestLocalZoneOs.TTestLocalZoneOs.Shared'); Stale = $false; Expected = 5 },
+        @{ Name = 'rejects a renamed FPC-only test'; Names = @('TestLocalZoneOs.TTestLocalZoneOs.Shared', 'TestFpcShims.TTestFpcShims.Renamed'); Stale = $false; Expected = 5 },
+        @{ Name = 'rejects an extra FPC-only test'; Names = @('TestLocalZoneOs.TTestLocalZoneOs.Shared', 'TestFpcShims.TTestFpcShims.Probe', 'TestFpcShims.TTestFpcShims.Extra'); Stale = $false; Expected = 5 }
     ) {
         [IO.File]::WriteAllText($paritySource, $(if ($Stale) { 'changed after Delphi export' } else { 'source as exported by Delphi' }))
         $registry = Join-Path $ScratchRoot ($Name.Replace(' ', '-') + '-registry.inc')
-        [IO.File]::WriteAllLines($registry, @($Names | ForEach-Object { "RegisterTest('$_', 'fixture', @Test);" }))
-        $messages = & $windowsPowerShell -NoProfile -NonInteractive -File $parityCheck -Registry $registry -DelphiNames $manifest -Repository $parityRepo 2>&1
+        [IO.File]::WriteAllLines($registry, @($Names | ForEach-Object { "RegisterTest('$_', 'fixture', @Test);" }), [Text.UTF8Encoding]::new($true))
+        $messages = & $windowsPowerShell -NoProfile -NonInteractive -File $parityCheck -Registry $registry -DelphiNames $manifest -FpcOnlyNames $shimManifest -Repository $parityRepo 2>&1
         $LASTEXITCODE | Should -Be $Expected -Because ($messages -join ' ')
     }
 }

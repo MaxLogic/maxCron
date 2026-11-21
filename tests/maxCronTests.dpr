@@ -6,9 +6,11 @@ program maxCronTests;
 
 uses
   System.SysUtils,
-  DUnitX.TestFramework,
   DUnitX.Loggers.Console,
   DUnitX.RunResults,
+  DUnitX.TestFramework,
+  DelphiRoster in 'DelphiRoster.pas',
+  TestRoster in 'TestRoster.pas',
   maxCron.Internal.DeadlineQueue in '..\maxCron.Internal.DeadlineQueue.pas',
   maxCron.Internal.Platform in '..\maxCron.Internal.Platform.pas',
   maxCron.Internal.Text in '..\maxCron.Internal.Text.pas',
@@ -59,12 +61,18 @@ uses
   TestValidityZones in 'unit\TestValidityZones.pas',
   TestValidRange in 'unit\TestValidRange.pas';
 
+
 var
   Runner: ITestRunner;
   Results: IRunResults;
 begin
   ReportMemoryLeaksOnShutdown := True;
   try
+    {$IFDEF MAXCRON_LONG_TESTS}
+    BeginRoster('DelphiLong');
+    {$ELSE}
+    BeginRoster('DelphiUnit');
+    {$ENDIF}
     TDUnitX.CheckCommandLine;
     TDUnitX.RegisterTestFixture(TTestCronTextParity);
     TDUnitX.RegisterTestFixture(TTestLocalZoneOs);
@@ -110,14 +118,18 @@ begin
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));
-    Results := Runner.Execute;
-    if not Results.AllPassed then
+    Results := ExecuteRoster(Runner);
+    if not Results.AllPassed or (Results.TestCount <= 0) or
+      (Results.PassCount <> Results.TestCount) or (Results.FailureCount <> 0) or
+      (Results.ErrorCount <> 0) or (Results.IgnoredCount <> 0) or (Results.MemoryLeakCount <> 0) then
       ExitCode := 1;
+    {$IFDEF MAXCRON_LONG_TESTS}
+    Writeln('LONG_ROSTER expected=', ExpectedRosterCount, ' found=', Results.TestCount, ' passed=', Results.PassCount);
+    {$ENDIF}
   except
     on E: Exception do
     begin
-      Writeln(E.ClassName, ': ', E.Message);
-      ExitCode := 2;
+      ExitCode := ReportRosterFailure(E);
     end;
   end;
 end.

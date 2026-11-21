@@ -3,13 +3,15 @@ program maxCronFpcSmoke;
 
 uses
   Classes, SyncObjs, System.Diagnostics, SysUtils,
-  maxCron;
+  maxCron,
+  TestRoster in '..\TestRoster.pas';
 
 var
   gFound, gPassed: Integer;
 
 procedure Check(const aCondition: Boolean; const aName: string);
 begin
+  RecordRosterTest('smoke.' + aName);
   Inc(gFound);
   if aCondition then Inc(gPassed)
   else WriteLn('FAIL  smoke.', aName);
@@ -69,6 +71,11 @@ end;
 
 begin
   try
+    {$IFDEF MAXCRON_FPC_SMOKE_NOPOOL}
+    BeginRoster('FpcSmokeHeap');
+    {$ELSE}
+    BeginRoster('FpcSmoke');
+    {$ENDIF}
     SmokeMode(imMainThread);
     {$IFNDEF MAXCRON_FPC_SMOKE_NOPOOL}
     SmokeMode(imMaxAsync);
@@ -78,8 +85,7 @@ begin
   except
     on E: Exception do
     begin
-      Inc(gFound);
-      WriteLn('ERROR smoke: ', string(E.ClassName), ': ', string(E.Message));
+      Halt(ReportRosterFailure(E));
     end;
   end;
   WriteLn('Tests Found   : ', gFound);
@@ -88,5 +94,13 @@ begin
   WriteLn('Tests Leaked  : not measured (heaptrc checks the process at exit)');
   WriteLn('Tests Failed  : ', gFound - gPassed);
   WriteLn('Tests Errored : 0');
+  try
+    EndRoster(gFound, gPassed, gFound - gPassed, 0, 0);
+  except
+    on E: Exception do
+    begin
+      Halt(ReportRosterFailure(E));
+    end;
+  end;
   if (gFound = 0) or (gFound <> gPassed) then ExitCode := 1;
 end.

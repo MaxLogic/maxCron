@@ -9,6 +9,8 @@ uses
   DUnitX.Loggers.Console,
   DUnitX.RunResults,
   DUnitX.TestFramework,
+  DelphiRoster in 'DelphiRoster.pas',
+  TestRoster in 'TestRoster.pas',
   maxCron.Internal.DeadlineQueue in '..\maxCron.Internal.DeadlineQueue.pas',
   maxCron.Internal.Platform in '..\maxCron.Internal.Platform.pas',
   maxCron.Internal.Text in '..\maxCron.Internal.Text.pas',
@@ -33,6 +35,7 @@ var
 begin
   ReportMemoryLeaksOnShutdown := True;
   try
+    BeginRoster('DelphiStress');
     TDUnitX.CheckCommandLine;
     TDUnitX.RegisterTestFixture(TTestGlobalLimits);
     TDUnitX.RegisterTestFixture(TTestHeavyStress);
@@ -45,14 +48,13 @@ begin
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));
-    Results := Runner.Execute;
+    Results := ExecuteRoster(Runner);
     if not Results.AllPassed then
       ExitCode := 1;
   except
     on E: Exception do
     begin
-      Writeln(E.ClassName, ': ', E.Message);
-      ExitCode := 2;
+      ExitCode := ReportRosterFailure(E);
     end;
   end;
 end.

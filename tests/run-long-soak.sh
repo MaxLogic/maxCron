@@ -35,13 +35,10 @@ REPORT_PATH="$OUT_DIR/long-soak-$STAMP.log"
   echo
 } >"$REPORT_PATH"
 
-"$ROOT_DIR/build-delphi.sh" tests/maxCronStressTests.dproj -config release >>"$REPORT_PATH" 2>&1
-
 set +e
 MAXCRON_LONG_SOAK_HOURS="$HOURS" \
 MAXCRON_LONG_SOAK_MODES="$MODES" \
-"$ROOT_DIR/tests/maxCronStressTests.exe" \
-  --run:TestLongSoak24h.TTestLongSoak24h.EngineModes_LogicalSoak_NoMisses \
+"$ROOT_DIR/build-and-run-tests-stress.sh" \
   "${EXTRA_ARGS[@]}" >>"$REPORT_PATH" 2>&1
 RC=$?
 set -e

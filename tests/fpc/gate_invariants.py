@@ -54,6 +54,21 @@ def inventory(root):
     return result
 
 
+def install_roster_control(source, gate_source):
+    """Keep filesystem probes complete under the independent roster contract."""
+    helper = gate_source / 'tests/RosterManifest.ps1'
+    if not helper.exists():
+        return
+    shutil.copyfile(helper, source / 'tests/RosterManifest.ps1')
+    stamps = ['# SHA256 ' + path.relative_to(source).as_posix() + ' ' + hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in sorted(source.rglob('*')) if path.is_file() and path.suffix in ('.dpr', '.ps1')]
+    for entry in ['FpcDefault', 'FpcLong', 'FpcSmoke', 'FpcSmokeHeap']:
+        write(source / 'tests/rosters' / (entry + '.txt'), '\n'.join(stamps + ['Control.Probe']) + '\n')
+    for gate, core in [('FpcDefaultGate', 'FpcDefault'), ('FpcLongGate', 'FpcLong')]:
+        names = [entry + '::Control.Probe' for entry in [core, 'FpcSmoke', 'FpcSmokeHeap']]
+        write(source / 'tests/rosters' / (gate + '.txt'), '\n'.join(stamps + names) + '\n')
+
+
 def link(out, path, target, kind):
     path.parent.mkdir(parents=True, exist_ok=True)
     receipt = run(out, 'link-' + path.name, ['cmd.exe', '/d', '/c', 'mklink',
@@ -78,13 +93,14 @@ def containment(args):
     # These small compiler inputs isolate the real batch's output writes. The
     # parity shim is deliberately irrelevant to this filesystem invariant.
     write(helpers / 'Check-FixtureParity.ps1', 'exit 0\n')
-    summary = ("WriteLn('Tests Found   : 1'); WriteLn('Tests Passed  : 1'); "
+    summary = ("WriteLn('ROSTER_TEST Control.Probe'); WriteLn('Tests Found   : 1'); WriteLn('Tests Passed  : 1'); "
                "WriteLn('Tests Ignored : 0'); WriteLn('Tests Failed  : 0'); WriteLn('Tests Errored : 0'); "
                "WriteLn('0 unfreed memory blocks');")
     write(helpers / 'maxCronFpcCompileCheck.dpr', 'program Check; begin end.\n')
     write(helpers / 'maxCronFpcRegistryGen.dpr', 'program Gen; begin end.\n')
     write(helpers / 'maxCronFpcTests.dpr', 'program Tests; begin ' + summary + ' end.\n')
     write(helpers / 'maxCronFpcSmoke.dpr', 'program Smoke; begin ' + summary + ' end.\n')
+    install_roster_control(source, args.gate_source)
     rows = []
     # Cross product: root spelling/alias, an alias in the middle of the path,
     # and poisoned pre-existing write children. Each case has a fresh root.
@@ -160,11 +176,12 @@ def path_text(args):
         if original.exists():
             shutil.copyfile(original, helpers / name)
     write(helpers / 'Check-FixtureParity.ps1', 'exit 0\n')
-    summary = ("WriteLn('Tests Found   : 1'); WriteLn('Tests Passed  : 1'); "
+    summary = ("WriteLn('ROSTER_TEST Control.Probe'); WriteLn('Tests Found   : 1'); WriteLn('Tests Passed  : 1'); "
                "WriteLn('Tests Ignored : 0'); WriteLn('Tests Failed  : 0'); WriteLn('Tests Errored : 0'); "
                "WriteLn('0 unfreed memory blocks');")
     for name, body in [('CompileCheck', ''), ('RegistryGen', ''), ('Tests', summary), ('Smoke', summary)]:
         write(helpers / ('maxCronFpc' + name + '.dpr'), 'program Probe; begin ' + body + ' end.\n')
+    install_roster_control(source, args.gate_source)
     rows = []
     variants = []
     # Three positions, both direct text and percent/delayed environment references.
@@ -230,7 +247,7 @@ def child_environment(args):
     write(helpers / 'Check-FixtureParity.ps1',
           "if ($env:R4_ENV_POISON) { exit 9 }\n"
           "[IO.File]::WriteAllText((Join-Path ([Environment]::CurrentDirectory) 'helper-relative.txt'), 'helper')\nexit 0\n")
-    summary = ("WriteLn('Tests Found   : 1'); WriteLn('Tests Passed  : 1'); "
+    summary = ("WriteLn('ROSTER_TEST Control.Probe'); WriteLn('Tests Found   : 1'); WriteLn('Tests Passed  : 1'); "
                "WriteLn('Tests Ignored : 0'); WriteLn('Tests Failed  : 0'); WriteLn('Tests Errored : 0');")
     for name, body in [('CompileCheck', ''), ('RegistryGen', ''), ('Tests', summary), ('Smoke', summary)]:
         # Every binary makes a relative write, including the generator and smoke.
@@ -238,6 +255,7 @@ def child_environment(args):
               'program Probe; uses SysUtils; var f: Text; begin '
               "if GetEnvironmentVariable('R4_ENV_POISON') <> '' then Halt(9); "
               "Assign(f, '" + name + "-relative.txt'); Rewrite(f); WriteLn(f, GetCurrentDir); Close(f); " + body + ' end.\n')
+    install_roster_control(source, args.gate_source)
     rows = []
     for label in ['relative', 'absolute']:
         case = out / label

@@ -5,9 +5,11 @@ program maxCronVclTests;
 uses
   Vcl.Forms,
   System.SysUtils,
-  DUnitX.TestFramework,
   DUnitX.Loggers.Console,
   DUnitX.RunResults,
+  DUnitX.TestFramework,
+  DelphiRoster in 'DelphiRoster.pas',
+  TestRoster in 'TestRoster.pas',
   maxCron.Internal.DeadlineQueue in '..\maxCron.Internal.DeadlineQueue.pas',
   maxCron.Internal.Platform in '..\maxCron.Internal.Platform.pas',
   maxCron.Internal.Text in '..\maxCron.Internal.Text.pas',
@@ -25,21 +27,21 @@ begin
   ReportMemoryLeaksOnShutdown := True;
   Application.Initialize;
   try
+    BeginRoster('DelphiVcl');
     TDUnitX.CheckCommandLine;
     TDUnitX.RegisterTestFixture(TTestVclBackend);
     TDUnitX.RegisterTestFixture(TTestVclDeadline);
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));
-    Results := Runner.Execute;
+    Results := ExecuteRoster(Runner);
     if not Results.AllPassed then
       ExitCode := 1;
   except
     on E: Exception do
     begin
       // no console by default; still useful when run as a console-hosted process in CI/IDE
-      Writeln(E.ClassName, ': ', E.Message);
-      ExitCode := 2;
+      ExitCode := ReportRosterFailure(E);
     end;
   end;
 end.
