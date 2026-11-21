@@ -55,7 +55,7 @@ type
 implementation
 
 uses
-  maxCron.Internal.TimeZone;
+  maxCron.Internal.TimeZone, TestZoneFakes;
 
 procedure TTestCalendarTimeZone.TransitionSelection_PreservesSchedulingMargin;
 var
@@ -317,94 +317,101 @@ end;
 
 procedure TTestCalendarTimeZone.DstFallPolicy_RunTwice_QueuesSecondOccurrence;
 var
-  lAmbiguous: TDateTime;
-  lPlan: string;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
+  lZone: ICronZoneRules;
+  lFirstUs, lSecondUs, lUtcUs: Int64;
+  lDisplay: TDateTime;
   lCount: Integer;
-  lFirstNext: TDateTime;
-  lSecondNext: TDateTime;
 begin
-  if not TryFindAmbiguousLocalTime(lAmbiguous) then
-    Exit;
-
+  lZone := CreateCronZone('calendar overlap host', FakeZoneSource(0));
+  lFirstUs := ZoneMs(2026, 10, 25, 0) * 1000;
+  lSecondUs := ZoneMs(2026, 10, 25, 1) * 1000;
+  lUtcUs := lFirstUs - 1000000;
+  lDisplay := CronMsToDateTime(ZoneMs(2026, 10, 25, 2));
   lCount := 0;
-  lPlan := Format('%d %d %d %d * %d 0 2',
-    [MinuteOf(lAmbiguous), HourOf(lAmbiguous), DayOf(lAmbiguous), MonthOf(lAmbiguous), YearOf(lAmbiguous)]);
-
-  lCron := TmaxCron.Create(ctPortable);
+  SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(lZone));
+  SetMaxCronUtcClockHook(function: Int64 begin Result := lUtcUs; end);
+  SetMaxCronWallClockHook(function: Int64 begin Result := lUtcUs + lZone.GetPeriod(lUtcUs div 1000).OffsetMs * 1000; end);
+  lCron := nil;
   try
-    lEvent := lCron.Add('FallTwice');
-    lEvent.EventPlan := lPlan;
+    lCron := TmaxCron.Create(ctPortable);
+    lEvent := lCron.Add('calendar overlap');
+    lEvent.EventPlan := '0 2 25 10 * 2026 0 2';
     lEvent.TimeZoneId := 'LOCAL';
     lEvent.DstFallPolicy := TmaxCronDstFallPolicy.dfpRunTwice;
-    lEvent.OnScheduleProc :=
-      procedure(Sender: IMaxCronEvent)
-      begin
-        Inc(lCount);
-      end;
-    lEvent.ValidFrom := IncSecond(lAmbiguous, -1);
+    lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lCount); end;
+    lEvent.InvokeMode := imMainThread;
     lEvent.Run;
-
-    lFirstNext := lEvent.NextSchedule;
-    Assert.IsTrue(CronSystemTimeZone.IsAmbiguousTime(lFirstNext));
-    lCron.TickAt(lFirstNext);
-    Assert.AreEqual(1, lCount, 'First ambiguous instance should execute');
-    lSecondNext := lEvent.NextSchedule;
-
-    Assert.AreEqual(lFirstNext, lSecondNext, 0.0);
-    Assert.IsTrue(CronSystemTimeZone.IsAmbiguousTime(lSecondNext));
-    lCron.TickAt(lSecondNext);
-    Assert.AreEqual(1, lCount, 'Second run must wait for the repeated wall-clock instance');
-    lCron.TickAt(IncMinute(lSecondNext, -1)); // simulate fallback rollback (time moved back)
-    lCron.TickAt(lSecondNext);
-    Assert.AreEqual(2, lCount);
+    Assert.AreEqual(lDisplay, lEvent.NextSchedule, 0.0);
+    lCron.TickAtUtcUs(lFirstUs - 1000000);
+    Assert.AreEqual(0, lCount);
+    lCron.TickAtUtcUs(lFirstUs);
+    Assert.AreEqual(1, lCount, 'first UTC instance');
+    Assert.AreEqual(lDisplay, lEvent.NextSchedule, 0.0, 'next display still identifies the second instance');
+    lCron.TickAtUtcUs(lFirstUs + 1000000);
+    lCron.TickAtUtcUs(lSecondUs - 1);
+    Assert.AreEqual(1, lCount, 'the second instance cannot run early');
+    lCron.TickAtUtcUs(lSecondUs);
+    Assert.AreEqual(2, lCount, 'second UTC instance');
+    lCron.TickAtUtcUs(lSecondUs + 1000000);
+    Assert.AreEqual(2, lCount, 'each policy instance runs once');
   finally
+    lEvent := nil;
     lCron.Free;
+    SetMaxCronUtcClockHook(nil);
+    SetMaxCronWallClockHook(nil);
+    SetCronSystemTimeZoneForTests(nil);
   end;
 end;
 
 procedure TTestCalendarTimeZone.DstFallPolicy_PreferSecond_WaitsForSecondOccurrence;
 var
-  lAmbiguous: TDateTime;
-  lPlan: string;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
+  lZone: ICronZoneRules;
+  lFirstUs, lSecondUs, lUtcUs: Int64;
+  lDisplay: TDateTime;
   lCount: Integer;
-  lNextAt: TDateTime;
 begin
-  if not TryFindAmbiguousLocalTime(lAmbiguous) then
-    Exit;
-
+  lZone := CreateCronZone('calendar overlap host', FakeZoneSource(0));
+  lFirstUs := ZoneMs(2026, 10, 25, 0) * 1000;
+  lSecondUs := ZoneMs(2026, 10, 25, 1) * 1000;
+  lUtcUs := lFirstUs - 1000000;
+  lDisplay := CronMsToDateTime(ZoneMs(2026, 10, 25, 2));
   lCount := 0;
-  lPlan := Format('%d %d %d %d * %d 0 1',
-    [MinuteOf(lAmbiguous), HourOf(lAmbiguous), DayOf(lAmbiguous), MonthOf(lAmbiguous), YearOf(lAmbiguous)]);
-
-  lCron := TmaxCron.Create(ctPortable);
+  SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(lZone));
+  SetMaxCronUtcClockHook(function: Int64 begin Result := lUtcUs; end);
+  SetMaxCronWallClockHook(function: Int64 begin Result := lUtcUs + lZone.GetPeriod(lUtcUs div 1000).OffsetMs * 1000; end);
+  lCron := nil;
   try
-    lEvent := lCron.Add('FallPreferSecond');
-    lEvent.EventPlan := lPlan;
+    lCron := TmaxCron.Create(ctPortable);
+    lEvent := lCron.Add('calendar overlap');
+    lEvent.EventPlan := '0 2 25 10 * 2026 0 1';
     lEvent.TimeZoneId := 'LOCAL';
     lEvent.DstFallPolicy := TmaxCronDstFallPolicy.dfpRunOncePreferSecondInstance;
-    lEvent.OnScheduleProc :=
-      procedure(Sender: IMaxCronEvent)
-      begin
-        Inc(lCount);
-      end;
-    lEvent.ValidFrom := IncSecond(lAmbiguous, -1);
+    lEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent) begin Inc(lCount); end;
+    lEvent.InvokeMode := imMainThread;
     lEvent.Run;
-
-    lNextAt := lEvent.NextSchedule;
-    Assert.IsTrue(CronSystemTimeZone.IsAmbiguousTime(lNextAt));
-
-    lCron.TickAt(lNextAt);
-    Assert.AreEqual(0, lCount, 'Prefer-second must not fire at the first ambiguous instance');
-
-    lCron.TickAt(IncMinute(lNextAt, -1)); // simulate fallback rollback (time moved back)
-    lCron.TickAt(lNextAt);
-    Assert.AreEqual(1, lCount, 'Prefer-second should fire at the repeated ambiguous instance');
+    Assert.AreEqual(lDisplay, lEvent.NextSchedule, 0.0);
+    lCron.TickAtUtcUs(lFirstUs - 1000000);
+    Assert.AreEqual(0, lCount);
+    lCron.TickAtUtcUs(lFirstUs);
+    Assert.AreEqual(0, lCount, 'first UTC instance');
+    Assert.AreEqual(lDisplay, lEvent.NextSchedule, 0.0, 'next display still identifies the second instance');
+    lCron.TickAtUtcUs(lFirstUs + 1000000);
+    lCron.TickAtUtcUs(lSecondUs - 1);
+    Assert.AreEqual(0, lCount, 'the second instance cannot run early');
+    lCron.TickAtUtcUs(lSecondUs);
+    Assert.AreEqual(1, lCount, 'second UTC instance');
+    lCron.TickAtUtcUs(lSecondUs + 1000000);
+    Assert.AreEqual(1, lCount, 'each policy instance runs once');
   finally
+    lEvent := nil;
     lCron.Free;
+    SetMaxCronUtcClockHook(nil);
+    SetMaxCronWallClockHook(nil);
+    SetCronSystemTimeZoneForTests(nil);
   end;
 end;
 

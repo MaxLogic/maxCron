@@ -56,8 +56,8 @@ and the `imMainThread`/`imThread` smoke run with heap tracing and require zero
 unfreed blocks. This test split does not fix the RTL exit race.
 
 FPC's `TTimeZone.Local` misclassifies DST gaps/overlaps and some UTC conversions.
-FPC LOCAL uses Windows year rules through maxCron's zone engine. Delphi keeps
-its RTL LOCAL implementation. FPC exception messages are AnsiString, so
+LOCAL on Windows uses the Windows conversion rules through maxCron's zone engine
+on both Delphi and FPC. FPC exception messages are AnsiString, so
 characters unavailable in the Windows code page can be replaced in messages.
 
 The tested compiler can report an internal `EListError` for a non-capturing
@@ -694,6 +694,12 @@ CronScheduler.SaveScheduleState;
 CronScheduler.RestoreScheduleState(True); // replace existing events
 ```
 
+Restore validates and installs an enabled event's saved due before deciding
+whether it can run. An eligible overdue cron or interval occurrence follows its
+misfire policy even when the plan has ended or `ValidTo` has passed since that
+occurrence. Execution limits and inclusive validity bounds still apply to the
+saved due. Missing or invalid saved dues use a fresh schedule search.
+
 Persistence captures event configuration/state metadata (plan, policies, counters, next schedule). Callback handlers themselves are not serialized and should be rebound by the host after restore when needed.
 
 ### Global dispatch caps
@@ -858,27 +864,28 @@ NewSchedule.DstFallPolicy := dfpRunOncePreferFirstInstance;
 NewSchedule.DstFallPolicy := dfpRunOncePreferSecondInstance;
 ```
 
-`dfpRunTwice` executes both ambiguous fall-back instances at the same local wall-clock time.
-For `dfpRunTwice` and `dfpRunOncePreferSecondInstance`, maxCron now waits for the repeated wall-clock pass
-after fallback instead of dispatching the second-instance semantics immediately on the first pass.
+Cron occurrences are selected and dispatched by their UTC instants. During a repeated
+hour, `dfpRunOnce` and `dfpRunOncePreferFirstInstance` select the earlier instance,
+`dfpRunOncePreferSecondInstance` selects the later one, and `dfpRunTwice` selects
+both in UTC order. Each occurrence runs at its own instance, including when a
+schedule starts, resumes, resets or is restored during the host's repeated hour.
+`UTC` and fixed-offset schedules keep their UTC firing times across host DST changes.
+Misfire lateness is measured in UTC, so repeated wall times cannot hide an overdue occurrence.
 
-For named zones, `dspSkip` omits nonexistent local times; `dspRunAtNextValidTime`
-runs at the transition instant (the first valid local time). Several occurrences
-shifted to that instant fire once. `dfpRunOnce` and `dfpRunOncePreferFirstInstance`
-select the earlier UTC instance, `dfpRunOncePreferSecondInstance` the later one,
-and `dfpRunTwice` both, in UTC order. `LOCAL` retains its minute-step spring
-behavior: a missing 02:30:30 can shift to 03:00:30, while a named zone shifts it
-to 03:00:00. Named-zone searches query eligible constant-offset ranges rather
-than each occurrence in a shifted window. Dense schedules remain bounded across
-30-minute and two-hour clock changes.
+For both LOCAL and named zones, `dspSkip` omits nonexistent local times.
+`dspRunAtNextValidTime` runs a gap occurrence at the transition instant, the first
+valid local time: a missing 02:30:30 shifts to 03:00:00. Several occurrences shifted
+to that instant fire once. Eligible period ranges keep dense searches bounded
+across 30-minute and two-hour changes.
 
-The scheduler keeps its system-local clock. Named events running through the
-host's repeated hour wait for the observed rollback before firing a second
-instance. Starting, resetting or resuming inside that hour uses its earlier UTC
-interpretation, so occurrences can run late or at the other instance; future
-instances are retained. Hosts on UTC or without DST are unaffected.
+`NextSchedule`, `LastExecution` and persisted schedule values remain host-local
+display times. Repeated instances can therefore share one displayed value.
+LOCAL follows a host-zone change on the next scheduler pass; UTC, fixed-offset
+and named occurrences retain their UTC dues. Interval deadlines remain monotonic.
 
-Performance note: UTC/fixed-offset events use a stable local-offset cache for UTC->local conversion when the target UTC hour is outside DST-transition ambiguity, which reduces repeated timezone API calls in hot paths.
+On non-Windows Delphi, the system-zone adapter probes the RTL's offset rules;
+this requires offset changes to be at least 15 minutes apart. Windows uses its
+native conversion rules on both compilers.
 
 ## Business calendar exclusions
 

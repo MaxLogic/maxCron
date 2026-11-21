@@ -206,6 +206,9 @@
         <DCCReference Include="..\maxCron.pas"/>
         <DCCReference Include="unit\TestCronPhaseDifferential.pas"/>
         <DCCReference Include="unit\TestDeadlineTimerStress.pas"/>
+        <DCCReference Include="unit\TestLocalOverlap.pas"/>
+        <DCCReference Include="unit\TestLocalOverlapStress.pas"/>
+        <DCCReference Include="unit\TestZoneFakes.pas"/>
         <DCCReference Include="unit\TestHeavyStress.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>

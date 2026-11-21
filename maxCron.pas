@@ -18,7 +18,7 @@ uses
   System.Threading,
   {$ENDIF}
   {$ENDIF}
-  maxCron.Internal.DeadlineQueue, maxCron.Internal.Platform, maxCron.Plan;
+  maxCron.Internal.DeadlineQueue, maxCron.Internal.Platform, maxCron.Internal.TimeZone, maxCron.Plan;
 
 type
   TCronInstantUs = maxCron.Plan.TCronInstantUs;
@@ -358,7 +358,6 @@ type
       end;
 
       TCronHeapEntry = record
-        DueAt: TDateTime;
         DueAtUs: Int64;
         EventId: Int64;
       end;
@@ -375,6 +374,7 @@ type
     fTimer: ICronTickSource;
     fIntervalQueue: TCronDeadlineQueue;
     fLastCronPassKey: Int64;
+    fCronHostZone: ICronZoneRules;
     {$IFDEF MAXCRON_TESTS}
     fWallMapHighUs: Int64;
     {$ENDIF}
@@ -475,14 +475,14 @@ type
     procedure EvaluateAutoController(const aEngineUsed: TSchedulerEngine; const aEventCount, aDueCount: Integer;
       const aElapsedMicroseconds: Int64);
     procedure RebuildHeapLocked;
-    procedure HeapPushLocked(const aDueAt: TDateTime; const aEventId: Int64);
+    procedure HeapPushLocked(const aDueAtUs: Int64; const aEventId: Int64);
     function HeapPopLocked(out aEntry: TCronHeapEntry): Boolean;
     function HeapPeekLocked(out aEntry: TCronHeapEntry): Boolean;
     procedure HeapSiftUpLocked(const aIndex: Integer);
     procedure HeapSiftDownLocked(const aIndex: Integer);
     function HeapEntryLessThan(const aLeft, aRight: TCronHeapEntry): Boolean;
-    procedure DoTickAtScan(const aNowUs: TCronInstantUs; out aDueCount: Integer);
-    procedure DoTickAtHeap(const aNowUs: TCronInstantUs; out aDueCount: Integer);
+    procedure DoTickAtScan(const aNowUs: TCronInstantUs; const aHostZone: ICronZoneRules; out aDueCount: Integer);
+    procedure DoTickAtHeap(const aNowUs: TCronInstantUs; const aHostZone: ICronZoneRules; out aDueCount: Integer);
     procedure ValidateShadowParity(const aNowUs: TCronInstantUs);
     procedure CollectScanDueIdsLocked(const aNowUs: TCronInstantUs; const aIds: TList<Int64>);
     procedure CollectHeapDueIdsLocked(const aNowUs: TCronInstantUs; const aIds: TList<Int64>);
@@ -497,6 +497,7 @@ type
     procedure DoIntervalTickAt(const aMonoNowUs, aWallNowUs: Int64);
     function GetActiveTimerResolution: TmaxCronTimerResolution;
     procedure DoTickAtUs(const aNowUtcUs: TCronInstantUs);
+    procedure RefreshCronHostZone(const aHostZone: ICronZoneRules);
     function SchedulerUtcNowUs: Int64;
     function UtcUsToWallUs(const aUtcUs: Int64): Int64;
     procedure QueueTick;
@@ -595,8 +596,6 @@ procedure GetMaxCronNamedSearchForTests(const aEvent: IMaxCronEvent; out aCalls,
 procedure SetMaxCronNamedFastPathForTests(const aEnabled: Boolean);
 function FindMaxCronNamedInstantForTests(const aEvent: IMaxCronEvent; const aBaseUtcMs: Int64;
   out aUtcMs: Int64): Integer;
-
-
 {$ENDIF}
 
 /// Floor / ceiling division for aDivisor > 0, including negative aValue.
@@ -623,7 +622,7 @@ uses
   System.Threading,
   {$ENDIF}
   {$ENDIF}
-  maxCron.Internal.Text, maxCron.Internal.TimeZone;
+  maxCron.Internal.Text;
 
 function CronFloorDiv(const aValue, aDivisor: Int64): Int64;
 begin
@@ -736,8 +735,6 @@ type
     function TryGetDefaultDayMatchMode(out aDayMatchMode: TmaxCronDayMatchMode): Boolean;
     function TryGetMisfireDefaults(out aMisfirePolicy: TmaxCronMisfirePolicy; out aCatchUpLimit: Cardinal): Boolean;
     function UtcNowUs: Int64;
-    procedure RecordWallPass(const aNowUs: TCronInstantUs);
-    function TryGetLastWallRollback(out aFromUs, aToUs: TCronInstantUs): Boolean;
     function TryGetOwnerPointer(out aOwnerPointer: Pointer): Boolean;
     function GetInFlightCount: Integer;
     procedure IncrementCallbackDepth;
@@ -764,8 +761,6 @@ type
     fOwner: TmaxCron;
     fInFlight: Integer;
     fCallbackDepth: Integer;
-    fHasWallPass, fHasWallRollback: Boolean;
-    fLastWallPassUs, fRollbackFromUs, fRollbackToUs: TCronInstantUs;
     function TryAcquireOwner(out aOwner: TmaxCron): Boolean;
     procedure ReleaseOwner;
   public
@@ -778,8 +773,6 @@ type
     function TryGetDefaultDayMatchMode(out aDayMatchMode: TmaxCronDayMatchMode): Boolean;
     function TryGetMisfireDefaults(out aMisfirePolicy: TmaxCronMisfirePolicy; out aCatchUpLimit: Cardinal): Boolean;
     function UtcNowUs: Int64;
-    procedure RecordWallPass(const aNowUs: TCronInstantUs);
-    function TryGetLastWallRollback(out aFromUs, aToUs: TCronInstantUs): Boolean;
     function TryGetOwnerPointer(out aOwnerPointer: Pointer): Boolean;
     function GetInFlightCount: Integer;
     procedure IncrementCallbackDepth;
@@ -856,20 +849,13 @@ type
     fRetryInitialDelayMs: Cardinal;
     fRetryBackoffMultiplier: Double;
     fRetryMaxDelayMs: Cardinal;
-    fSystemTimeZone: ICronTimeZone;
     fEventZone: ICronZoneRules;
-    fNamedNextUtcMs, fNamedConsumedUtcMs: Int64;
-    fNamedHoldForRollback: Boolean;
+    fNextDueUtcMs, fLastDueUtcMs, fDueBaseUtcMs: Int64;
+    fDueHostZone: ICronZoneRules;
     fNamedPlanLower, fNamedPlanUpper: TDateTime;
     fNamedSearchAttempts, fNamedSearchCalls, fNamedFastSearchAttempts: Integer;
-    fUtcToLocalCacheOffsetMs: Int64;
     fTimeZoneId: string;
     fTimeZoneKind: TCronTimeZoneKind;
-    fTimeZoneOffsetMinutes: Integer;
-    fTimeZoneOffsetDayFraction: Double;
-    fUtcToLocalCacheHourKey: Int64;
-    fUtcToLocalCacheOffsetDays: Double;
-    fUtcToLocalCacheStable: Boolean;
     fDstSpringPolicy: TmaxCronDstSpringPolicy;
     fDstFallPolicy: TmaxCronDstFallPolicy;
     fWeekdaysOnly: Boolean;
@@ -877,16 +863,12 @@ type
     fExcludedDateSerials: TArray<Integer>;
     fBlackoutStartTime: TDateTime;
     fBlackoutEndTime: TDateTime;
-    fPendingDstSecondSchedule: TDateTime;
     fNextScheduleNeedsResolve: Boolean;
     fRunning: Integer;
     fPendingRunGenerations: TQueue<UInt64>;
     fExecDepth: Integer;
     fAllowDisabledDispatch: Integer;
     fPendingDestroy: Boolean;
-    fAmbiguousSecondGateActive: Boolean;
-    fAmbiguousSecondGatePassedTarget: Boolean;
-    fAmbiguousSecondGateRollbackSeen: Boolean;
 
     function GetIsInterval: Boolean;
     function GetIntervalMs: Cardinal;
@@ -894,7 +876,7 @@ type
     function GetExecutionLimitLocked: LongWord;
     procedure SetIntervalWakeLocked(const aWakeUs: Int64; const aHasDeadline: Boolean = True);
     procedure ResetIntervalScheduleLocked;
-    procedure RestoreIntervalDueLocked(const aSavedNext: TDateTime);
+    function RestoreIntervalDueLocked(const aSavedNext: TDateTime): Boolean;
     procedure CompleteIntervalRun(const aRunGeneration: UInt64);
     procedure ProcessIntervalDue(const aMonoNowUs, aWallNowUs: Int64);
     function GetEventPlan: string;
@@ -987,29 +969,23 @@ type
     function NamedFirstOccurrence(const aFromLocalMs: Int64; out aLocalMs: Int64): TCronInstantSearchResult;
     function SearchNextZoneInstant(const aZone: ICronZoneRules; const aBaseUtcMs: Int64;
       const aFall: TCronFallChoice; out aUtcMs: Int64; out aCalls, aBudgetCalls: Integer): TCronInstantSearchResult;
-    function FindNextNamedInstant(const aBaseUtcMs: Int64; const aPlanLower, aPlanUpper: TDateTime;
+    function FindNextZoneDue(const aZone, aHostZone: ICronZoneRules; const aBaseUtcMs: Int64;
+      const aPlanLower, aPlanUpper: TDateTime; out aUtcMs: Int64): TFindNextScheduleResult;
+    function FindNextDueUtc(const aBaseUtcMs: Int64; const aHostZone: ICronZoneRules;
       out aUtcMs: Int64): TFindNextScheduleResult;
+    function IsDueWithinValidityWindow(const aUtcMs: Int64; const aHostZone: ICronZoneRules): Boolean;
     function SystemLocalToUtcMsEarliest(const aSystemLocal: TDateTime): Int64;
-    function UtcMsToSystemLocal(const aUtcMs: Int64): TDateTime;
-    procedure UpdateNamedHold(const aSystemLocal: TDateTime; const aUtcMs: Int64);
-    function ProcessNamedHold(const aNowUs: TCronInstantUs; const aNowBase: TDateTime): Boolean;
-    procedure ConsumeNamedInstant;
-    function FindNextScheduleWithPolicies(const aBaseSystemLocal: TDateTime; out aNextSystemLocal: TDateTime): TFindNextScheduleResult;
-    function SystemLocalToEventLocal(const aSystemLocal: TDateTime): TDateTime;
-    function EventLocalToSystemLocal(const aEventLocal: TDateTime; out aSystemLocal: TDateTime): Boolean;
-    function TryGetStableLocalOffsetForUtc(const aUtc: TDateTime; out aOffsetDays: Double): Boolean;
     function TryParseTimeZone(const aValue: string; out aKind: TCronTimeZoneKind;
       out aOffsetMinutes: Integer; out aNormalized: string): Boolean;
     procedure ParseExcludedDatesCsv(const aValue: string; out aDateSerials: TArray<Integer>);
     function GetHashSeed: string;
-    function TryGetHeapScheduleSnapshot(out aId: Int64; out aDueAt: TDateTime): Boolean;
-    function IsHeapScheduleCurrent(const aDueAt: TDateTime): Boolean;
-    procedure ClearAmbiguousSecondGate;
-    procedure ArmAmbiguousSecondGate(const aSchedule: TDateTime);
-    function ProcessAmbiguousSecondGate(const aNowUs: TCronInstantUs; const aNowBase: TDateTime): Boolean;
+    function TryGetHeapScheduleSnapshot(out aId: Int64; out aDueAtUs: Int64): Boolean;
+    function IsHeapScheduleCurrent(const aDueAtUs: Int64): Boolean;
 
     function AsEventObject: TmaxCronEvent;
-    procedure checkTimer(const aNowUs: TCronInstantUs);
+    procedure checkTimer(const aNowUs: TCronInstantUs; const aHostZone: ICronZoneRules);
+    procedure RefreshHostZone(const aHostZone: ICronZoneRules);
+    function RestoreCronDueLocked(const aNext, aLast: TDateTime; const aNeedsResolve: Boolean): Boolean;
     procedure ResetSchedule;
   public
     constructor Create;
@@ -1207,9 +1183,8 @@ end;
 constructor TmaxCronEvent.Create;
 begin
   inherited;
-  fSystemTimeZone := CronSystemTimeZone;
-  fNamedNextUtcMs := Low(Int64);
-  fNamedConsumedUtcMs := Low(Int64);
+  fNextDueUtcMs := Low(Int64);
+  fLastDueUtcMs := Low(Int64);
   fLock := TCriticalSection.Create;
   fEventToken := TCronEventToken.Create(Self);
   fId := 0;
@@ -1224,11 +1199,8 @@ begin
   fRetryMaxDelayMs := 30000;
   fTimeZoneId := 'LOCAL';
   fTimeZoneKind := TCronTimeZoneKind.ctzLocal;
-  fTimeZoneOffsetMinutes := 0;
-  fTimeZoneOffsetDayFraction := 0;
-  fUtcToLocalCacheHourKey := Low(Int64);
-  fUtcToLocalCacheOffsetDays := 0;
-  fUtcToLocalCacheStable := False;
+
+
   fDstSpringPolicy := TmaxCronDstSpringPolicy.dspSkip;
   fDstFallPolicy := TmaxCronDstFallPolicy.dfpRunOnce;
   fWeekdaysOnly := False;
@@ -1236,16 +1208,13 @@ begin
   SetLength(fExcludedDateSerials, 0);
   fBlackoutStartTime := 0;
   fBlackoutEndTime := 0;
-  fPendingDstSecondSchedule := 0;
+
   fNextScheduleNeedsResolve := False;
   fRunning := 0;
   fPendingRunGenerations := TQueue<UInt64>.Create;
   fExecDepth := 0;
   fAllowDisabledDispatch := 0;
   fPendingDestroy := False;
-  fAmbiguousSecondGateActive := False;
-  fAmbiguousSecondGatePassedTarget := False;
-  fAmbiguousSecondGateRollbackSeen := False;
   FValidFrom := 0;
   FValidTo := 0;
   fScheduler := TCronSchedulePlan.Create;
@@ -1342,17 +1311,20 @@ begin
   SetIntervalWakeLocked(fIntervalDueUs, FEnabled and not fPendingDestroy);
 end;
 
-procedure TmaxCronEvent.RestoreIntervalDueLocked(const aSavedNext: TDateTime);
+function TmaxCronEvent.RestoreIntervalDueLocked(const aSavedNext: TDateTime): Boolean;
 var
   lDeltaUs, lIntervalUs, lSavedUs: Int64;
 begin
+  Result := False;
   lSavedUs := CronDateTimeToInstantUs(aSavedNext);
-  if (lSavedUs <= 0) or not FEnabled then Exit;
+  if (lSavedUs <= 0) or not IsWithinValidityWindow(aSavedNext) then Exit;
   lIntervalUs := Int64(fIntervalMs) * cCronUsPerMs;
   lDeltaUs := lSavedUs - SchedulerWallNowUs;
   if lDeltaUs > lIntervalUs then lDeltaUs := lIntervalUs;
   fIntervalDueUs := SchedulerMonoNowUs + lDeltaUs;
-  SetIntervalWakeLocked(fIntervalDueUs);
+  // Restore decides enabled state only after the saved deadline is installed.
+  // Publishing an enabled wake here would expose a partially restored event.
+  Result := True;
 end;
 
 procedure TmaxCronEvent.CompleteIntervalRun(const aRunGeneration: UInt64);
@@ -1471,7 +1443,7 @@ end;
 
 procedure TmaxCronEvent.ResetSchedule;
 var
-  lBase: TDateTime;
+  lBaseUtcMs, lDueUtcMs: Int64;
   lFindResult: TFindNextScheduleResult;
 begin
   if fScheduleKind = TCronScheduleKind.Interval then
@@ -1479,29 +1451,103 @@ begin
     ResetIntervalScheduleLocked;
     Exit;
   end;
-  fPendingDstSecondSchedule := 0;
-  ClearAmbiguousSecondGate;
-
-  if fLastExecutionTime = 0 then
-    lBase := CronSecondToDateTime(CronInstantFloorSecond(SchedulerWallNowUs))
-  else
-    lBase := fLastExecutionTime;
-
-  lFindResult := FindNextScheduleWithPolicies(lBase, fNextSchedule);
-  case lFindResult of
-    TFindNextScheduleResult.fnsFound:
-      fNextScheduleNeedsResolve := False;
-    TFindNextScheduleResult.fnsNotFound:
-      begin
-        fNextScheduleNeedsResolve := False;
-        FEnabled := False;
-      end;
-    TFindNextScheduleResult.fnsSearchLimitReached:
-      fNextScheduleNeedsResolve := True;
+  lBaseUtcMs := fLastDueUtcMs;
+  if lBaseUtcMs = Low(Int64) then
+  begin
+    if fSharedState <> nil then lBaseUtcMs := fSharedState.UtcNowUs
+    else lBaseUtcMs := CronPreciseUtcNowUs;
+    lBaseUtcMs := CronInstantFloorSecond(lBaseUtcMs) * cCronMsPerSecond;
   end;
+  lFindResult := FindNextDueUtc(lBaseUtcMs, CronSystemZoneRules, lDueUtcMs);
+  fNextScheduleNeedsResolve := lFindResult = TFindNextScheduleResult.fnsSearchLimitReached;
+  if lFindResult = TFindNextScheduleResult.fnsNotFound then FEnabled := False;
+  if fSharedState <> nil then fSharedState.MarkHeapDirty;
+end;
 
-  if fSharedState <> nil then
-    fSharedState.MarkHeapDirty;
+function TmaxCronEvent.RestoreCronDueLocked(const aNext, aLast: TDateTime; const aNeedsResolve: Boolean): Boolean;
+var
+  lHost: ICronZoneRules;
+  lMap: TCronLocalMapping;
+  lDueUtcMs, lNextMs: Int64;
+  lFindResult: TFindNextScheduleResult;
+begin
+  Result := False;
+  fNextDueUtcMs := Low(Int64);
+  fDueBaseUtcMs := Low(Int64);
+  fDueHostZone := nil;
+  lHost := CronSystemZoneRules;
+  fLastExecutionTime := CronMsToDateTime(CronDateTimeToMs(aLast));
+  fLastDueUtcMs := Low(Int64);
+  if aLast > 0 then fLastDueUtcMs := SystemLocalToUtcMsEarliest(aLast);
+  if aNext <= 0 then
+  begin
+    fNextScheduleNeedsResolve := aNeedsResolve;
+    Exit;
+  end;
+  if not IsWithinValidityWindow(aNext) then Exit;
+  lNextMs := CronDateTimeToMs(aNext);
+  lMap := lHost.MapLocal(lNextMs);
+  if lMap.Kind = clkUnique then
+  begin
+    fNextDueUtcMs := lMap.FirstUtcMs;
+    fDueBaseUtcMs := lMap.FirstUtcMs - cCronMsPerSecond;
+    if fTimeZoneKind = TCronTimeZoneKind.ctzLocal then fDueHostZone := lHost;
+  end else if (lMap.Kind = clkOverlap) and (CronDateTimeToMs(aLast) = lNextMs) then
+  begin
+    fNextDueUtcMs := lMap.SecondUtcMs;
+    fLastDueUtcMs := lMap.FirstUtcMs;
+    fDueBaseUtcMs := lMap.FirstUtcMs;
+    if fTimeZoneKind = TCronTimeZoneKind.ctzLocal then fDueHostZone := lHost;
+  end else begin
+    lFindResult := FindNextDueUtc(lMap.FirstUtcMs - cCronMsPerSecond, lHost, lDueUtcMs);
+    if lFindResult = TFindNextScheduleResult.fnsNotFound then Exit;
+    if lFindResult = TFindNextScheduleResult.fnsSearchLimitReached then
+    begin
+      fNextScheduleNeedsResolve := True;
+      Exit(True);
+    end;
+  end;
+  if (fNextDueUtcMs = Low(Int64)) or not IsDueWithinValidityWindow(fNextDueUtcMs, lHost) then Exit;
+  fNextSchedule := CronMsToDateTime(lHost.UtcToLocalMs(fNextDueUtcMs));
+  fNextScheduleNeedsResolve := aNeedsResolve;
+  Result := True;
+end;
+
+procedure TmaxCronEvent.RefreshHostZone(const aHostZone: ICronZoneRules);
+var
+  lDueUtcMs: Int64;
+  lResult: TFindNextScheduleResult;
+begin
+  fLock.Acquire;
+  try
+    if (fScheduleKind <> TCronScheduleKind.Cron) or not FEnabled or
+      (fTimeZoneKind <> TCronTimeZoneKind.ctzLocal) or (fDueHostZone = aHostZone) or
+      (fNextDueUtcMs = Low(Int64)) then Exit;
+    lResult := FindNextDueUtc(fDueBaseUtcMs, aHostZone, lDueUtcMs);
+    fNextScheduleNeedsResolve := lResult = TFindNextScheduleResult.fnsSearchLimitReached;
+    if lResult = TFindNextScheduleResult.fnsNotFound then FEnabled := False;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCron.RefreshCronHostZone(const aHostZone: ICronZoneRules);
+var
+  lEvent: TmaxCronEvent;
+  i: Integer;
+begin
+  fItemsLock.Acquire;
+  try
+    if fCronHostZone = aHostZone then Exit;
+    fCronHostZone := aHostZone;
+    // A host-zone change can move a LOCAL due ahead of the heap's old key.
+    // Refresh before collecting, including events not due on that old key.
+    for i := 0 to fItems.Count - 1 do
+      if TryGetCronEvent(fItems[i], lEvent) then lEvent.RefreshHostZone(aHostZone);
+    TInterlocked.Exchange(fHeapDirty, 1);
+  finally
+    fItemsLock.Release;
+  end;
 end;
 
 function TmaxCronEvent.Run: IMaxCronEvent;
@@ -1514,7 +1560,7 @@ begin
     fNumOfExecutions := 0;
     fNumOfDue := 0;
     fLastExecutionTime := 0;
-    fNamedConsumedUtcMs := Low(Int64);
+    fLastDueUtcMs := Low(Int64);
     ResetSchedule;
   finally
     fLock.Release;
@@ -1535,7 +1581,7 @@ begin
       fNumOfExecutions := 0;
       fNumOfDue := 0;
       fLastExecutionTime := 0;
-      fNamedConsumedUtcMs := Low(Int64);
+      fLastDueUtcMs := Low(Int64);
       ResetSchedule;
     end else begin
       FEnabled := False;
@@ -1573,11 +1619,10 @@ begin
       fIntervalFixedDelay := lInterval.FixedDelay;
       fIntervalExecutionLimit := lInterval.ExecutionLimit;
       fNextSchedule := 0;
-      fNamedNextUtcMs := Low(Int64);
-      fNamedHoldForRollback := False;
+      fNextDueUtcMs := Low(Int64);
+
       fNextScheduleNeedsResolve := False;
-      fPendingDstSecondSchedule := 0;
-      ClearAmbiguousSecondGate;
+
     end else begin
       lValidator := TCronSchedulePlan.Create;
       try
@@ -1955,34 +2000,6 @@ begin
   end;
 end;
 
-procedure TCronSharedState.RecordWallPass(const aNowUs: TCronInstantUs);
-begin
-  fLock.Acquire;
-  try
-    if fHasWallPass and (aNowUs < fLastWallPassUs) then
-    begin
-      fHasWallRollback := True;
-      fRollbackFromUs := fLastWallPassUs;
-      fRollbackToUs := aNowUs;
-    end;
-    fLastWallPassUs := aNowUs;
-    fHasWallPass := True;
-  finally
-    fLock.Release;
-  end;
-end;
-
-function TCronSharedState.TryGetLastWallRollback(out aFromUs, aToUs: TCronInstantUs): Boolean;
-begin
-  fLock.Acquire;
-  try
-    Result := fHasWallRollback;
-    aFromUs := fRollbackFromUs;
-    aToUs := fRollbackToUs;
-  finally
-    fLock.Release;
-  end;
-end;
 
 function TCronSharedState.TryGetMisfireDefaults(out aMisfirePolicy: TmaxCronMisfirePolicy;
   out aCatchUpLimit: Cardinal): Boolean;
@@ -3581,12 +3598,11 @@ begin
   end;
 end;
 
-procedure TmaxCron.HeapPushLocked(const aDueAt: TDateTime; const aEventId: Int64);
+procedure TmaxCron.HeapPushLocked(const aDueAtUs: Int64; const aEventId: Int64);
 var
   lEntry: TCronHeapEntry;
 begin
-  lEntry.DueAt := aDueAt;
-  lEntry.DueAtUs := CronDateTimeToInstantUs(aDueAt);
+  lEntry.DueAtUs := aDueAtUs;
   lEntry.EventId := aEventId;
   fHeapItems.Add(lEntry);
   HeapSiftUpLocked(fHeapItems.Count - 1);
@@ -3635,9 +3651,8 @@ begin
   begin
     if not TryGetCronEvent(fItems[lIndex], lEvent) then
       Continue;
-    if lEvent.TryGetHeapScheduleSnapshot(lEntry.EventId, lEntry.DueAt) then
+    if lEvent.TryGetHeapScheduleSnapshot(lEntry.EventId, lEntry.DueAtUs) then
     begin
-      lEntry.DueAtUs := CronDateTimeToInstantUs(lEntry.DueAt);
       fHeapItems.Add(lEntry);
     end;
   end;
@@ -3657,14 +3672,14 @@ var
   lIndex: Integer;
   lEvent: TmaxCronEvent;
   lId: Int64;
-  lDueAt: TDateTime;
+  lDueAtUs: Int64;
 begin
   aIds.Clear;
   for lIndex := 0 to fItems.Count - 1 do
   begin
     if not TryGetCronEvent(fItems[lIndex], lEvent) then
       Continue;
-    if lEvent.TryGetHeapScheduleSnapshot(lId, lDueAt) and (CronDateTimeToInstantUs(lDueAt) <= aNowUs) then
+    if lEvent.TryGetHeapScheduleSnapshot(lId, lDueAtUs) and (lDueAtUs <= aNowUs) then
       aIds.Add(lId);
   end;
   aIds.Sort;
@@ -3687,7 +3702,7 @@ begin
       Continue;
     if not TryGetCronEvent(lEventItem, lEvent) then
       Continue;
-    if not lEvent.IsHeapScheduleCurrent(lEntry.DueAt) then
+    if not lEvent.IsHeapScheduleCurrent(lEntry.DueAtUs) then
       Continue;
     if aIds.IndexOf(lEntry.EventId) < 0 then
       aIds.Add(lEntry.EventId);
@@ -4119,6 +4134,7 @@ var
   lEvent: IMaxCronEvent;
   lCronEvent: TmaxCronEvent;
   lIndex: Integer;
+  lHasSavedDue: Boolean;
 begin
   Result := 0;
   lStore := GetScheduleStore;
@@ -4161,29 +4177,33 @@ begin
 
     if lState.Enabled then
     begin
-      lEvent.Run;
       if TryGetCronEvent(lEvent, lCronEvent) then
       begin
         lCronEvent.fLock.Acquire;
         try
+          // Configuration setters and Run use a fresh search. Its exhaustion
+          // says nothing about an eligible saved occurrence already overdue.
+          // Install that occurrence before deciding whether this event runs.
+          lCronEvent.FEnabled := False;
           lCronEvent.fNumOfExecutions := lState.NumOfExecutionsPerformed;
           lCronEvent.fNumOfDue := lState.NumOfExecutionsPerformed;
-          lCronEvent.fLastExecutionTime := lState.LastExecution;
-          lCronEvent.fNamedConsumedUtcMs := Low(Int64);
-          lCronEvent.fNamedNextUtcMs := Low(Int64);
-          lCronEvent.fNamedHoldForRollback := False;
           if lCronEvent.fScheduleKind = TmaxCronEvent.TCronScheduleKind.Interval then
-            lCronEvent.RestoreIntervalDueLocked(lState.NextSchedule)
-          else begin
-            // Reuse a saved due only within the current inclusive window. Otherwise
-            // keep the result just recomputed by Run, including its resolve state.
-            if (lState.NextSchedule <= 0) or lCronEvent.IsWithinValidityWindow(lState.NextSchedule) then
-            begin
-              if lState.NextSchedule > 0 then
-                lCronEvent.fNextSchedule := lState.NextSchedule;
-              lCronEvent.fNextScheduleNeedsResolve := lState.NextScheduleNeedsResolve;
-            end;
-          end;
+          begin
+            lCronEvent.fLastExecutionTime := lState.LastExecution;
+            lHasSavedDue := lCronEvent.RestoreIntervalDueLocked(lState.NextSchedule);
+          end else
+            lHasSavedDue := lCronEvent.RestoreCronDueLocked(lState.NextSchedule,
+              lState.LastExecution, lState.NextScheduleNeedsResolve);
+          lCronEvent.FEnabled := (lCronEvent.GetExecutionLimitLocked = 0) or
+            (lCronEvent.fNumOfDue < lCronEvent.GetExecutionLimitLocked);
+          if lCronEvent.FEnabled and not lHasSavedDue then
+            // Missing/invalid saved state uses the ordinary current-time
+            // bootstrap. Only this fallback may disable on search exhaustion.
+            lCronEvent.ResetSchedule;
+          if lCronEvent.fScheduleKind = TmaxCronEvent.TCronScheduleKind.Interval then
+            lCronEvent.SetIntervalWakeLocked(lCronEvent.fIntervalDueUs,
+              lCronEvent.FEnabled and not lCronEvent.fPendingDestroy);
+          if lCronEvent.fSharedState <> nil then lCronEvent.fSharedState.MarkHeapDirty;
         finally
           lCronEvent.fLock.Release;
         end;
@@ -4460,73 +4480,78 @@ var
   lEventCount: Integer;
   lDueCount: Integer;
   lStartTicks: Int64;
-  lWallUs, lNowWallUs: TCronInstantUs;
+  lWallUs: TCronInstantUs;
+  lHostZone: ICronZoneRules;
 begin
   if IsShutdownRequested then
     Exit;
 
-  // C2 preserves the old decision code. C3 removes this wall bridge.
-  lNowWallUs := UtcUsToWallUs(aNowUtcUs);
-  (fSharedState as ICronSharedState).RecordWallPass(lNowWallUs);
-  lDueCount := 0;
-  lEventCount := 0;
-  lWallUs := SchedulerUtcNowUs;
+  CronBeginZonePeriodMemo;
+  try
+    lHostZone := CronSystemZoneRules;
+    RefreshCronHostZone(lHostZone);
+    lDueCount := 0;
+    lEventCount := 0;
+    lWallUs := SchedulerUtcNowUs;
 
-  if fSchedulerEngine = TSchedulerEngine.seAuto then
-  begin
-    fAutoLock.Acquire;
-    try
-      lEngineUsed := fAutoEffectiveEngine;
-    finally
-      fAutoLock.Release;
+    if fSchedulerEngine = TSchedulerEngine.seAuto then
+    begin
+      fAutoLock.Acquire;
+      try
+        lEngineUsed := fAutoEffectiveEngine;
+      finally
+        fAutoLock.Release;
+      end;
+
+      fItemsLock.Acquire;
+      try
+        lEventCount := fItems.Count;
+      finally
+        fItemsLock.Release;
+      end;
+    end else
+      lEngineUsed := fSchedulerEngine;
+
+    lStartTicks := TStopwatch.GetTimeStamp;
+
+    case fSchedulerEngine of
+      TSchedulerEngine.seHeap:
+        DoTickAtHeap(aNowUtcUs, lHostZone, lDueCount);
+      TSchedulerEngine.seShadow:
+        begin
+          ValidateShadowParity(aNowUtcUs);
+          DoTickAtHeap(aNowUtcUs, lHostZone, lDueCount);
+          lEngineUsed := TSchedulerEngine.seHeap;
+        end;
+      TSchedulerEngine.seAuto:
+        case lEngineUsed of
+          TSchedulerEngine.seHeap:
+            DoTickAtHeap(aNowUtcUs, lHostZone, lDueCount);
+        else
+          DoTickAtScan(aNowUtcUs, lHostZone, lDueCount);
+        end;
+    else
+      DoTickAtScan(aNowUtcUs, lHostZone, lDueCount);
     end;
 
-    fItemsLock.Acquire;
-    try
-      lEventCount := fItems.Count;
-    finally
-      fItemsLock.Release;
-    end;
-  end else
-    lEngineUsed := fSchedulerEngine;
+    lElapsedTicks := TStopwatch.GetTimeStamp - lStartTicks;
+    if lElapsedTicks < 0 then
+      lElapsedTicks := 0;
+    if TStopwatch.Frequency > 0 then
+      lElapsedMicroseconds := (lElapsedTicks * 1000000) div TStopwatch.Frequency
+    else
+      lElapsedMicroseconds := 0;
 
-  lStartTicks := TStopwatch.GetTimeStamp;
+    UpdateWatchdogAfterTick(aNowUtcUs, lWallUs, lElapsedMicroseconds);
 
-  case fSchedulerEngine of
-    TSchedulerEngine.seHeap:
-      DoTickAtHeap(lNowWallUs, lDueCount);
-    TSchedulerEngine.seShadow:
-      begin
-        ValidateShadowParity(lNowWallUs);
-        DoTickAtHeap(lNowWallUs, lDueCount);
-        lEngineUsed := TSchedulerEngine.seHeap;
-      end;
-    TSchedulerEngine.seAuto:
-      case lEngineUsed of
-        TSchedulerEngine.seHeap:
-          DoTickAtHeap(lNowWallUs, lDueCount);
-      else
-        DoTickAtScan(lNowWallUs, lDueCount);
-      end;
-  else
-    DoTickAtScan(lNowWallUs, lDueCount);
+    if fSchedulerEngine = TSchedulerEngine.seAuto then
+      EvaluateAutoController(lEngineUsed, lEventCount, lDueCount, lElapsedMicroseconds);
+  finally
+    CronEndZonePeriodMemo;
   end;
-
-  lElapsedTicks := TStopwatch.GetTimeStamp - lStartTicks;
-  if lElapsedTicks < 0 then
-    lElapsedTicks := 0;
-  if TStopwatch.Frequency > 0 then
-    lElapsedMicroseconds := (lElapsedTicks * 1000000) div TStopwatch.Frequency
-  else
-    lElapsedMicroseconds := 0;
-
-  UpdateWatchdogAfterTick(aNowUtcUs, lWallUs, lElapsedMicroseconds);
-
-  if fSchedulerEngine = TSchedulerEngine.seAuto then
-    EvaluateAutoController(lEngineUsed, lEventCount, lDueCount, lElapsedMicroseconds);
 end;
 
-procedure TmaxCron.DoTickAtScan(const aNowUs: TCronInstantUs; out aDueCount: Integer);
+procedure TmaxCron.DoTickAtScan(const aNowUs: TCronInstantUs; const aHostZone: ICronZoneRules; out aDueCount: Integer);
 var
   x: Integer;
   lSnapshot: TArray<IMaxCronEvent>;
@@ -4534,7 +4559,6 @@ var
   lDueAtUs: Int64;
   lEvent: TmaxCronEvent;
   lId: Int64;
-  lDueAt: TDateTime;
 begin
   aDueCount := 0;
   lDepthIncreased := False;
@@ -4554,13 +4578,12 @@ begin
     for x := 0 to Length(lSnapshot) - 1 do
       if TryGetCronEvent(lSnapshot[x], lEvent) then
       begin
-        if lEvent.TryGetHeapScheduleSnapshot(lId, lDueAt) then
+        if lEvent.TryGetHeapScheduleSnapshot(lId, lDueAtUs) then
         begin
-          lDueAtUs := CronDateTimeToInstantUs(lDueAt);
           if lDueAtUs <= aNowUs then
             Inc(aDueCount);
         end;
-        lEvent.checkTimer(aNowUs);
+        lEvent.checkTimer(aNowUs, aHostZone);
       end;
   finally
     if lDepthIncreased then
@@ -4576,12 +4599,12 @@ begin
   end;
 end;
 
-procedure TmaxCron.DoTickAtHeap(const aNowUs: TCronInstantUs; out aDueCount: Integer);
+procedure TmaxCron.DoTickAtHeap(const aNowUs: TCronInstantUs; const aHostZone: ICronZoneRules; out aDueCount: Integer);
 type
   THeapRescheduleEntry = record
     Event: TmaxCronEvent;
     EventId: Int64;
-    DueAt: TDateTime;
+    DueAtUs: Int64;
   end;
 var
   lDepthIncreased: Boolean;
@@ -4596,7 +4619,7 @@ var
   lDueEvent: TmaxCronEvent;
   lIndex: Integer;
   lId: Int64;
-  lDueAt: TDateTime;
+  lDueAtUs: Int64;
   lCurrentLength: Integer;
 
   procedure EnsureDueEventsCapacity;
@@ -4643,7 +4666,7 @@ begin
           Continue;
         if not TryGetCronEvent(lEventItem, lEvent) then
           Continue;
-        if not lEvent.IsHeapScheduleCurrent(lEntry.DueAt) then
+        if not lEvent.IsHeapScheduleCurrent(lEntry.DueAtUs) then
           Continue;
         EnsureDueEventsCapacity;
         lDueEvents[lDueEventCount] := lEvent;
@@ -4657,13 +4680,13 @@ begin
     begin
       Inc(aDueCount);
       lDueEvent := lDueEvents[lIndex];
-      lDueEvent.checkTimer(aNowUs);
-      if not lDueEvent.TryGetHeapScheduleSnapshot(lId, lDueAt) then
+      lDueEvent.checkTimer(aNowUs, aHostZone);
+      if not lDueEvent.TryGetHeapScheduleSnapshot(lId, lDueAtUs) then
         Continue;
 
       lRescheduleEntry.Event := lDueEvent;
       lRescheduleEntry.EventId := lId;
-      lRescheduleEntry.DueAt := lDueAt;
+      lRescheduleEntry.DueAtUs := lDueAtUs;
       EnsureReschedulesCapacity;
       lReschedules[lRescheduleCount] := lRescheduleEntry;
       Inc(lRescheduleCount);
@@ -4679,8 +4702,8 @@ begin
           lEvent := lRescheduleEntry.Event;
           if lEvent = nil then
             Continue;
-          if lEvent.IsHeapScheduleCurrent(lRescheduleEntry.DueAt) then
-            HeapPushLocked(lRescheduleEntry.DueAt, lRescheduleEntry.EventId);
+          if lEvent.IsHeapScheduleCurrent(lRescheduleEntry.DueAtUs) then
+            HeapPushLocked(lRescheduleEntry.DueAtUs, lRescheduleEntry.EventId);
         end;
       finally
         fItemsLock.Release;
@@ -4710,13 +4733,11 @@ function FindMaxCronNamedInstantForTests(const aEvent: IMaxCronEvent; const aBas
   out aUtcMs: Int64): Integer;
 var
   lEvent: TmaxCronEvent;
-  lLower, lUpper: TDateTime;
 begin
   if not TryGetCronEvent(aEvent, lEvent) then raise Exception.Create('Expected a maxCron event');
   lEvent.fLock.Acquire;
   try
-    lEvent.GetPlanValidityBounds(CronMsToDateTime(aBaseUtcMs), lLower, lUpper);
-    Result := Ord(lEvent.FindNextNamedInstant(aBaseUtcMs, lLower, lUpper, aUtcMs));
+    Result := Ord(lEvent.FindNextDueUtc(aBaseUtcMs, CronSystemZoneRules, aUtcMs));
   finally
     lEvent.fLock.Release;
   end;
@@ -5073,58 +5094,6 @@ begin
   end;
 end;
 
-procedure TmaxCronEvent.ClearAmbiguousSecondGate;
-begin
-  fAmbiguousSecondGateActive := False;
-  fAmbiguousSecondGatePassedTarget := False;
-  fAmbiguousSecondGateRollbackSeen := False;
-end;
-
-procedure TmaxCronEvent.ArmAmbiguousSecondGate(const aSchedule: TDateTime);
-begin
-  if (fTimeZoneKind = TCronTimeZoneKind.ctzLocal) and fSystemTimeZone.IsAmbiguousTime(aSchedule) then
-  begin
-    fAmbiguousSecondGateActive := True;
-    fAmbiguousSecondGatePassedTarget := False;
-    fAmbiguousSecondGateRollbackSeen := False;
-  end else
-    ClearAmbiguousSecondGate;
-end;
-
-function TmaxCronEvent.ProcessAmbiguousSecondGate(const aNowUs: TCronInstantUs; const aNowBase: TDateTime): Boolean;
-begin
-  Result := True;
-  if not fAmbiguousSecondGateActive then
-    Exit;
-
-  if not fAmbiguousSecondGatePassedTarget then
-  begin
-    if aNowUs < CronDateTimeToInstantUs(fNextSchedule) then
-      Exit(False);
-
-    fAmbiguousSecondGatePassedTarget := True;
-    if (aNowUs > CronDateTimeToInstantUs(fNextSchedule)) and (not fSystemTimeZone.IsAmbiguousTime(aNowBase)) then
-      ClearAmbiguousSecondGate
-    else
-      Exit(False);
-  end else if not fAmbiguousSecondGateRollbackSeen then
-  begin
-    if aNowUs < CronDateTimeToInstantUs(fNextSchedule) then
-    begin
-      fAmbiguousSecondGateRollbackSeen := True;
-      Exit(False);
-    end;
-
-    if (aNowUs > CronDateTimeToInstantUs(fNextSchedule)) and (not fSystemTimeZone.IsAmbiguousTime(aNowBase)) then
-      ClearAmbiguousSecondGate
-    else
-      Exit(False);
-  end else begin
-    if aNowUs < CronDateTimeToInstantUs(fNextSchedule) then
-      Exit(False);
-    ClearAmbiguousSecondGate;
-  end;
-end;
 
 function TmaxCronEvent.TryParseTimeZone(const aValue: string; out aKind: TCronTimeZoneKind;
   out aOffsetMinutes: Integer; out aNormalized: string): Boolean;
@@ -5238,6 +5207,8 @@ begin
     lOffsetMinutes := 0;
   end;
 
+  if (lKind = TCronTimeZoneKind.ctzUtc) or (lKind = TCronTimeZoneKind.ctzFixedOffset) then
+    lZone := CreateCronZone(lNormalized, TCronFixedZoneSource.Create(Int64(lOffsetMinutes) * 60000));
   fLock.Acquire;
   try
     if fTimeZoneId = lNormalized then
@@ -5245,16 +5216,9 @@ begin
     fTimeZoneId := lNormalized;
     fTimeZoneKind := lKind;
     fEventZone := lZone;
-    fNamedNextUtcMs := Low(Int64);
-    fNamedConsumedUtcMs := Low(Int64);
-    fNamedHoldForRollback := False;
-    fTimeZoneOffsetMinutes := lOffsetMinutes;
-    fTimeZoneOffsetDayFraction := lOffsetMinutes / (24 * 60);
-    fUtcToLocalCacheHourKey := Low(Int64);
-    fUtcToLocalCacheOffsetDays := 0;
-    fUtcToLocalCacheStable := False;
-    fPendingDstSecondSchedule := 0;
-    ClearAmbiguousSecondGate;
+    fNextDueUtcMs := Low(Int64);
+
+
     if FEnabled and (fScheduleKind = TCronScheduleKind.Cron) then
       ResetSchedule;
   finally
@@ -5279,8 +5243,7 @@ begin
   fLock.Acquire;
   try
     fDstFallPolicy := Value;
-    fPendingDstSecondSchedule := 0;
-    ClearAmbiguousSecondGate;
+
     if FEnabled and (fScheduleKind = TCronScheduleKind.Cron) then
       ResetSchedule;
   finally
@@ -5347,120 +5310,6 @@ begin
   end;
 end;
 
-function TmaxCronEvent.TryGetStableLocalOffsetForUtc(const aUtc: TDateTime; out aOffsetDays: Double): Boolean;
-var
-  lHourKey: Int64;
-  lHourStartUtc: TDateTime;
-  lHourEndUtc: TDateTime;
-  lStartOffsetMs: Int64;
-  lEndOffsetMs: Int64;
-begin
-  Result := False;
-  aOffsetDays := 0;
-  lHourKey := CronFloorDiv(CronDateTimeToMs(aUtc), 3600000);
-
-  if fUtcToLocalCacheStable and (fUtcToLocalCacheHourKey = lHourKey) then
-  begin
-    aOffsetDays := fUtcToLocalCacheOffsetDays;
-    Exit(True);
-  end;
-
-  lHourStartUtc := CronMsToDateTime(lHourKey * 3600000);
-  lHourEndUtc := CronMsToDateTime((lHourKey + 1) * 3600000 - cCronMsPerSecond);
-  lStartOffsetMs := CronDateTimeToMs(fSystemTimeZone.ToLocalTime(lHourStartUtc)) - CronDateTimeToMs(lHourStartUtc);
-  lEndOffsetMs := CronDateTimeToMs(fSystemTimeZone.ToLocalTime(lHourEndUtc)) - CronDateTimeToMs(lHourEndUtc);
-
-  fUtcToLocalCacheHourKey := lHourKey;
-  if lStartOffsetMs = lEndOffsetMs then
-  begin
-    fUtcToLocalCacheOffsetDays := lStartOffsetMs / cCronMsPerDay;
-    fUtcToLocalCacheOffsetMs := lStartOffsetMs;
-    fUtcToLocalCacheStable := True;
-    aOffsetDays := fUtcToLocalCacheOffsetDays;
-    Result := True;
-  end else begin
-    fUtcToLocalCacheStable := False;
-  end;
-end;
-
-function TmaxCronEvent.SystemLocalToEventLocal(const aSystemLocal: TDateTime): TDateTime;
-var
-  lUtc: TDateTime;
-begin
-  case fTimeZoneKind of
-    TCronTimeZoneKind.ctzNamed:
-      Result := CronMsToDateTime(fEventZone.UtcToLocalMs(SystemLocalToUtcMsEarliest(aSystemLocal)));
-    TCronTimeZoneKind.ctzLocal:
-      Result := aSystemLocal;
-    TCronTimeZoneKind.ctzUtc:
-      Result := fSystemTimeZone.ToUniversalTime(aSystemLocal, False);
-    TCronTimeZoneKind.ctzFixedOffset:
-      begin
-        lUtc := fSystemTimeZone.ToUniversalTime(aSystemLocal, False);
-        Result := lUtc + fTimeZoneOffsetDayFraction;
-      end;
-  else
-    Result := aSystemLocal;
-  end;
-end;
-
-function TmaxCronEvent.EventLocalToSystemLocal(const aEventLocal: TDateTime; out aSystemLocal: TDateTime): Boolean;
-var
-  lUseLocal: TDateTime;
-  lUtc: TDateTime;
-  lOffsetDays: Double;
-begin
-  lUseLocal := aEventLocal;
-  case fTimeZoneKind of
-    TCronTimeZoneKind.ctzLocal:
-      begin
-        if fSystemTimeZone.IsInvalidTime(lUseLocal) then
-        begin
-          if fDstSpringPolicy = TmaxCronDstSpringPolicy.dspSkip then
-            Exit(False);
-          while fSystemTimeZone.IsInvalidTime(lUseLocal) do
-            lUseLocal := IncMinute(lUseLocal, 1);
-        end;
-
-        if fSystemTimeZone.IsAmbiguousTime(lUseLocal) then
-        begin
-          case fDstFallPolicy of
-            TmaxCronDstFallPolicy.dfpRunOncePreferSecondInstance:
-              begin
-                // Keep the same wall-clock time and select the standard-time instance.
-                lUtc := fSystemTimeZone.ToUniversalTime(lUseLocal, False);
-                lUseLocal := fSystemTimeZone.ToLocalTime(lUtc);
-                ArmAmbiguousSecondGate(lUseLocal);
-              end;
-            TmaxCronDstFallPolicy.dfpRunTwice:
-              if fPendingDstSecondSchedule = 0 then
-                fPendingDstSecondSchedule := lUseLocal;
-          end;
-        end;
-
-        aSystemLocal := lUseLocal;
-        Result := True;
-      end;
-    TCronTimeZoneKind.ctzUtc:
-      begin
-        lUtc := aEventLocal;
-        if TryGetStableLocalOffsetForUtc(lUtc, lOffsetDays) then
-          aSystemLocal := lUtc + lOffsetDays
-        else
-          aSystemLocal := fSystemTimeZone.ToLocalTime(lUtc);
-        Result := True;
-      end;
-  else
-    begin
-      lUtc := aEventLocal - fTimeZoneOffsetDayFraction;
-      if TryGetStableLocalOffsetForUtc(lUtc, lOffsetDays) then
-        aSystemLocal := lUtc + lOffsetDays
-      else
-        aSystemLocal := fSystemTimeZone.ToLocalTime(lUtc);
-      Result := True;
-    end;
-  end;
-end;
 
 function TmaxCronEvent.IsWithinValidityWindow(const aSchedule: TDateTime): Boolean;
 var
@@ -5592,52 +5441,21 @@ end;
 
 function TmaxCronEvent.SystemLocalToUtcMsEarliest(const aSystemLocal: TDateTime): Int64;
 var
-  lLocal: TDateTime;
+  lLocalMs: Int64;
+  lZone: ICronZoneRules;
+  lMap: TCronLocalMapping;
 begin
-  lLocal := aSystemLocal;
-  while fSystemTimeZone.IsInvalidTime(lLocal) do lLocal := IncMinute(lLocal, 1);
-  Result := CronDateTimeToMs(fSystemTimeZone.ToUniversalTime(lLocal,
-    fSystemTimeZone.IsAmbiguousTime(lLocal)));
-end;
-
-function TmaxCronEvent.UtcMsToSystemLocal(const aUtcMs: Int64): TDateTime;
-var
-  lUnusedOffsetDays: Double;
-begin
-  if TryGetStableLocalOffsetForUtc(CronMsToDateTime(aUtcMs), lUnusedOffsetDays) then
-    Result := CronMsToDateTime(aUtcMs + fUtcToLocalCacheOffsetMs)
-  else
-    Result := CronMsToDateTime(CronDateTimeToMs(fSystemTimeZone.ToLocalTime(CronMsToDateTime(aUtcMs))));
-end;
-
-procedure TmaxCronEvent.UpdateNamedHold(const aSystemLocal: TDateTime; const aUtcMs: Int64);
-begin
-  fNamedHoldForRollback := fSystemTimeZone.IsAmbiguousTime(aSystemLocal) and
-    (CronDateTimeToMs(fSystemTimeZone.ToUniversalTime(aSystemLocal, True)) <> aUtcMs);
-end;
-
-function TmaxCronEvent.ProcessNamedHold(const aNowUs: TCronInstantUs; const aNowBase: TDateTime): Boolean;
-var
-  lDueUs, lFromUs, lToUs: TCronInstantUs;
-begin
-  if not fNamedHoldForRollback then Exit(True);
-  lDueUs := CronDateTimeToInstantUs(fNextSchedule);
-  if aNowUs < lDueUs then Exit(False);
-  if ((fSharedState <> nil) and fSharedState.TryGetLastWallRollback(lFromUs, lToUs) and
-    (lDueUs < lFromUs) and (lToUs <= lDueUs + 60000000)) or
-    (not fSystemTimeZone.IsAmbiguousTime(aNowBase)) then
+  lZone := CronSystemZoneRules;
+  lLocalMs := CronDateTimeToMs(aSystemLocal);
+  lMap := lZone.MapLocal(lLocalMs);
+  while lMap.Kind = clkGap do
   begin
-    fNamedHoldForRollback := False;
-    Exit(True);
+    Inc(lLocalMs, 60000);
+    lMap := lZone.MapLocal(lLocalMs);
   end;
-  Result := False;
+  Result := lMap.FirstUtcMs;
 end;
 
-procedure TmaxCronEvent.ConsumeNamedInstant;
-begin
-  if (fNamedNextUtcMs <> Low(Int64)) and (fNamedNextUtcMs > fNamedConsumedUtcMs) then
-    fNamedConsumedUtcMs := fNamedNextUtcMs;
-end;
 
 function TmaxCronEvent.NamedFirstOccurrence(const aFromLocalMs: Int64;
   out aLocalMs: Int64): TCronInstantSearchResult;
@@ -5711,7 +5529,7 @@ begin
   aBudgetCalls := lWalkCalls;
 end;
 
-function TmaxCronEvent.FindNextNamedInstant(const aBaseUtcMs: Int64;
+function TmaxCronEvent.FindNextZoneDue(const aZone, aHostZone: ICronZoneRules; const aBaseUtcMs: Int64;
   const aPlanLower, aPlanUpper: TDateTime; out aUtcMs: Int64): TFindNextScheduleResult;
 const
   // Rejected instants lie in the two edge bands around From/To. Even the
@@ -5743,14 +5561,14 @@ begin
   end;
   while True do
   begin
-    case SearchNextZoneInstant(fEventZone, lAfterUtcMs, lFall, aUtcMs, lCalls, lBudgetCalls) of
+    case SearchNextZoneInstant(aZone, lAfterUtcMs, lFall, aUtcMs, lCalls, lBudgetCalls) of
       cisFound:
         begin
           fNamedSearchCalls := lCalls;
           // UTC is strictly increasing. Beyond To + max-system-offset,
           // every possible projected system value is above the original To.
           if aUtcMs > lLastUtcMs then Exit(TFindNextScheduleResult.fnsNotFound);
-          if IsWithinValidityWindow(UtcMsToSystemLocal(aUtcMs)) then
+          if IsDueWithinValidityWindow(aUtcMs, aHostZone) then
             Exit(TFindNextScheduleResult.fnsFound);
           Inc(lValidityCandidates);
           if lValidityCandidates > cMaxValidityCandidates then
@@ -5773,97 +5591,44 @@ begin
   end;
 end;
 
-function TmaxCronEvent.FindNextScheduleWithPolicies(const aBaseSystemLocal: TDateTime; out aNextSystemLocal: TDateTime): TFindNextScheduleResult;
-const
-  cMaxAttempts = 4096;
-  cMaxValidityCandidates = 8 * cCronZoneMaxAbsOffsetMs div cCronMsPerSecond + 8;
+function TmaxCronEvent.IsDueWithinValidityWindow(const aUtcMs: Int64; const aHostZone: ICronZoneRules): Boolean;
 var
-  lEventBase: TDateTime;
-  lEventCursor: TDateTime;
-  lEventNext: TDateTime;
-  lPlanLower: TDateTime;
-  lPlanUpper: TDateTime;
-  lAttempt, lValidityCandidates: Integer;
-  lEventNextMs, lAdvanceSecond, lBaseUtcMs, lUtcMs: Int64;
+  lSystemMs: Int64;
 begin
+  if (FValidFrom <= 0) and (FValidTo <= 0) then Exit(True);
+  lSystemMs := aHostZone.UtcToLocalMs(aUtcMs);
+  Result := ((FValidFrom <= 0) or (lSystemMs >= CronDateTimeToMs(FValidFrom))) and
+    ((FValidTo <= 0) or (lSystemMs <= CronDateTimeToMs(FValidTo)));
+end;
+
+function TmaxCronEvent.FindNextDueUtc(const aBaseUtcMs: Int64; const aHostZone: ICronZoneRules;
+  out aUtcMs: Int64): TFindNextScheduleResult;
+var
+  lZone: ICronZoneRules;
+  lLower, lUpper, lBaseSystemLocal: TDateTime;
+begin
+  aUtcMs := 0;
+  fNextDueUtcMs := Low(Int64);
   if (FValidFrom > 0) and (FValidTo > 0) and
-    (CronDateTimeToMs(FValidFrom) > CronDateTimeToMs(FValidTo)) then
-    Exit(TFindNextScheduleResult.fnsNotFound);
-  GetPlanValidityBounds(aBaseSystemLocal, lPlanLower, lPlanUpper);
-  if fTimeZoneKind = TCronTimeZoneKind.ctzNamed then
+    (CronDateTimeToMs(FValidFrom) > CronDateTimeToMs(FValidTo)) then Exit(TFindNextScheduleResult.fnsNotFound);
+  lZone := fEventZone;
+  if fTimeZoneKind = TCronTimeZoneKind.ctzLocal then
   begin
-    lBaseUtcMs := SystemLocalToUtcMsEarliest(aBaseSystemLocal);
-    if (fNamedConsumedUtcMs <> Low(Int64)) and (fNamedConsumedUtcMs > lBaseUtcMs) then
-      lBaseUtcMs := fNamedConsumedUtcMs;
-    Result := FindNextNamedInstant(lBaseUtcMs, lPlanLower, lPlanUpper, lUtcMs);
-    if Result = TFindNextScheduleResult.fnsFound then
-    begin
-      aNextSystemLocal := UtcMsToSystemLocal(lUtcMs);
-      fNamedNextUtcMs := lUtcMs;
-      UpdateNamedHold(aNextSystemLocal, lUtcMs);
-    end else begin
-      fNamedNextUtcMs := Low(Int64);
-      fNamedHoldForRollback := False;
-      if Result = TFindNextScheduleResult.fnsSearchLimitReached then
-        aNextSystemLocal := IncSecond(aBaseSystemLocal, 1);
-    end;
-    Exit;
+    lZone := aHostZone;
+    fEventZone := aHostZone;
   end;
-  if fPendingDstSecondSchedule > 0 then
+  lBaseSystemLocal := 0;
+  if FValidFrom > 0 then lBaseSystemLocal := CronMsToDateTime(aHostZone.UtcToLocalMs(aBaseUtcMs));
+  GetPlanValidityBounds(lBaseSystemLocal, lLower, lUpper);
+  Result := FindNextZoneDue(lZone, aHostZone, aBaseUtcMs, lLower, lUpper, aUtcMs);
+  if Result = TFindNextScheduleResult.fnsSearchLimitReached then aUtcMs := aBaseUtcMs + cCronMsPerSecond;
+  if Result <> TFindNextScheduleResult.fnsNotFound then
   begin
-    aNextSystemLocal := fPendingDstSecondSchedule;
-    fPendingDstSecondSchedule := 0;
-    if IsWithinValidityWindow(aNextSystemLocal) then
-    begin
-      if (fTimeZoneKind = TCronTimeZoneKind.ctzLocal) and (fDstFallPolicy = TmaxCronDstFallPolicy.dfpRunTwice) then
-        ArmAmbiguousSecondGate(aNextSystemLocal)
-      else
-        ClearAmbiguousSecondGate;
-      Exit(TFindNextScheduleResult.fnsFound);
-    end;
-    ClearAmbiguousSecondGate;
+    fNextDueUtcMs := aUtcMs;
+    fDueBaseUtcMs := aBaseUtcMs;
+    if fTimeZoneKind = TCronTimeZoneKind.ctzLocal then fDueHostZone := aHostZone;
+    fNextSchedule := CronMsToDateTime(aHostZone.UtcToLocalMs(aUtcMs));
   end;
-
-  lEventBase := SystemLocalToEventLocal(aBaseSystemLocal);
-  lEventCursor := lEventBase;
-
-  lAttempt := 0;
-  lValidityCandidates := 0;
-  while lAttempt < cMaxAttempts do
-  begin
-    Inc(lAttempt);
-    if not fScheduler.FindNextScheduleDate(lEventCursor, lEventNext, lPlanLower, lPlanUpper) then
-      Exit(TFindNextScheduleResult.fnsNotFound);
-
-    lEventNextMs := CronDateTimeToMs(lEventNext);
-    if TryGetExclusionAdvance(lEventNextMs, lAdvanceSecond) then
-    begin
-      lEventCursor := CronSecondToDateTime(lAdvanceSecond);
-      Continue;
-    end;
-
-    if not EventLocalToSystemLocal(lEventNext, aNextSystemLocal) then
-    begin
-      lEventCursor := lEventNext;
-      Continue;
-    end;
-    if not IsWithinValidityWindow(aNextSystemLocal) then
-    begin
-      fPendingDstSecondSchedule := 0;
-      ClearAmbiguousSecondGate;
-      // Nominal candidates are increasing. Their conservative plan ceiling,
-      // not a rejected projected wall value, proves exhaustion across rollback.
-      Inc(lValidityCandidates);
-      if lValidityCandidates > cMaxValidityCandidates then Break;
-      Dec(lAttempt); // Validity filtering does not spend the exclusion budget.
-      lEventCursor := lEventNext;
-      Continue;
-    end;
-    Exit(TFindNextScheduleResult.fnsFound);
-  end;
-
-  aNextSystemLocal := IncSecond(aBaseSystemLocal, 1);
-  Result := TFindNextScheduleResult.fnsSearchLimitReached;
 end;
 
 procedure TmaxCronEvent.SetDialect(const Value: TmaxCronDialect);
@@ -5939,23 +5704,25 @@ begin
   Result := '#' + CronIntToStr(fId);
 end;
 
-function TmaxCronEvent.TryGetHeapScheduleSnapshot(out aId: Int64; out aDueAt: TDateTime): Boolean;
+function TmaxCronEvent.TryGetHeapScheduleSnapshot(out aId: Int64; out aDueAtUs: Int64): Boolean;
 begin
   fLock.Acquire;
   try
     aId := fId;
-    aDueAt := fNextSchedule;
-    Result := (fScheduleKind = TCronScheduleKind.Cron) and (not fPendingDestroy) and FEnabled and (fNextSchedule > 0);
+    aDueAtUs := 0;
+    Result := (fScheduleKind = TCronScheduleKind.Cron) and (not fPendingDestroy) and FEnabled and (fNextDueUtcMs <> Low(Int64));
+    if Result then aDueAtUs := fNextDueUtcMs * cCronUsPerMs;
   finally
     fLock.Release;
   end;
 end;
 
-function TmaxCronEvent.IsHeapScheduleCurrent(const aDueAt: TDateTime): Boolean;
+function TmaxCronEvent.IsHeapScheduleCurrent(const aDueAtUs: Int64): Boolean;
 begin
   fLock.Acquire;
   try
-    Result := (fScheduleKind = TCronScheduleKind.Cron) and (not fPendingDestroy) and FEnabled and (fNextSchedule > 0) and (fNextSchedule = aDueAt);
+    Result := (fScheduleKind = TCronScheduleKind.Cron) and (not fPendingDestroy) and FEnabled and
+      (fNextDueUtcMs <> Low(Int64)) and (fNextDueUtcMs * cCronUsPerMs = aDueAtUs);
   finally
     fLock.Release;
   end;
@@ -6422,8 +6189,7 @@ begin
     fIntervalAwaitingCompletion := False;
     SetIntervalWakeLocked(0, False);
     fPendingRunGenerations.Clear;
-    fPendingDstSecondSchedule := 0;
-    ClearAmbiguousSecondGate;
+
     FOnScheduleEvent := nil;
     FOnScheduleProc := nil;
     FUserDataInterface := nil;
@@ -6896,7 +6662,7 @@ begin
   Result := True;
 end;
 
-procedure TmaxCronEvent.checkTimer(const aNowUs: TCronInstantUs);
+procedure TmaxCronEvent.checkTimer(const aNowUs: TCronInstantUs; const aHostZone: ICronZoneRules);
 var
   lOnEvent: TmaxCronNotifyEvent;
   lOnProc: TmaxCronNotifyProc;
@@ -6909,10 +6675,10 @@ var
   lCatchUpCount: Cardinal;
   lAllowDisabledDispatch: Boolean;
   lFindResult: TFindNextScheduleResult;
-  lNowBase: TDateTime;
+  lNowBaseUtcMs, lNextUtcMs: Int64;
   lDueUs: TCronInstantUs;
 begin
-  lNowBase := CronSecondToDateTime(CronInstantFloorSecond(aNowUs));
+  lNowBaseUtcMs := CronInstantFloorSecond(aNowUs) * cCronMsPerSecond;
   lOnEvent := nil;
   lOnProc := nil;
   lInvokeMode := TmaxCronInvokeMode.imMainThread;
@@ -6922,10 +6688,13 @@ begin
   fLock.Acquire;
   try
     if (fScheduleKind <> TCronScheduleKind.Cron) or (not FEnabled) then Exit;
+    if (fTimeZoneKind = TCronTimeZoneKind.ctzLocal) and (fDueHostZone <> aHostZone) then
+      RefreshHostZone(aHostZone);
+    if not FEnabled then Exit;
     if fNextScheduleNeedsResolve then
     begin
-      if aNowUs < CronDateTimeToInstantUs(fNextSchedule) then Exit;
-      lFindResult := FindNextScheduleWithPolicies(lNowBase, fNextSchedule);
+      if aNowUs < fNextDueUtcMs * cCronUsPerMs then Exit;
+      lFindResult := FindNextDueUtc(lNowBaseUtcMs, aHostZone, lNextUtcMs);
       case lFindResult of
         TFindNextScheduleResult.fnsFound:
           fNextScheduleNeedsResolve := False;
@@ -6939,9 +6708,9 @@ begin
       end;
       Exit;
     end;
-    if not ProcessNamedHold(aNowUs, lNowBase) then Exit;
-    if not ProcessAmbiguousSecondGate(aNowUs, lNowBase) then Exit;
-    lDueUs := CronDateTimeToInstantUs(fNextSchedule);
+
+
+    lDueUs := fNextDueUtcMs * cCronUsPerMs;
     if aNowUs < lDueUs then Exit;
 
     if fScheduler.ExecutionLimit <> 0 then
@@ -6991,8 +6760,8 @@ begin
       if not FEnabled then Exit;
       if fNextScheduleNeedsResolve then
       begin
-        if aNowUs < CronDateTimeToInstantUs(fNextSchedule) then Exit;
-        lFindResult := FindNextScheduleWithPolicies(lNowBase, fNextSchedule);
+        if aNowUs < fNextDueUtcMs * cCronUsPerMs then Exit;
+        lFindResult := FindNextDueUtc(lNowBaseUtcMs, aHostZone, lNextUtcMs);
         case lFindResult of
           TFindNextScheduleResult.fnsFound:
             fNextScheduleNeedsResolve := False;
@@ -7006,9 +6775,9 @@ begin
         end;
         Exit;
       end;
-      if not ProcessNamedHold(aNowUs, lNowBase) then Exit;
-      if not ProcessAmbiguousSecondGate(aNowUs, lNowBase) then Exit;
-      lDueUs := CronDateTimeToInstantUs(fNextSchedule);
+
+
+      lDueUs := fNextDueUtcMs * cCronUsPerMs;
       if aNowUs < lDueUs then Exit;
 
       if fScheduler.ExecutionLimit <> 0 then
@@ -7020,8 +6789,8 @@ begin
 
       if (lMisfire = TmaxCronMisfirePolicy.mpSkip) and (aNowUs - lDueUs >= cCronUsPerSecond) then
       begin
-        ConsumeNamedInstant;
-        lFindResult := FindNextScheduleWithPolicies(lNowBase, fNextSchedule);
+        fLastDueUtcMs := fNextDueUtcMs;
+        lFindResult := FindNextDueUtc(lNowBaseUtcMs, aHostZone, lNextUtcMs);
         case lFindResult of
           TFindNextScheduleResult.fnsFound:
             fNextScheduleNeedsResolve := False;
@@ -7039,12 +6808,12 @@ begin
       case lMisfire of
         TmaxCronMisfirePolicy.mpSkip, TmaxCronMisfirePolicy.mpFireOnceNow:
           begin
-            lFireAt := fNextSchedule;
+            lFireAt := CronMsToDateTime(aHostZone.UtcToLocalMs(fNextDueUtcMs));
             fLastExecutionTime := lFireAt;
-            ConsumeNamedInstant;
+            fLastDueUtcMs := fNextDueUtcMs;
             if FEnabled then
             begin
-              lFindResult := FindNextScheduleWithPolicies(lNowBase, fNextSchedule);
+              lFindResult := FindNextDueUtc(lNowBaseUtcMs, aHostZone, lNextUtcMs);
               case lFindResult of
                 TFindNextScheduleResult.fnsFound:
                   fNextScheduleNeedsResolve := False;
@@ -7061,12 +6830,12 @@ begin
           end;
       else
         begin
-          lFireAt := fNextSchedule;
+          lFireAt := CronMsToDateTime(aHostZone.UtcToLocalMs(fNextDueUtcMs));
           fLastExecutionTime := lFireAt;
-          ConsumeNamedInstant;
+          fLastDueUtcMs := fNextDueUtcMs;
           if FEnabled then
           begin
-            lFindResult := FindNextScheduleWithPolicies(fLastExecutionTime, fNextSchedule);
+            lFindResult := FindNextDueUtc(fLastDueUtcMs, aHostZone, lNextUtcMs);
             case lFindResult of
               TFindNextScheduleResult.fnsFound:
                 fNextScheduleNeedsResolve := False;

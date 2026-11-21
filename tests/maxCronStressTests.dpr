@@ -6,9 +6,9 @@ program maxCronStressTests;
 
 uses
   System.SysUtils,
-  DUnitX.TestFramework,
   DUnitX.Loggers.Console,
   DUnitX.RunResults,
+  DUnitX.TestFramework,
   maxCron.Internal.DeadlineQueue in '..\maxCron.Internal.DeadlineQueue.pas',
   maxCron.Internal.Platform in '..\maxCron.Internal.Platform.pas',
   maxCron.Internal.Text in '..\maxCron.Internal.Text.pas',
@@ -22,7 +22,10 @@ uses
   TestLongSoak24h in 'unit\TestLongSoak24h.pas',
   TestWatchdogDiagnostics in 'unit\TestWatchdogDiagnostics.pas',
   TestCronPhaseDifferential in 'unit\TestCronPhaseDifferential.pas',
-  TestDeadlineTimerStress in 'unit\TestDeadlineTimerStress.pas';
+  TestDeadlineTimerStress in 'unit\TestDeadlineTimerStress.pas',
+  TestLocalOverlap in 'unit\TestLocalOverlap.pas',
+  TestLocalOverlapStress in 'unit\TestLocalOverlapStress.pas',
+  TestZoneFakes in 'unit\TestZoneFakes.pas';
 
 var
   Runner: ITestRunner;
@@ -38,6 +41,7 @@ begin
     TDUnitX.RegisterTestFixture(TTestWatchdogDiagnostics);
     TDUnitX.RegisterTestFixture(TTestCronPhaseDifferential);
     TDUnitX.RegisterTestFixture(TTestDeadlineTimerStress);
+    TDUnitX.RegisterTestFixture(TTestLocalOverlapStress);
     Runner := TDUnitX.CreateRunner;
     Runner.UseRTTI := True;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));

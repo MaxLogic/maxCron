@@ -33,6 +33,9 @@ All notable user-visible changes to this project will be documented in this file
 - Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
 
 ### Changed
+- LOCAL `dspRunAtNextValidTime` now shifts a missing occurrence to the transition instant, matching named zones. For example, 02:30:30 shifts to 03:00:00 instead of 03:00:30.
+- LOCAL on Windows uses the Windows conversion rules on both Delphi and FPC, and picks up a host-zone change on the next scheduler pass.
+- `NextSchedule` and `LastExecution` of cron events are the exact `TDateTime` of their millisecond (equal to `EncodeDateTime`); previously some values differed in the last bits.
 - Cron events now include an occurrence exactly at `ValidFrom` when it is after the search base. Both validity bounds are inclusive, as for interval events.
 - Day-of-week ranges `0-7` (including `SUN-7`) now span every day in `cdMaxCron` and `cdStandard`, instead of Sunday only. Stepped forms count from Sunday: `0-7/2` selects Sun,Tue,Thu,Sat and `0-7/3` selects Sun,Wed,Sat. Steps of 7 or more still select Sunday only. Quartz numbering is unchanged (`1` = Sun, `7` = Sat).
 - Stepped wrapped day-of-week ranges now count continuously across Sunday in every dialect. For example, `4-2/2` selects Thu,Sat,Mon instead of Thu,Sat,Sun,Tue; `1-7/4` selects Mon,Fri without adding Sun (`cdMaxCron`/`cdStandard`). Quartz `5-3/2` and `2-1/4` use the same rule. Unstepped wraps are unchanged.
@@ -48,6 +51,13 @@ All notable user-visible changes to this project will be documented in this file
 - Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
 
 ### Fixed
+- Restoring an enabled cron or interval event retains an eligible saved overdue occurrence even when a fresh search would find no future occurrence. Restored execution limits and inclusive validity bounds still apply.
+- LOCAL PreferSecond and RunTwice schedules now fire at the start of the second pass when due at the start of a repeated hour; `mpSkip` no longer loses those occurrences.
+- Heap, shadow and auto engines now dispatch LOCAL second instances at their UTC dues, including occurrences inside the repeated hour.
+- Dense LOCAL RunTwice schedules preserve every first- and second-pass occurrence in UTC order; a pending second instance no longer blocks later first instances.
+- UTC and fixed-offset schedules on a DST host no longer fire early or lose occurrences in the host's repeated hour.
+- Starting, enabling, resetting, resuming or restoring cron schedules during the host's repeated hour selects the policy instances relative to the true UTC instant, including named zones and misfire handling.
+- Spring-gap shifts no longer hide a following valid occurrence after a mid-minute blackout exclusion.
 - Avoided excessive scanning before a future `ValidFrom` for dense LOCAL schedules that skip invalid gap times.
 - Fixed validity windows across timezone gaps and repeated hours. Original bounds apply to final scheduler-clock occurrences; an eligible second instance is retained when `ValidFrom` falls between the two instances, fixing a pre-existing named-zone search defect.
 - Cron events no longer schedule or fire an occurrence after `ValidTo`, including searches advanced by calendar exclusions, DST shifts and restored schedules.

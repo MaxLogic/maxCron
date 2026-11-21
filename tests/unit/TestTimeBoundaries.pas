@@ -94,6 +94,7 @@ type
     [Test] procedure CronValidityPlanToOvershoot;
     [Test] procedure CronValidityAfterDstConversion;
     [Test] procedure CalculationValidityRepresentation;
+    [Test] procedure CarrierDomainContracts;
     [Test] procedure ExactMsReference;
     [Test] procedure ExactMsQueries;
     [Test] procedure WeekdaysDocumentedContract;
@@ -188,6 +189,22 @@ begin
   if lGuard and (lSticky or ((lQuotient and 1) <> 0)) then
     Inc(lQuotient);
   Result := Int64(lQuotient);
+end;
+
+// Zone oracles use signed calendar carriers; the rational table above describes
+// the scheduler conversion's clamped domain. Keep those two contracts separate.
+function CalendarCarrierMs(const aValue: TDateTime): Int64;
+begin
+  // As in Phase 7, classify NaN before any ordered comparison under FPC.
+  if IsNan(aValue) then
+    Exit(0);
+  if not (aValue < 0) then
+    Exit(CarrierMs(aValue));
+  // Negative infinity is outside the calendar domain. Never pass it to Trunc:
+  // Delphi masks that invalid operation, while FPC raises EInvalidOp.
+  if IsInfinite(aValue) then
+    Exit(0);
+  Result := 2 * Trunc(aValue) * MSecsPerDay + CarrierMs(-aValue);
 end;
 
 function CarrierUs(const aValue: TDateTime): Int64;
@@ -1160,7 +1177,7 @@ function TBoundaryZone.ToUniversalTime(const aLocal: TDateTime;
 var
   lMs, lOffset: Int64;
 begin
-  lMs := CarrierMs(aLocal);
+  lMs := CalendarCarrierMs(aLocal);
   lOffset := 3600000;
   if (lMs >= fSpringMs + 10800000) and (lMs < fFallMs + 7200000) then
     lOffset := 7200000;
@@ -1173,7 +1190,7 @@ function TBoundaryZone.ToLocalTime(const aUtc: TDateTime): TDateTime;
 var
   lMs, lOffset: Int64;
 begin
-  lMs := CarrierMs(aUtc);
+  lMs := CalendarCarrierMs(aUtc);
   lOffset := 3600000;
   if (lMs >= fSpringMs + 3600000) and (lMs < fFallMs + 3600000) then
     lOffset := 7200000;
@@ -1184,7 +1201,7 @@ function TBoundaryZone.IsAmbiguousTime(const aLocal: TDateTime): Boolean;
 var
   lMs: Int64;
 begin
-  lMs := CarrierMs(aLocal);
+  lMs := CalendarCarrierMs(aLocal);
   Result := (lMs >= fFallMs + 7200000) and (lMs < fFallMs + 10800000);
 end;
 
@@ -1192,8 +1209,37 @@ function TBoundaryZone.IsInvalidTime(const aLocal: TDateTime): Boolean;
 var
   lMs: Int64;
 begin
-  lMs := CarrierMs(aLocal);
+  lMs := CalendarCarrierMs(aLocal);
   Result := (lMs >= fSpringMs + 7200000) and (lMs < fSpringMs + 10800000);
+end;
+
+procedure TTestTimeBoundaries.CarrierDomainContracts;
+const
+  cSignedMs: array[0..8] of Int64 = (-172800001, -172800000, -86400001,
+    -86400000, -86399999, -1001, -1, 0, 1);
+  cClampedBits: array[0..2] of Int64 = (Int64($BFF0000000000000),
+    Int64($C146924100000000), Int64($FFF0000000000000));
+var
+  lZone: ICronTimeZone;
+  lValue, lLocal: TDateTime;
+  lMs: Int64;
+  i: Integer;
+begin
+  lZone := TBoundaryZone.Create;
+  for lMs in cSignedMs do
+  begin
+    lValue := IncMilliSecond(EncodeDate(1899, 12, 30), lMs);
+    lLocal := lZone.ToLocalTime(lValue);
+    Assert.AreEqual(lMs + 3600000, GridMs(lLocal), 'signed fake UTC-to-local');
+    Assert.AreEqual(lMs, GridMs(lZone.ToUniversalTime(lLocal, False)),
+      'signed fake local-to-UTC');
+  end;
+  for i := Low(cClampedBits) to High(cClampedBits) do
+  begin
+    Move(cClampedBits[i], lValue, SizeOf(lValue));
+    Assert.AreEqual(Int64(0), CarrierMs(lValue),
+      'clamped carrier bits=' + IntToHex(cClampedBits[i], 16));
+  end;
 end;
 
 procedure CheckHistoricalBlackout(const aStart: Boolean);
@@ -1446,7 +1492,7 @@ var
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
   lZone: ICronTimeZone;
-  lWallUs, lSpringMs, lFallMs, lDueUs, lExpectedMs: Int64;
+  lWallUs, lSpringMs, lFallMs, lDueUs, lExpectedMs, lUtcUs: Int64;
   lFires, lExpectedFirst, lExpectedSecond: Integer;
 begin
   lZone := TBoundaryZone.Create;
@@ -1478,35 +1524,39 @@ begin
           lExpectedFirst := 1;
         Assert.AreEqual(lExpectedFirst, lFires, 'spring precise edge');
       end;
-    for p := Ord(Low(TmaxCronDstFallPolicy)) to Ord(High(TmaxCronDstFallPolicy)) do
-      for i := 0 to High(cDelta) do
-      begin
-        lEvent.Stop;
-        lEvent.DstFallPolicy := TmaxCronDstFallPolicy(p);
-        lDueUs := (lFallMs + 7200000) * 1000;
-        lWallUs := lDueUs - 1000000;
-        lEvent.Run;
-        lFires := 0;
-        lCron.TickAtUs(lDueUs + cDelta[i]);
-        lExpectedFirst := 0;
-        if (cDelta[i] >= 0) and (p <> Ord(TmaxCronDstFallPolicy.dfpRunOncePreferSecondInstance)) then
-          lExpectedFirst := 1;
-        Assert.AreEqual(lExpectedFirst, lFires, 'fall first instance');
-        // Ensure target reached, then simulate rollback and the repeated instant.
-        lCron.TickAtUs(lDueUs + 999999);
-        lCron.TickAtUs(lDueUs - 1);
-        lCron.TickAtUs(lDueUs + cDelta[i]);
-        lExpectedSecond := 1;
-        if p = Ord(TmaxCronDstFallPolicy.dfpRunOncePreferSecondInstance) then
-          lExpectedSecond := 0;
-        if cDelta[i] >= 0 then
+    SetMaxCronUtcClockHook(function: Int64 begin Result := lUtcUs; end);
+    try
+      for p := Ord(Low(TmaxCronDstFallPolicy)) to Ord(High(TmaxCronDstFallPolicy)) do
+        for i := 0 to High(cDelta) do
         begin
+          lEvent.Stop;
+          lEvent.DstFallPolicy := TmaxCronDstFallPolicy(p);
+          // Local02:00: first instance at00:00Z, second at01:00Z.
+          lDueUs := lFallMs * 1000;
+          lUtcUs := lDueUs - 1000000;
+          lEvent.Run;
+          lFires := 0;
+          lCron.TickAtUtcUs(lDueUs + cDelta[i]);
+          lExpectedFirst := 0;
+          if (cDelta[i] >= 0) and (p <> Ord(TmaxCronDstFallPolicy.dfpRunOncePreferSecondInstance)) then
+            lExpectedFirst := 1;
+          Assert.AreEqual(lExpectedFirst, lFires, 'fall first instance');
+          lCron.TickAtUtcUs(lDueUs + 999999);
+          lCron.TickAtUtcUs(lDueUs + 3600000000 + cDelta[i]);
           lExpectedSecond := 1;
-          if p = Ord(TmaxCronDstFallPolicy.dfpRunTwice) then
-            lExpectedSecond := 2;
+          if p = Ord(TmaxCronDstFallPolicy.dfpRunOncePreferSecondInstance) then
+            lExpectedSecond := 0;
+          if cDelta[i] >= 0 then
+          begin
+            lExpectedSecond := 1;
+            if p = Ord(TmaxCronDstFallPolicy.dfpRunTwice) then
+              lExpectedSecond := 2;
+          end;
+          Assert.AreEqual(lExpectedSecond, lFires, 'fall repeated instance');
         end;
-        Assert.AreEqual(lExpectedSecond, lFires, 'fall repeated instance');
-      end;
+    finally
+      SetMaxCronUtcClockHook(nil);
+    end;
     // The fake-zone boundary classifier itself follows exact-ms carrier semantics at ulp neighbours.
     for k := -8 to 8 do
       for i := 0 to 3 do
@@ -1587,6 +1637,38 @@ begin
   end;
 end;
 
+function BoundaryGapReferenceNext(const aUtcUs, aDayMs: Int64;
+  const aSpring: TmaxCronDstSpringPolicy): Int64;
+var
+  g: TGarbos;
+  lPlan: TCronSchedulePlan;
+  lChanges: TArray<TZoneChange>;
+  lMap: TCronLocalMapping;
+  lNext: TDateTime;
+  lCursor, lLocal, lBase, lBest: Int64;
+begin
+  SetLength(lChanges, 1);
+  lChanges[0].UtcMs := aDayMs + 3600000;
+  lChanges[0].OffsetMs := 7200000;
+  lBase := CronFloorDiv(aUtcUs, 1000000) * 1000;
+  lBest := High(Int64);
+  GC(lPlan, TCronSchedulePlan.Create, g);
+  lPlan.Parse('* * * * * * *');
+  lCursor := lBase + 3600000 - 1000;
+  while lPlan.FindNextScheduleDate(PolicyGrid(lCursor), lNext) do
+  begin
+    lLocal := CarrierMs(lNext);
+    if lLocal > lBase + 7200000 + 1000 then Break;
+    lCursor := lLocal;
+    lMap := ReferenceMapping(3600000, lChanges, lLocal);
+    if ((lMap.Kind <> clkGap) or (aSpring = dspRunAtNextValidTime)) and
+      (lMap.FirstUtcMs > lBase) and (lMap.FirstUtcMs < lBest) then lBest := lMap.FirstUtcMs;
+  end;
+  Assert.IsTrue(lBest < High(Int64), 'UTC gap reference found an instance');
+  Result := lBest + 3600000;
+  if lBest >= lChanges[0].UtcMs then Result := lBest + 7200000;
+end;
+
 procedure TTestTimeBoundaries.GeneratedDstSearchEdges;
 const
   cDelta: array[0..8] of Integer = (-999999, -501, -500, -499, -1, 0, 1, 500, 999999);
@@ -1599,22 +1681,17 @@ var
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
   lZone: ICronTimeZone;
-  lWallUs, lDayMs, lEdgeUs, lExpectedMs: Int64;
+  lWallUs, lDayMs, lEdgeUs, lExpectedMs, lUtcUs: Int64;
 begin
   lZone := TBoundaryZone.Create;
   SetCronSystemTimeZoneForTests(lZone);
   SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
   try
-    GC(lCron, TmaxCron.Create(ctPortable), g);
-    lEvent := lCron.Add('dst-search-edges');
-    lEvent.EventPlan := '* * * * * * *';
     for d := 0 to 1 do
       for e := 2 to 3 do
         for p := 0 to 1 do
           for i := 0 to High(cDelta) + 17 do
           begin
-            lEvent.Stop;
-            lEvent.DstSpringPolicy := TmaxCronDstSpringPolicy(p);
             lDayMs := GridMs(EncodeDate(2075, 3, 31));
             if d = 1 then
               lDayMs := GridMs(EncodeDate(2075, 10, 27));
@@ -1631,9 +1708,29 @@ begin
               else
                 Inc(lExpectedMs, 3600000);
             end;
-            lEvent.Run;
-            Assert.AreEqual(lExpectedMs, CarrierMs(lEvent.NextSchedule),
-              Format('transition=%d edge=%d policy=%d variant=%d nowUs=%d', [d, e, p, i, lWallUs]));
+            if lZone.IsInvalidTime(PolicyGrid(CronFloorDiv(lWallUs, 1000))) then
+            begin
+              // Replace only nonexistent readings by real instants at the
+              // same displacement from the UTC transition, retaining density.
+              lUtcUs := (lDayMs + 3600000) * 1000 + lWallUs - lEdgeUs;
+              SetMaxCronUtcClockHook(function: Int64 begin Result := lUtcUs; end);
+              lExpectedMs := BoundaryGapReferenceNext(lUtcUs, lDayMs, TmaxCronDstSpringPolicy(p));
+            end;
+            try
+              // Rows are independent histories; do not carry a previous
+              // row's overlap high-water mark into the next clock sample.
+              GC(lCron, TmaxCron.Create(ctPortable), g);
+              lEvent := lCron.Add('dst-search-edges');
+              lEvent.EventPlan := '* * * * * * *';
+              lEvent.DstSpringPolicy := TmaxCronDstSpringPolicy(p);
+              lEvent.Run;
+              Assert.AreEqual(lExpectedMs, CarrierMs(lEvent.NextSchedule),
+                Format('transition=%d edge=%d policy=%d variant=%d nowUs=%d', [d, e, p, i, lWallUs]));
+            finally
+              lEvent := nil;
+              g.Clear;
+              SetMaxCronUtcClockHook(nil);
+            end;
           end;
   finally
     g.Clear;

@@ -72,6 +72,11 @@ type
 // Re-reads the system zone on every call, including its exception behavior.
 function CronSystemTimeZone: ICronTimeZone;
 function CronSystemZoneRules: ICronZoneRules;
+// A bounded thread-local memo scoped to one scheduler pass. Nested passes own
+// separate scopes, and the original rule interfaces keep their identity.
+procedure CronBeginZonePeriodMemo;
+procedure CronEndZonePeriodMemo;
+
 {$IFDEF MAXCRON_TESTS}
 function CreateCronProbeZoneForTests(const aZone: ICronTimeZone): ICronZoneRules;
 // Set before creating a scheduler; nil restores the RTL zone. Tests run serially.
@@ -153,6 +158,21 @@ uses
 {$I maxCron.Internal.TimeZoneNames.inc}
 
 type
+  TCronPeriodMemoEntry = record
+    Key: Pointer;
+    Zone: ICronZoneRules;
+    Period: TCronZonePeriod;
+  end;
+  TCronPeriodMemo = class
+  private
+    fEntries: array[0..3] of TCronPeriodMemoEntry;
+    fCount, fReplace: Integer;
+  public
+    Previous: TCronPeriodMemo;
+    function TryGet(const aKey: Pointer; const aUtcMs: Int64; out aPeriod: TCronZonePeriod): Boolean;
+    procedure Put(const aKey: Pointer; const aZone: ICronZoneRules; const aPeriod: TCronZonePeriod);
+  end;
+
   TCronZoneRules = class(TInterfacedObject, ICronZoneRules)
   private
     fName: string;
@@ -187,6 +207,9 @@ type
     function IsInvalidTime(const aLocal: TDateTime): Boolean;
   end;
 
+threadvar
+  gPeriodMemo: TCronPeriodMemo;
+
 var
   gSystemTimeZone: ICronTimeZone;
   gProbeTimeZone: ICronTimeZone;
@@ -204,6 +227,66 @@ begin
   gTestTimeZone := aZone;
 end;
 {$ENDIF}
+
+function TCronPeriodMemo.TryGet(const aKey: Pointer; const aUtcMs: Int64;
+  out aPeriod: TCronZonePeriod): Boolean;
+var
+  i: Integer;
+begin
+  for i := 0 to fCount - 1 do
+    if (fEntries[i].Key = aKey) and (aUtcMs >= fEntries[i].Period.StartUtcMs) and
+      (aUtcMs < fEntries[i].Period.EndUtcMs) then
+    begin
+      aPeriod := fEntries[i].Period;
+      Exit(True);
+    end;
+  Result := False;
+end;
+
+procedure TCronPeriodMemo.Put(const aKey: Pointer; const aZone: ICronZoneRules;
+  const aPeriod: TCronZonePeriod);
+var
+  i, lIndex: Integer;
+begin
+  for i := 0 to fCount - 1 do
+    if fEntries[i].Key = aKey then
+    begin
+      fEntries[i].Period := aPeriod;
+      Exit;
+    end;
+  if fCount < Length(fEntries) then
+  begin
+    lIndex := fCount;
+    Inc(fCount);
+  end else begin
+    lIndex := fReplace;
+    fReplace := (fReplace + 1) mod Length(fEntries);
+  end;
+  fEntries[lIndex].Key := nil;
+  // Keep the object alive until the pass ends, preventing pointer reuse even
+  // when a callback replaces an event's zone. Hits never adjust refcounts.
+  fEntries[lIndex].Zone := aZone;
+  fEntries[lIndex].Period := aPeriod;
+  fEntries[lIndex].Key := aKey;
+end;
+
+procedure CronBeginZonePeriodMemo;
+var
+  lMemo: TCronPeriodMemo;
+begin
+  lMemo := TCronPeriodMemo.Create;
+  lMemo.Previous := gPeriodMemo;
+  gPeriodMemo := lMemo;
+end;
+
+procedure CronEndZonePeriodMemo;
+var
+  lMemo: TCronPeriodMemo;
+begin
+  lMemo := gPeriodMemo;
+  gPeriodMemo := lMemo.Previous;
+  lMemo.Free;
+end;
 
 {$IFDEF MSWINDOWS}
 type
@@ -906,9 +989,20 @@ begin
   inherited;
 end;
 
+// ICronTimeZone transports TDateTime through the exact nonnegative-ms carrier.
+// Reserve the maximum local offset at both ends so neither the UTC argument
+// nor any permitted local result leaves that domain. Extend the edge offset
+// outside this representable oracle band, as the Windows rule source does.
+const
+  cCronProbeFirstUtcMs = cCronZoneMaxAbsOffsetMs;
+  cCronProbeLastUtcMs = Int64(2958466) * 86400000 - 1000 - cCronZoneMaxAbsOffsetMs;
+
 function TCronTimeZoneProbeSource.OffsetAt(const aUtcMs: Int64): Int64;
+var
+  lQuery: Int64;
 begin
-  Result := CronDateTimeToMs(fZone.ToLocalTime(CronMsToDateTime(aUtcMs))) - aUtcMs;
+  lQuery := Max(cCronProbeFirstUtcMs, Min(cCronProbeLastUtcMs, aUtcMs));
+  Result := CronDateTimeToMs(fZone.ToLocalTime(CronMsToDateTime(lQuery))) - lQuery;
 end;
 
 function TCronTimeZoneProbeSource.FindBoundary(const aLeft, aRight, aOffset: Int64;
@@ -939,11 +1033,13 @@ begin
   finally
     fLock.Release;
   end;
-  lUtcMs := CronFloorDiv(aUtcMs, cCronMsPerSecond) * cCronMsPerSecond;
+  lUtcMs := Max(cCronProbeFirstUtcMs, Min(cCronProbeLastUtcMs,
+    CronFloorDiv(aUtcMs, cCronMsPerSecond) * cCronMsPerSecond));
   Result.OffsetMs := OffsetAt(lUtcMs);
   lCursor := lUtcMs;
-  lLimit := lUtcMs - cCronZoneWindowMs;
+  lLimit := Max(cCronProbeFirstUtcMs, lUtcMs - cCronZoneWindowMs);
   Result.StartUtcMs := lLimit;
+  if lLimit = cCronProbeFirstUtcMs then Result.StartUtcMs := cCronZoneUnboundedStart;
   while lCursor > lLimit do
   begin
     lNext := Max(lLimit, lCursor - cProbeStepMs);
@@ -955,8 +1051,9 @@ begin
     lCursor := lNext;
   end;
   lCursor := lUtcMs;
-  lLimit := lUtcMs + cCronZoneWindowMs;
+  lLimit := Min(cCronProbeLastUtcMs, lUtcMs + cCronZoneWindowMs);
   Result.EndUtcMs := lLimit;
+  if lLimit = cCronProbeLastUtcMs then Result.EndUtcMs := cCronZoneUnboundedEnd;
   while lCursor < lLimit do
   begin
     lNext := Min(lLimit, lCursor + cProbeStepMs);
@@ -1043,6 +1140,7 @@ function TCronZoneRules.GetPeriod(const aUtcMs: Int64): TCronZonePeriod;
 var
   lOther: TCronZonePeriod;
 begin
+  if (gPeriodMemo <> nil) and gPeriodMemo.TryGet(Pointer(Self), aUtcMs, Result) then Exit;
   Result := RawPeriod(aUtcMs);
   while (Result.StartUtcMs > cCronZoneUnboundedStart) and
     (Result.StartUtcMs > aUtcMs - cCronZoneWindowMs) do
@@ -1058,6 +1156,8 @@ begin
     if lOther.OffsetMs <> Result.OffsetMs then Break;
     Result.EndUtcMs := lOther.EndUtcMs;
   end;
+  if gPeriodMemo <> nil then
+    gPeriodMemo.Put(Pointer(Self), Self as ICronZoneRules, Result);
 end;
 
 function TCronZoneRules.UtcToLocalMs(const aUtcMs: Int64): Int64;

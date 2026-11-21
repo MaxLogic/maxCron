@@ -191,8 +191,12 @@ begin
   try
     GC(lCron, TmaxCron.Create(ctPortable), g);
     lEvent := lCron.Add('equivalence');
+    {$IFDEF MAXCRON_LONG_TESTS}
+    lStep := 1;
+    {$ELSE}
     lStep := 600;
     if {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_FULL_ZONE_PROPERTIES') = '1' then lStep := 1;
+    {$ENDIF}
     lSeed := 20261118;
     lChecks := 0;
     for lZone := 0 to 6 do
@@ -650,12 +654,13 @@ var
   lEvent: IMaxCronEvent;
   lZone: ICronZoneRules;
   lWallUs, lStart, lTrueUtc: Int64;
-  lCount, lStep, lSecond: Integer;
+  lCount, lStep, lSecond, lExpected: Integer;
 begin
   lZone := CreateCronZone('Europe/Warsaw', FakeZoneSource(0));
   SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(lZone));
   RegisterCronZoneForTests('Europe/Warsaw', FakeZoneSource(0));
   SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+  SetMaxCronUtcClockHook(function: Int64 begin Result := lTrueUtc * 1000; end);
   try
     lStart := ZoneMs(2026, 10, 25, 1);
     lStep := 1;
@@ -676,11 +681,12 @@ begin
           lEvent.DstFallPolicy := TmaxCronDstFallPolicy(lFall);
           lEvent.InvokeMode := imMainThread;
           lEvent.Run;
-          // No rollback was observed. Late replay at 03:00 is allowed, but no
-          // occurrence at or after the true start inside the second pass is lost.
+          // Only quarter-hours strictly after the true start remain.
+          lExpected := (3599 - lSecond) div 900;
+          lTrueUtc := ZoneMs(2026, 10, 25, 2);
           lWallUs := ZoneMs(2026, 10, 25, 3) * 1000;
-          lCron.TickAtUs(lWallUs);
-          Assert.IsTrue(lCount >= (3600 - lSecond) div 900, Format('resume second=%d fall=%d count=%d',
+          lCron.TickAtUtcUs(lTrueUtc * 1000);
+          Assert.AreEqual(lExpected, lCount, Format('resume second=%d fall=%d count=%d',
             [lSecond, lFall, lCount]));
         finally
           lEvent := nil;
@@ -690,6 +696,7 @@ begin
       end;
     end;
   finally
+    SetMaxCronUtcClockHook(nil);
     SetMaxCronWallClockHook(nil);
     SetCronSystemTimeZoneForTests(nil);
     ClearCronZonesForTests;
