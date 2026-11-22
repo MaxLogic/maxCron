@@ -162,6 +162,9 @@ type
     CompletedThrough: TDateTime;
   end;
 
+  TmaxCronRestoreBinder = reference to procedure(const aEvent: IMaxCronEvent;
+    const aState: TMaxCronPersistedEvent);
+
   IMaxCronScheduleStore = interface
     ['{502728E8-EFA0-4FE3-AC8D-2F3C7BF8B2D8}']
     procedure Save(const aEvents: TArray<TMaxCronPersistedEvent>);
@@ -552,7 +555,9 @@ type
     function TryGetWatchdogDiagnostics(out aDiagnostics: TMaxCronWatchdogDiagnostics): Boolean;
     function GetMetricsSnapshot: TMaxCronMetricsSnapshot;
     function SaveScheduleState: Integer;
-    function RestoreScheduleState(const aReplaceExisting: Boolean = True): Integer;
+    function RestoreScheduleState(const aReplaceExisting: Boolean = True): Integer; overload;
+    function RestoreScheduleState(const aReplaceExisting: Boolean;
+      const aBinder: TmaxCronRestoreBinder): Integer; overload;
     function Shutdown(const aTimeoutMs: Cardinal; const aPolicy: TmaxCronShutdownPolicy = spWait): Boolean;
 
     property RequestedTimerBackend: TmaxCronTimerBackend read fRequestedTimerBackend;
@@ -4444,7 +4449,7 @@ var
   lCronEvent: TmaxCronEvent;
   lCount: Integer;
   lIndex: Integer;
-  lCheckpointUs, lEarliestUtcUs, lSaveUtcUs, lSaveMonoUs: Int64;
+  lCheckpointUs, lEarliestUtcUs, lSaveUtcUs, lSaveMonoUs, lSaveWallUs: Int64;
   lClockCoherent: Boolean;
 begin
   Result := 0;
@@ -4457,6 +4462,8 @@ begin
   // P6-02b: one capture attempt sequence per save, shared by every event.
   // Corrections after its final UTC2 belong to the documented after-save case.
   lClockCoherent := TryCapturePersistenceClock(lSaveUtcUs, lSaveMonoUs);
+  lSaveWallUs := 0;
+  if lClockCoherent then lSaveWallUs := UtcUsToWallUs(lSaveUtcUs);
   lCount := 0;
   for lIndex := 0 to Length(lSnapshot) - 1 do
   begin
@@ -4487,8 +4494,6 @@ begin
     lState.ValidTo := lEvent.ValidTo;
     lState.Tag := lEvent.Tag;
     lState.NumOfExecutionsPerformed := lEvent.NumOfExecutionsPerformed;
-    lState.LastExecution := lEvent.LastExecution;
-    lState.NextSchedule := lEvent.NextSchedule;
     lState.RetryMaxAttempts := lEvent.RetryMaxAttempts;
     lState.RetryInitialDelayMs := lEvent.RetryInitialDelayMs;
     lState.RetryBackoffMultiplier := lEvent.RetryBackoffMultiplier;
@@ -4497,13 +4502,53 @@ begin
     begin
       lCronEvent.fLock.Acquire;
       try
+        // Serialize time fields under this lock; never call a live interval
+        // getter here, including the legacy C=0 and rejected-capture paths.
+        // LastExecution is cached scheduled history, not a new wall projection.
+        // Preserve it exactly unless the existing absent-C fallback clears it.
+        lState.LastExecution := lCronEvent.fLastExecutionTime;
+        lState.NextSchedule := lCronEvent.fNextSchedule;
+        if lCronEvent.fScheduleKind = TmaxCronEvent.TCronScheduleKind.Interval then
+        begin
+          lState.NextSchedule := 0;
+          if lClockCoherent and lCronEvent.FEnabled and lCronEvent.fIntervalHasDeadline then
+            // Preserve the existing Wp(x)=Wall(sample)+(x-Mono(sample))
+            // contract, including a deadline spanning a zone-offset change.
+            lState.NextSchedule := CronInstantUsToDateTime(
+              lSaveWallUs + lCronEvent.fIntervalDueUs - lSaveMonoUs);
+        end;
         lState.NextScheduleNeedsResolve := lCronEvent.fNextScheduleNeedsResolve;
         lCheckpointUs := lCronEvent.PersistenceCheckpointLocked(
           lClockCoherent, lSaveUtcUs, lSaveMonoUs, lEarliestUtcUs);
         lState.CompletedThrough := CronInstantUsToDateTime(lCheckpointUs);
+        if (lCheckpointUs = 0) and (lEarliestUtcUs <> High(Int64)) and
+          ((lCronEvent.fCompletedThroughUtcUs > 0) or (lCronEvent.fSettleEntries.Count <> 0) or
+          (lEarliestUtcUs = Low(Int64))) then
+        begin
+          // No safe positive predecessor: use the existing absent-C branch,
+          // with its saved deadline set to the earliest unfinished instance
+          // (including an in-flight fixed-delay ticket with no live deadline).
+          if lEarliestUtcUs = Low(Int64) then
+          begin
+            // Without any coherent pair, use no projection at all. The first
+            // representable positive legacy deadline (or ValidFrom) is no
+            // later than valid unfinished work; replay may contain duplicates.
+            lState.NextSchedule := CronInstantUsToDateTime(cCronUsPerMs);
+            if lState.ValidFrom > lState.NextSchedule then lState.NextSchedule := lState.ValidFrom;
+          end else
+            lState.NextSchedule := CronInstantUsToDateTime(UtcUsToWallUs(lEarliestUtcUs));
+          lState.LastExecution := 0;
+        end;
+        lState.Enabled := lCronEvent.FEnabled or (lCronEvent.fAutomaticallyDisabled and
+          (lCronEvent.fSettleEntries.Count <> 0));
+        lState.NumOfExecutionsPerformed := lCronEvent.fNumOfExecutions - lCronEvent.fUncheckpointedExecutions;
       finally
         lCronEvent.fLock.Release;
       end;
+    end else begin
+      // Preserve the existing interface fallback for non-library events.
+      lState.LastExecution := lEvent.LastExecution;
+      lState.NextSchedule := lEvent.NextSchedule;
     end;
 
     lStates[lCount] := lState;
@@ -4516,6 +4561,12 @@ begin
 end;
 
 function TmaxCron.RestoreScheduleState(const aReplaceExisting: Boolean): Integer;
+begin
+  Result := RestoreScheduleState(aReplaceExisting, nil);
+end;
+
+function TmaxCron.RestoreScheduleState(const aReplaceExisting: Boolean;
+  const aBinder: TmaxCronRestoreBinder): Integer;
 var
   lStore: IMaxCronScheduleStore;
   lStates: TArray<TMaxCronPersistedEvent>;
@@ -4524,6 +4575,8 @@ var
   lCronEvent: TmaxCronEvent;
   lIndex: Integer;
   lHasSavedDue: Boolean;
+  lCheckUs, lIntervalUs, lDeltaUs, lDueUtcMs, lMonoUs, lUtcUs: Int64;
+  lFindResult: TFindNextScheduleResult;
 begin
   Result := 0;
   lStore := GetScheduleStore;
@@ -4564,6 +4617,16 @@ begin
     if Trim(lState.EventPlan) <> '' then
       lEvent.EventPlan := lState.EventPlan;
 
+    if Assigned(aBinder) then
+    begin
+      try
+        aBinder(lEvent, lState);
+      except
+        lEvent.Stop;
+        raise;
+      end;
+    end;
+    lCheckUs := CronDateTimeToInstantUs(lState.CompletedThrough);
     if lState.Enabled then
     begin
       if TryGetCronEvent(lEvent, lCronEvent) then
@@ -4576,7 +4639,32 @@ begin
           lCronEvent.FEnabled := False;
           lCronEvent.fNumOfExecutions := lState.NumOfExecutionsPerformed;
           lCronEvent.fNumOfDue := lState.NumOfExecutionsPerformed;
-          if lCronEvent.fScheduleKind = TmaxCronEvent.TCronScheduleKind.Interval then
+          lCronEvent.fAutomaticallyDisabled := False;
+          if lCheckUs > 0 then
+          begin
+            lCronEvent.ResetSettleLedgerLocked(lCheckUs);
+            lCronEvent.fLastExecutionTime := CronMsToDateTime(CronDateTimeToMs(lState.LastExecution));
+            lCronEvent.fLastDueUtcMs := Low(Int64);
+            if lState.LastExecution > 0 then
+              lCronEvent.fLastDueUtcMs := lCronEvent.SystemLocalToUtcMsEarliest(lState.LastExecution);
+            if lCronEvent.fScheduleKind = TmaxCronEvent.TCronScheduleKind.Interval then
+            begin
+              lIntervalUs := Int64(lCronEvent.fIntervalMs) * cCronUsPerMs;
+              // For UTC-to-monotonic projection, sample monotonic first so
+              // sampling latency can only make the reconstructed due earlier.
+              lMonoUs := SchedulerMonoNowUs;
+              lUtcUs := SchedulerUtcNowUs;
+              lDeltaUs := lCheckUs + lIntervalUs - lUtcUs;
+              if lDeltaUs > lIntervalUs then lDeltaUs := lIntervalUs;
+              lCronEvent.fIntervalDueUs := lMonoUs + lDeltaUs;
+              lHasSavedDue := True;
+            end else begin
+              lFindResult := lCronEvent.FindNextDueUtc(
+                CronInstantFloorSecond(lCheckUs) * cCronMsPerSecond, CronSystemZoneRules, lDueUtcMs);
+              lCronEvent.fNextScheduleNeedsResolve := lFindResult = fnsSearchLimitReached;
+              lHasSavedDue := lFindResult <> fnsNotFound;
+            end;
+          end else if lCronEvent.fScheduleKind = TmaxCronEvent.TCronScheduleKind.Interval then
           begin
             lCronEvent.fLastExecutionTime := lState.LastExecution;
             lHasSavedDue := lCronEvent.RestoreIntervalDueLocked(lState.NextSchedule);
@@ -4585,10 +4673,15 @@ begin
               lState.LastExecution, lState.NextScheduleNeedsResolve);
           lCronEvent.FEnabled := (lCronEvent.GetExecutionLimitLocked = 0) or
             (lCronEvent.fNumOfDue < lCronEvent.GetExecutionLimitLocked);
-          if lCronEvent.FEnabled and not lHasSavedDue then
+          if (lCheckUs > 0) and not lHasSavedDue then lCronEvent.DisableAutomaticallyLocked;
+          if (lCheckUs = 0) and lCronEvent.FEnabled and not lHasSavedDue then
             // Missing/invalid saved state uses the ordinary current-time
             // bootstrap. Only this fallback may disable on search exhaustion.
             lCronEvent.ResetSchedule;
+          if lCheckUs = 0 then
+            // Installing a legacy due is not a final outcome. Keep C absent
+            // through any restore/save/restart chain until real work settles.
+            lCronEvent.ResetSettleLedgerLocked(0);
           if lCronEvent.fScheduleKind = TmaxCronEvent.TCronScheduleKind.Interval then
             lCronEvent.SetIntervalWakeLocked(lCronEvent.fIntervalDueUs,
               lCronEvent.FEnabled and not lCronEvent.fPendingDestroy);
@@ -4597,8 +4690,18 @@ begin
           lCronEvent.fLock.Release;
         end;
       end;
-    end else
+    end else begin
       lEvent.Stop;
+      if TryGetCronEvent(lEvent, lCronEvent) then
+      begin
+        lCronEvent.fLock.Acquire;
+        try
+          lCronEvent.ResetSettleLedgerLocked(lCheckUs);
+        finally
+          lCronEvent.fLock.Release;
+        end;
+      end;
+    end;
 
     Inc(Result);
   end;

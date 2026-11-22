@@ -4,8 +4,6 @@ All notable user-visible changes to this project will be documented in this file
 
 ## [Unreleased]
 
-- Added the UTC `CompletedThrough` saved-state field and ordered settlement tracking; existing restore behavior remains unchanged.
-
 - Added Windows 8+ OS time zone resolution for IANA names through a built-in
   Unicode CLDR 49 name and alias table. No data files are needed on Windows;
   `MAXCRON_TZDIR` continues to select TZif data. FPC named zones and LOCAL share
@@ -16,6 +14,7 @@ All notable user-visible changes to this project will be documented in this file
   1602-9998 the nearest edge offset continues unchanged.
 
 ### Added
+- Restart catch-up with a UTC `TMaxCronPersistedEvent.CompletedThrough` checkpoint and a `RestoreScheduleState` binder overload that attaches callbacks before restored events start. Delivery is at least once; handlers must be idempotent.
 - Production test wrappers enforce per-phase deadlines, terminate timed-out child trees, and return non-roster timeout status 124.
 - Test entry points reserve exit 5 for typed roster violations and report native phase completion codes; compiler, generator and runner failures cannot count as roster rejection.
 - Separate long test qualification for exhaustive UTC/DST search, dispatch and restore matrices on Delphi and FPC; default gates keep deterministic regression samples. Every default, long and FPC smoke runner checks its complete independent roster and rejects stale manifests, including FPC-only tests.
@@ -38,6 +37,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
 
 ### Changed
+- Stores that persist `CompletedThrough` replay work that was unfinished at save time. Missing checkpoints retain the existing restore behavior. Persisted `Enabled` keeps automatically exhausted events eligible while tickets remain unsettled; explicit stops remain disabled. Persisted execution counts cover the settled prefix so replay still respects execution limits.
 - LOCAL `dspRunAtNextValidTime` now shifts a missing occurrence to the transition instant, matching named zones. For example, 02:30:30 shifts to 03:00:00 instead of 03:00:30.
 - LOCAL on Windows uses the Windows conversion rules on both Delphi and FPC, and picks up a host-zone change on the next scheduler pass.
 - `NextSchedule` and `LastExecution` of cron events are the exact `TDateTime` of their millisecond (equal to `EncodeDateTime`); previously some values differed in the last bits.
@@ -56,6 +56,10 @@ All notable user-visible changes to this project will be documented in this file
 - Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
 
 ### Fixed
+- Interval save serialization uses the shared clock sample for legacy and checkpointed deadlines, with no per-event clock reads; cached execution history and public getters retain their existing behavior.
+- Restart saves share one validated clock pair across all events. Corrections between UTC1 and UTC2 preserve pending work; later corrections are outside that guarantee and can miss interval occurrences after restart. Eight rejected samples use the absent-checkpoint fallback.
+- Saved restart checkpoints reproject unfinished interval deadlines and open tickets through the save-wide clock pair. Interval and cron bounds follow their restore predecessor rules; nonpositive bounds use the saved-deadline fallback.
+- Restart checkpoints retain overdue work across legacy restore/save/restart chains. Interval checkpoints use one pass clock sample, so delayed callbacks and stale fixed-delay completions cannot certify unfinished instances.
 - Restoring an enabled cron or interval event retains an eligible saved overdue occurrence even when a fresh search would find no future occurrence. Restored execution limits and inclusive validity bounds still apply.
 - LOCAL PreferSecond and RunTwice schedules now fire at the start of the second pass when due at the start of a repeated hour; `mpSkip` no longer loses those occurrences.
 - Heap, shadow and auto engines now dispatch LOCAL second instances at their UTC dues, including occurrences inside the repeated hour.

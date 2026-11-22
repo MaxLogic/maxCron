@@ -1268,6 +1268,9 @@ begin
           end;
           Check(lCron.SaveScheduleState = 1, 'saved count');
           Check(lStore.TryLoad(lStates), 'load saved record');
+          // Phase 6 design 5.1: this F1 matrix edits legacy saved dues, including
+          // a missing NextSchedule. A positive checkpoint would ignore that edit.
+          lStates[0].CompletedThrough := 0;
           lSavedCount := h;
           if v = 1 then lSavedCount := 1;
           lStates[0].NumOfExecutionsPerformed := lSavedCount;
@@ -1402,6 +1405,9 @@ begin
         lEvent.InvokeMode := imMainThread;
         lEvent.ValidTo := CronInstantUsToDateTime(lStart + 1000000);
         lEvent.Run; lCron.SaveScheduleState; lStore.TryLoad(lStates);
+        // Phase 6 design 5.1: retain F1's legacy saved-due validity contract.
+        // Checkpoint restore instead reconstructs C+I before the live validity check.
+        lStates[0].CompletedThrough := 0;
         if lVariant = 1 then lStates[0].NumOfExecutionsPerformed := 1;
         if lVariant = 2 then lStates[0].Enabled := False;
         if lVariant = 3 then lStates[0].ValidTo := CronInstantUsToDateTime(lStart + 999000);

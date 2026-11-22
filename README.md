@@ -1,5 +1,5 @@
-# maxCron 
-Flexible, lightweight CRON compliant scheduler written in Delphi. 
+# maxCron
+Flexible, lightweight CRON compliant scheduler written in Delphi.
 
 Homepage: https://maxlogic.eu/portfolio/maxcron-scheduler-for-delphi/
 
@@ -701,7 +701,86 @@ misfire policy even when the plan has ended or `ValidTo` has passed since that
 occurrence. Execution limits and inclusive validity bounds still apply to the
 saved due. Missing or invalid saved dues use a fresh schedule search.
 
-Persistence captures event configuration/state metadata (plan, policies, counters, next schedule). Callback handlers themselves are not serialized and should be rebound by the host after restore when needed.
+Persistence captures event configuration and state metadata. Callback handlers are
+not serialized. Attach them with the restore binder before restored events start:
+
+```delphi
+CronScheduler.RestoreScheduleState(True,
+  procedure(const aEvent: IMaxCronEvent; const aState: TMaxCronPersistedEvent)
+  begin
+    aEvent.OnScheduleProc := MyScheduleProc;
+  end);
+```
+
+#### Restart catch-up
+
+`SaveScheduleState` stores `CompletedThrough`, a UTC checkpoint floored to
+milliseconds. Every policy instance at or before it has reached a final outcome:
+the callback returned, retries exhausted, or a policy deliberately suppressed it.
+Restore resumes after this checkpoint under the configured plan and policies.
+The binder can change the plan before this search.
+
+For cron events, `mpSkip` skips occurrences at least one second late,
+`mpFireOnceNow` fires once, and `mpCatchUpAll` processes all missed occurrences,
+at most `DefaultMisfireCatchUpLimit` per pass. The default limit remains 1 and
+there is no total catch-up cap. Dense plans after long downtime may need a larger
+limit or `mpFireOnceNow`. Interval events use their existing misfire rules;
+fixed-rate resumes at checkpoint plus interval, and fixed-delay uses the last
+settled completion plus interval. Future interval checkpoints are clamped to one
+interval ahead of the current clock.
+
+Each `SaveScheduleState` call captures one clock pair for every event, reading
+MONO0, UTC1, UTC2 and MONO2. It validates the UTC change against elapsed
+monotonic time, then projects unfinished interval deadlines with UTC1/MONO2.
+The saved checkpoint is at most that earliest projected due minus one interval;
+cron checkpoints stay at least 1 ms before each unfinished UTC occurrence.
+The stored checkpoint can move backwards and replay completed work.
+Saved interval `NextSchedule` uses that same pair, including legacy records with
+no checkpoint. `LastExecution` retains its recorded history without another clock
+read. Rejected captures bypass the live interval getters and use the shared fallback.
+
+The detectable correction window is between UTC1 and UTC2. Any correction after
+the UTC2 read is outside that guarantee, including between UTC2 and MONO2,
+between events being serialized, and after persistence. Interval restore
+translates the saved UTC deadline to the restart monotonic clock and clamps a
+future deadline to one interval; a rollback after UTC2 can therefore miss
+interval occurrences after restart. Cron occurrences retain their UTC identity.
+
+After eight rejected clock samples, the whole save uses absent checkpoints and
+conservative legacy deadlines. If a coherent sample has no positive safe
+checkpoint, the store receives 0 and the earliest unfinished saved deadline.
+These fallbacks can replay additional work.
+
+Delivery is at least once. A crash after a callback starts and before a later
+save becomes durable can replay that occurrence. Out-of-order completions can
+also repeat later occurrences behind an unfinished earlier callback.
+**Handlers must be idempotent**: check the target state or use a durable business
+operation identifier before applying side effects. A save from inside a callback
+does not cover that callback yet.
+
+In persisted state, `Enabled` means "should still run". Automatic disabling from
+plan exhaustion, `ValidTo`, or an execution limit is saved as `True` while tickets
+remain unsettled. An explicit `Stop` or `Enabled := False` is always saved as
+`False`. Once the tickets settle, an exhausted event saves `False` again.
+The saved execution count covers the settled prefix: executions still behind
+an unsettled ticket are excluded, including later callbacks that finished out of
+order. Replay can therefore repeat counted but unfinished work while execution
+limits and validity bounds continue to apply.
+
+Store implementations should persist `CompletedThrough` and read a missing
+field as 0. Zero, negative or NaN checkpoints use the existing `NextSchedule`
+restore path. Old stored data loads unchanged. Restoring legacy data and saving again
+before a tick keeps the checkpoint absent; only a final scheduling outcome can
+certify its pending work. UTC checkpoints distinguish both
+instances of a repeated local hour. A future checkpoint after a clock correction
+waits for the next cron occurrence after it.
+
+Save periodically, write the store atomically, and save after
+`Shutdown(timeout, spWait)` at exit. Save before `spCancel` or `spForce`, which
+clear events. Misfire and overlap suppression, execution limits, validity bounds,
+reported dispatch-start failures and a search-limit fallback can deliberately
+discard work. Callbacks assigned after restore can miss a timer pass; use the
+binder for restart catch-up.
 
 ### Global dispatch caps
 
@@ -1352,7 +1431,7 @@ The following graph shows what the format that maxCron uses consists of:
 
 ```
 * * * * * * 0 0
-| | | | | | | | 
+| | | | | | | |
 | | | | | | | +-- ExecutionLimit    (range 0 - 0xffffffff. Default 0 = unlimited)
 | | | | | | +---- Seconds           (range 0 - 59. Default 0)
 | | | | | +------ Year              (range: 1900-3000)
@@ -1608,5 +1687,3 @@ waits. The interval benchmark observed missed occurrences under load at 1 ms;
 Consumers listing units explicitly must include `maxCron.Internal.DeadlineQueue.pas`.
 The interval benchmark accepts `--mode=interval --interval-ms=10 --fires=500` and
 reports lateness, missed fires, and process CPU; use Release builds for measurements.
-
-`SaveScheduleState` also writes the additive UTC `CompletedThrough` checkpoint, floored to milliseconds. Restore continues to use the existing saved schedule fields and ignores this checkpoint.

@@ -213,6 +213,9 @@ begin
       procedure(aSender: IMaxCronEvent) begin end);
     lEvent.Run; Assert.AreEqual(1,lCron.SaveScheduleState);
     lStoreObject.fStates[0].NumOfExecutionsPerformed := 2;
+    // Phase 6 design 5.1: zero selects the unchanged legacy NextSchedule path.
+    // A positive checkpoint intentionally ignores the edited NextSchedule below.
+    lStoreObject.fStates[0].CompletedThrough := 0;
     for i := 0 to 3 do
     begin
       if cOffsets[i]=0 then lStoreObject.fStates[0].NextSchedule := 0

@@ -25,6 +25,7 @@ uses
   TestWatchdogDiagnostics in 'unit\TestWatchdogDiagnostics.pas',
   TestCronPhaseDifferential in 'unit\TestCronPhaseDifferential.pas',
   TestDeadlineTimerStress in 'unit\TestDeadlineTimerStress.pas',
+  TestRestartCatchUp in 'unit\TestRestartCatchUp.pas',
   TestLocalOverlap in 'unit\TestLocalOverlap.pas',
   TestLocalOverlapStress in 'unit\TestLocalOverlapStress.pas',
   TestZoneFakes in 'unit\TestZoneFakes.pas';

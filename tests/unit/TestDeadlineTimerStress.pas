@@ -5,7 +5,7 @@ interface
 uses
   System.Classes, System.Diagnostics, System.SyncObjs, System.SysUtils,
   AutoFree, DUnitX.TestFramework,
-  maxCron, maxCron.Internal.Platform;
+  maxCron, maxCron.Internal.Platform, TestRestartCatchUp;
 
 type
   [TestFixture]
@@ -13,9 +13,54 @@ type
   public
     [Test] procedure ShutdownAndLifetime;
     [Test] procedure IntervalLifetime;
+    [Test] procedure RestoreBinderBeforePortableDispatch;
   end;
 
 implementation
+
+procedure TTestDeadlineTimerStress.RestoreBinderBeforePortableDispatch;
+var
+  lCron: TmaxCron;
+  lStore: IMaxCronScheduleStore;
+  lState: TMaxCronPersistedEvent;
+  lFired: TEvent;
+  lBound, lUnbound: Integer;
+begin
+  lStore := TRestartStore.Create;
+  lState := Default(TMaxCronPersistedEvent);
+  lState.Name := 'portable restore';
+  lState.EventPlan := '* * * * * * * 0';
+  lState.Enabled := True;
+  lState.TimeZoneId := 'UTC';
+  lState.Dialect := cdMaxCron;
+  lState.InvokeMode := imThread;
+  lState.CompletedThrough := CronInstantUsToDateTime(CronPreciseUtcNowUs - 2000000);
+  lStore.Save([lState]);
+  lFired := TEvent.Create(nil, True, False, '');
+  lBound := 0; lUnbound := 0;
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lCron.ScheduleStore := lStore;
+    lCron.StartTimerForTests(1);
+    lCron.RestoreScheduleState(True,
+      procedure(const aEvent: IMaxCronEvent; const aSaved: TMaxCronPersistedEvent)
+      begin
+        Assert.IsFalse(aEvent.Enabled, 'binder runs before enabling');
+        aEvent.OnScheduleProc := procedure(aSender: IMaxCronEvent)
+          begin
+            if TInterlocked.CompareExchange(lBound, 0, 0) <> 1 then TInterlocked.Increment(lUnbound);
+            lFired.SetEvent;
+          end;
+        TInterlocked.Exchange(lBound, 1);
+      end);
+    Assert.IsTrue(lFired.WaitFor(3000) = wrSignaled, 'real portable timer dispatched bound callback');
+    Assert.IsTrue(lCron.Shutdown(3000, spWait));
+    Assert.AreEqual(0, lUnbound);
+  finally
+    lCron.Free;
+    lFired.Free;
+  end;
+end;
 
 procedure TTestDeadlineTimerStress.ShutdownAndLifetime;
 var
