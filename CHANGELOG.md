@@ -44,10 +44,10 @@ All notable user-visible changes to this project will be documented in this file
 - Cron events now include an occurrence exactly at `ValidFrom` when it is after the search base. Both validity bounds are inclusive, as for interval events.
 - Day-of-week ranges `0-7` (including `SUN-7`) now span every day in `cdMaxCron` and `cdStandard`, instead of Sunday only. Stepped forms count from Sunday: `0-7/2` selects Sun,Tue,Thu,Sat and `0-7/3` selects Sun,Wed,Sat. Steps of 7 or more still select Sunday only. Quartz numbering is unchanged (`1` = Sun, `7` = Sat).
 - Stepped wrapped day-of-week ranges now count continuously across Sunday in every dialect. For example, `4-2/2` selects Thu,Sat,Mon instead of Thu,Sat,Sun,Tue; `1-7/4` selects Mon,Fri without adding Sun (`cdMaxCron`/`cdStandard`). Quartz `5-3/2` and `2-1/4` use the same rule. Unstepped wraps are unchanged.
-- Consumer projects must also include `maxCron.Internal.Text.pas`.
+- Consumer projects must also include `maxCron.Internal.Text.pas` and `maxCron.Internal.DeadlineQueue.pas`.
 - Invalid or unknown `TimeZoneId` values report the rejected value and cause,
   preserving the event's previous zone. Add `maxCron.Internal.TZif.pas` to consumer
-  projects. Existing `LOCAL`, `UTC` and fixed-offset behavior is unchanged.
+  projects. `LOCAL`, `UTC` and fixed-offset values keep their meaning; their DST fixes are listed below.
 - Plans containing a newly recognised day-of-month form and an invalid later field now report the later field's error.
 - Recognized `L-n`, `LW-n` and `L-nW` forms with out-of-range or overflowing offsets now report `Cron value out of range` instead of `Invalid cron token`.
 - Align cron passes to second boundaries with a deadline timing thread and precise Windows wall clock; add timer-resolution selection and coalesced VCL delivery.

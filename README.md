@@ -8,8 +8,8 @@ Homepage: https://maxlogic.eu/portfolio/maxcron-scheduler-for-delphi/
 ## Installation
 
 Add `maxCron.pas`, `maxCron.Plan.pas`, `maxCron.Internal.Platform.pas` and
-`maxCron.Internal.TimeZone.pas`, `maxCron.Internal.TZif.pas` and
-`maxCron.Internal.Text.pas` to your project,
+`maxCron.Internal.TimeZone.pas`, `maxCron.Internal.TZif.pas`,
+`maxCron.Internal.Text.pas` and `maxCron.Internal.DeadlineQueue.pas` to your project,
 or add their folder to the unit
 search path. Keep `maxCron.inc` and `maxCron.Internal.TimeZoneNames.inc` beside these units. The Delphi scheduler requires
 the MaxLogicFoundation submodule; the FPC build uses only the RTL. Existing code can continue to use `uses maxCron`.
