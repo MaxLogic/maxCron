@@ -52,6 +52,7 @@ uses
   TestMaxCron in 'unit\TestMaxCron.pas',
   TestMetricsSnapshot in 'unit\TestMetricsSnapshot.pas',
   TestPersistenceRecovery in 'unit\TestPersistenceRecovery.pas',
+  TestRestartCatchUp in 'unit\TestRestartCatchUp.pas',
   TestRetryBackoff in 'unit\TestRetryBackoff.pas',
   TestRobustCoverage in 'unit\TestRobustCoverage.pas',
   TestGracefulShutdown in 'unit\TestGracefulShutdown.pas',
@@ -103,6 +104,7 @@ begin
     TDUnitX.RegisterTestFixture(TTestMaxCron);
     TDUnitX.RegisterTestFixture(TTestMetricsSnapshot);
     TDUnitX.RegisterTestFixture(TTestPersistenceRecovery);
+    TDUnitX.RegisterTestFixture(TTestRestartCatchUp);
     TDUnitX.RegisterTestFixture(TTestRetryBackoff);
     TDUnitX.RegisterTestFixture(TTestRobustCoverage);
     TDUnitX.RegisterTestFixture(TTestGracefulShutdown);

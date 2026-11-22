@@ -4,6 +4,8 @@ All notable user-visible changes to this project will be documented in this file
 
 ## [Unreleased]
 
+- Added the UTC `CompletedThrough` saved-state field and ordered settlement tracking; existing restore behavior remains unchanged.
+
 - Added Windows 8+ OS time zone resolution for IANA names through a built-in
   Unicode CLDR 49 name and alias table. No data files are needed on Windows;
   `MAXCRON_TZDIR` continues to select TZif data. FPC named zones and LOCAL share

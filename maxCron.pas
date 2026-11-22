@@ -158,6 +158,8 @@ type
     RetryInitialDelayMs: Cardinal;
     RetryBackoffMultiplier: Double;
     RetryMaxDelayMs: Cardinal;
+    /// UTC checkpoint, floored to milliseconds; 0 preserves legacy restore.
+    CompletedThrough: TDateTime;
   end;
 
   IMaxCronScheduleStore = interface
@@ -268,6 +270,7 @@ type
   TmaxCronAsyncCallHook = reference to function(const aProc: TThreadProcedure; const aTaskName: string): IInterface;
   TmaxCronBeforeQueuedAcquireHook = reference to procedure(const aEvent: IMaxCronEvent);
   TmaxCronBeforeDispatchHook = reference to procedure(const aInvokeMode: TmaxCronInvokeMode);
+  TmaxCronBeforeSaveEventHook = reference to procedure(const aEvent: IMaxCronEvent; const aIndex: Integer);
   {$ENDIF}
 
   ICronTimer = interface
@@ -333,6 +336,9 @@ type
   private
     type
       TSchedulerEngine = (seScan, seHeap, seShadow, seAuto);
+      TIntervalPassClock = record
+        MonoUs, UtcUs, WallUs: Int64;
+      end;
 
       TAutoSchedulerState = (asDisabled, asScanStable, asHeapTrial, asHeapStable);
 
@@ -494,11 +500,12 @@ type
     function ComputeNextTickDelayUs: Int64;
     procedure WakeTimer;
     procedure SetIntervalWake(const aEventId, aWakeUs: Int64; const aHasDeadline: Boolean);
-    procedure DoIntervalTickAt(const aMonoNowUs, aWallNowUs: Int64);
+    procedure DoIntervalTickAt(const aClock: TIntervalPassClock);
     function GetActiveTimerResolution: TmaxCronTimerResolution;
     procedure DoTickAtUs(const aNowUtcUs: TCronInstantUs);
     procedure RefreshCronHostZone(const aHostZone: ICronZoneRules);
     function SchedulerUtcNowUs: Int64;
+    function TryCapturePersistenceClock(out aUtcUs, aMonoUs: Int64): Boolean;
     function UtcUsToWallUs(const aUtcUs: Int64): Int64;
     procedure QueueTick;
     procedure KeepAsyncAlive(const aAsync: IInterface);
@@ -583,12 +590,20 @@ function MakePreview(const SchedulePlan: string; const Dialect: TmaxCronDialect;
   Limit: integer = 100): boolean; overload;
 
 {$IFDEF MAXCRON_TESTS}
+function CurrentMaxCronOccurrenceForTests(out aUtcUs, aMonoDueUs: Int64): Boolean;
+function GetMaxCronPersistenceClockForTests(out aUtcUs, aMonoUs: Int64): Boolean;
 procedure SetMaxCronMonotonicClockHook(const aHook: TmaxCronClockHook);
+function OpenMaxCronSettleTicketForTests(const aEvent: IMaxCronEvent;
+  const aThroughUs: Int64; const aThroughAtSettle: Boolean = False): UInt64;
+procedure SettleMaxCronTicketForTests(const aEvent: IMaxCronEvent; const aSeq: UInt64);
+procedure MarkMaxCronSettledForTests(const aEvent: IMaxCronEvent; const aThroughUs: Int64);
+procedure ResetMaxCronLedgerForTests(const aEvent: IMaxCronEvent; const aThroughUs: Int64);
 procedure SetMaxCronUtcClockHook(const aHook: TmaxCronClockHook);
 procedure SetMaxCronWallClockHook(const aHook: TmaxCronClockHook);
 procedure SetMaxCronAsyncCallHook(const aHook: TmaxCronAsyncCallHook);
 procedure SetMaxCronBeforeQueuedAcquireHook(const aHook: TmaxCronBeforeQueuedAcquireHook);
 procedure SetMaxCronBeforeDispatchHook(const aHook: TmaxCronBeforeDispatchHook);
+procedure SetMaxCronBeforeSaveEventHook(const aHook: TmaxCronBeforeSaveEventHook);
 {$IFNDEF FPC}
 function ExchangeMaxCronThreadDispatchPoolForTests(const aPool: TThreadPool): TThreadPool;
 {$ENDIF}
@@ -673,6 +688,7 @@ var
   gMaxCronAsyncCallHook: TmaxCronAsyncCallHook = nil;
   gMaxCronBeforeQueuedAcquireHook: TmaxCronBeforeQueuedAcquireHook = nil;
   gMaxCronBeforeDispatchHook: TmaxCronBeforeDispatchHook = nil;
+  gMaxCronBeforeSaveEventHook: TmaxCronBeforeSaveEventHook = nil;
   {$IFNDEF FPC}
   gMaxCronThreadDispatchPoolForTests: TThreadPool = nil;
   {$ENDIF}
@@ -721,12 +737,31 @@ procedure SetMaxCronBeforeDispatchHook(const aHook: TmaxCronBeforeDispatchHook);
 begin
   gMaxCronBeforeDispatchHook := aHook;
 end;
+
+procedure SetMaxCronBeforeSaveEventHook(const aHook: TmaxCronBeforeSaveEventHook);
+begin
+  gMaxCronBeforeSaveEventHook := aHook;
+end;
 {$ENDIF}
 
 threadvar
   gMaxCronExecutingCron: Pointer;
+  {$IFDEF MAXCRON_TESTS}
+  gMaxCronPersistenceClockValid: Boolean;
+  gMaxCronPersistenceUtcUs, gMaxCronPersistenceMonoUs: Int64;
+  gMaxCronOccurrenceValid: Boolean;
+  gMaxCronOccurrenceUtcUs, gMaxCronOccurrenceMonoUs: Int64;
+  {$ENDIF}
 
 type
+  TCronDispatchTicket = record
+    RunGeneration, SettleSeq: UInt64;
+  end;
+  TCronSettleEntry = record
+    ThroughUs, MonoDueUs, DueUtcUs: Int64;
+    Settled, ThroughAtSettle, ExecutionStarted: Boolean;
+  end;
+
   ICronSharedState = interface
     ['{6A7A6429-48F6-4F7A-854A-55C8DFA7FC31}']
     procedure Detach;
@@ -865,7 +900,25 @@ type
     fBlackoutEndTime: TDateTime;
     fNextScheduleNeedsResolve: Boolean;
     fRunning: Integer;
-    fPendingRunGenerations: TQueue<UInt64>;
+    fPendingTickets: TQueue<TCronDispatchTicket>;
+    fSettleEntries: TList<TCronSettleEntry>;
+    fSettleHeadSeq, fSettleNextSeq, fUncheckpointedExecutions: UInt64;
+    fCompletedThroughUtcUs: Int64;
+    fAutomaticallyDisabled: Boolean;
+    function UtcNowUs: Int64;
+    function OpenSettleTicketLocked(const aThroughUs: Int64;
+      const aThroughAtSettle: Boolean = False; const aMonoDueUs: Int64 = Low(Int64);
+      const aDueUtcUs: Int64 = Low(Int64)): UInt64;
+    function PersistenceCheckpointLocked(const aClockCoherent: Boolean;
+      const aUtcUs, aMonoUs: Int64; out aEarliestUtcUs: Int64): Int64;
+    procedure MarkSettledThroughLocked(const aThroughUs: Int64);
+    procedure DrainSettledPrefixLocked;
+    procedure MarkExecutionStartedLocked(const aSeq: UInt64);
+    procedure SettleTicket(const aSeq: UInt64; const aCompletionUtcUs: Int64 = 0);
+    procedure ResetSettleLedgerLocked(const aThroughUs: Int64);
+    procedure FinishDispatch(const aTicket: TCronDispatchTicket; const aAbandoned: Boolean);
+    procedure DisableAutomaticallyLocked;
+  private
     fExecDepth: Integer;
     fAllowDisabledDispatch: Integer;
     fPendingDestroy: Boolean;
@@ -877,8 +930,8 @@ type
     procedure SetIntervalWakeLocked(const aWakeUs: Int64; const aHasDeadline: Boolean = True);
     procedure ResetIntervalScheduleLocked;
     function RestoreIntervalDueLocked(const aSavedNext: TDateTime): Boolean;
-    procedure CompleteIntervalRun(const aRunGeneration: UInt64);
-    procedure ProcessIntervalDue(const aMonoNowUs, aWallNowUs: Int64);
+    function CompleteIntervalRun(const aRunGeneration: UInt64): Int64;
+    procedure ProcessIntervalDue(const aClock: TmaxCron.TIntervalPassClock);
     function GetEventPlan: string;
     function GetId: Int64;
     function GetName: string;
@@ -941,25 +994,26 @@ type
     function GetMisfirePolicy: TmaxCronMisfirePolicy;
     procedure DispatchCallbacks(const aInvokeMode: TmaxCronInvokeMode;
       const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-      const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64);
+      const aOverlapMode: TmaxCronOverlapMode; const aTicket: TCronDispatchTicket);
     procedure FinalizeOverlap(const aInvokeMode: TmaxCronInvokeMode;
       const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-      const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64);
+      const aOverlapMode: TmaxCronOverlapMode; const aTicket: TCronDispatchTicket);
     procedure ExecuteOnce(const aInvokeMode: TmaxCronInvokeMode;
       const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-      const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64);
-    function TryReserveExecution(const aRunGeneration: UInt64 = 0): Boolean;
+      const aOverlapMode: TmaxCronOverlapMode; const aTicket: TCronDispatchTicket);
+    function TryReserveExecution(const aTicket: TCronDispatchTicket): Boolean;
     function TryAcquireExecution: Boolean;
     procedure ReleaseExecution;
     procedure RollbackReservedExecution;
-    procedure HandleQueuedAcquireFailure(const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64);
-    procedure RollbackDispatchStartFailure(const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64);
+    procedure HandleQueuedAcquireFailure(const aOverlapMode: TmaxCronOverlapMode;
+      const aTicket: TCronDispatchTicket; const aAbandoned: Boolean = True);
+    procedure RollbackDispatchStartFailure(const aOverlapMode: TmaxCronOverlapMode; const aTicket: TCronDispatchTicket);
     procedure QueueMainThreadCallbacks(const aInvokeMode: TmaxCronInvokeMode;
       const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-      const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64);
+      const aOverlapMode: TmaxCronOverlapMode; const aTicket: TCronDispatchTicket);
     function DispatchScheduledCallbacks(const aInvokeMode: TmaxCronInvokeMode;
       const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-      const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64 = 0): Boolean;
+      const aOverlapMode: TmaxCronOverlapMode; const aTicket: TCronDispatchTicket): Boolean;
     procedure MarkPendingDestroy;
     function CanFreeNow: Boolean;
     function IsWithinValidityWindow(const aSchedule: TDateTime): Boolean;
@@ -1069,7 +1123,7 @@ type
 procedure ExecuteQueuedMainThread(const aToken: ICronEventToken;
   const aInvokeMode: TmaxCronInvokeMode; const aOnEvent: TmaxCronNotifyEvent;
   const aOnProc: TmaxCronNotifyProc; const aOverlapMode: TmaxCronOverlapMode;
-  const aRunGeneration: UInt64); forward;
+  const aTicket: TCronDispatchTicket); forward;
 
 const
   OneMinute = 1 / 24 / 60;
@@ -1105,6 +1159,185 @@ end;
 const
   // Latency offset only; integer due decisions do not depend on this margin.
   cCronPassOffsetUs = 200;
+
+{$IFDEF MAXCRON_TESTS}
+function CurrentMaxCronOccurrenceForTests(out aUtcUs, aMonoDueUs: Int64): Boolean;
+begin
+  Result := gMaxCronOccurrenceValid;
+  aUtcUs := gMaxCronOccurrenceUtcUs;
+  aMonoDueUs := gMaxCronOccurrenceMonoUs;
+end;
+function GetMaxCronPersistenceClockForTests(out aUtcUs, aMonoUs: Int64): Boolean;
+begin
+  Result := gMaxCronPersistenceClockValid;
+  aUtcUs := gMaxCronPersistenceUtcUs;
+  aMonoUs := gMaxCronPersistenceMonoUs;
+end;
+{$ENDIF}
+
+function TmaxCronEvent.UtcNowUs: Int64;
+begin
+  if fSharedState <> nil then Result := fSharedState.UtcNowUs
+  else Result := CronPreciseUtcNowUs;
+end;
+
+procedure TmaxCronEvent.DisableAutomaticallyLocked;
+begin
+  if FEnabled then fAutomaticallyDisabled := True;
+  FEnabled := False;
+end;
+
+function TmaxCronEvent.OpenSettleTicketLocked(const aThroughUs: Int64;
+  const aThroughAtSettle: Boolean; const aMonoDueUs, aDueUtcUs: Int64): UInt64;
+var
+  lEntry: TCronSettleEntry;
+begin
+  lEntry := Default(TCronSettleEntry);
+  lEntry.ThroughUs := aThroughUs;
+  lEntry.MonoDueUs := aMonoDueUs;
+  lEntry.DueUtcUs := aDueUtcUs;
+  if lEntry.DueUtcUs = Low(Int64) then lEntry.DueUtcUs := aThroughUs;
+  lEntry.ThroughAtSettle := aThroughAtSettle;
+  Result := fSettleNextSeq;
+  fSettleEntries.Add(lEntry);
+  Inc(fSettleNextSeq);
+end;
+
+procedure TmaxCronEvent.DrainSettledPrefixLocked;
+var
+  lEntry: TCronSettleEntry;
+begin
+  while (fSettleEntries.Count > 0) and fSettleEntries[0].Settled do
+  begin
+    lEntry := fSettleEntries[0];
+    if lEntry.ThroughUs > fCompletedThroughUtcUs then fCompletedThroughUtcUs := lEntry.ThroughUs;
+    if lEntry.ExecutionStarted then Dec(fUncheckpointedExecutions);
+    fSettleEntries.Delete(0);
+    Inc(fSettleHeadSeq);
+  end;
+end;
+
+procedure TmaxCronEvent.MarkExecutionStartedLocked(const aSeq: UInt64);
+var
+  lEntry: TCronSettleEntry;
+  lIndex: Integer;
+begin
+  lIndex := Integer(aSeq - fSettleHeadSeq);
+  lEntry := fSettleEntries[lIndex];
+  if lEntry.ExecutionStarted then Exit;
+  lEntry.ExecutionStarted := True;
+  fSettleEntries[lIndex] := lEntry;
+  Inc(fUncheckpointedExecutions);
+end;
+
+procedure TmaxCronEvent.MarkSettledThroughLocked(const aThroughUs: Int64);
+var
+  lEntry: TCronSettleEntry;
+begin
+  if fSettleEntries.Count = 0 then
+  begin
+    if aThroughUs > fCompletedThroughUtcUs then fCompletedThroughUtcUs := aThroughUs;
+    Exit;
+  end;
+  lEntry := Default(TCronSettleEntry);
+  lEntry.ThroughUs := aThroughUs;
+  lEntry.Settled := True;
+  fSettleEntries.Add(lEntry);
+  Inc(fSettleNextSeq);
+end;
+
+procedure TmaxCronEvent.SettleTicket(const aSeq: UInt64; const aCompletionUtcUs: Int64);
+var
+  lEntry: TCronSettleEntry;
+  lIndex: Integer;
+begin
+  fLock.Acquire;
+  try
+    if (aSeq = 0) or (aSeq < fSettleHeadSeq) or (aSeq >= fSettleNextSeq) then Exit;
+    lIndex := Integer(aSeq - fSettleHeadSeq);
+    lEntry := fSettleEntries[lIndex];
+    if lEntry.Settled then Exit;
+    lEntry.Settled := True;
+    if lEntry.ThroughAtSettle and (aCompletionUtcUs <> Low(Int64)) then
+    begin
+      if aCompletionUtcUs <> 0 then lEntry.ThroughUs := aCompletionUtcUs
+      else lEntry.ThroughUs := UtcNowUs;
+    end;
+    fSettleEntries[lIndex] := lEntry;
+    DrainSettledPrefixLocked;
+  finally
+    fLock.Release;
+  end;
+end;
+
+procedure TmaxCronEvent.ResetSettleLedgerLocked(const aThroughUs: Int64);
+begin
+  fSettleEntries.Clear;
+  fSettleHeadSeq := fSettleNextSeq;
+  fUncheckpointedExecutions := 0;
+  fCompletedThroughUtcUs := aThroughUs;
+end;
+
+procedure TmaxCronEvent.FinishDispatch(const aTicket: TCronDispatchTicket; const aAbandoned: Boolean);
+var
+  lCompletionUtcUs: Int64;
+begin
+  lCompletionUtcUs := CompleteIntervalRun(aTicket.RunGeneration);
+  // A replaced interval no longer owns the new deadline. Its original due
+  // can settle, but a later completion must not cover the replacement's work.
+  if (lCompletionUtcUs = 0) and (aTicket.RunGeneration <> 0) then lCompletionUtcUs := Low(Int64);
+  if not aAbandoned then SettleTicket(aTicket.SettleSeq, lCompletionUtcUs);
+end;
+
+{$IFDEF MAXCRON_TESTS}
+function OpenMaxCronSettleTicketForTests(const aEvent: IMaxCronEvent;
+  const aThroughUs: Int64; const aThroughAtSettle: Boolean): UInt64;
+var
+  lEvent: TmaxCronEvent;
+begin
+  if not TryGetCronEvent(aEvent, lEvent) then raise Exception.Create('Expected maxCron event');
+  lEvent.fLock.Acquire;
+  try
+    Result := lEvent.OpenSettleTicketLocked(aThroughUs, aThroughAtSettle);
+  finally
+    lEvent.fLock.Release;
+  end;
+end;
+
+procedure SettleMaxCronTicketForTests(const aEvent: IMaxCronEvent; const aSeq: UInt64);
+var
+  lEvent: TmaxCronEvent;
+begin
+  if not TryGetCronEvent(aEvent, lEvent) then raise Exception.Create('Expected maxCron event');
+  lEvent.SettleTicket(aSeq);
+end;
+
+procedure MarkMaxCronSettledForTests(const aEvent: IMaxCronEvent; const aThroughUs: Int64);
+var
+  lEvent: TmaxCronEvent;
+begin
+  if not TryGetCronEvent(aEvent, lEvent) then raise Exception.Create('Expected maxCron event');
+  lEvent.fLock.Acquire;
+  try
+    lEvent.MarkSettledThroughLocked(aThroughUs);
+  finally
+    lEvent.fLock.Release;
+  end;
+end;
+
+procedure ResetMaxCronLedgerForTests(const aEvent: IMaxCronEvent; const aThroughUs: Int64);
+var
+  lEvent: TmaxCronEvent;
+begin
+  if not TryGetCronEvent(aEvent, lEvent) then raise Exception.Create('Expected maxCron event');
+  lEvent.fLock.Acquire;
+  try
+    lEvent.ResetSettleLedgerLocked(aThroughUs);
+  finally
+    lEvent.fLock.Release;
+  end;
+end;
+{$ENDIF}
 
 function SchedulerMonoNowUs: Int64;
 begin
@@ -1211,7 +1444,10 @@ begin
 
   fNextScheduleNeedsResolve := False;
   fRunning := 0;
-  fPendingRunGenerations := TQueue<UInt64>.Create;
+  fPendingTickets := TQueue<TCronDispatchTicket>.Create;
+  fSettleEntries := TList<TCronSettleEntry>.Create;
+  fSettleHeadSeq := 1;
+  fSettleNextSeq := 1;
   fExecDepth := 0;
   fAllowDisabledDispatch := 0;
   fPendingDestroy := False;
@@ -1230,7 +1466,8 @@ begin
   if Supports(fEventToken, ICronEventToken, lToken) then
     lToken.Detach;
 
-  fPendingRunGenerations.Free;
+  fSettleEntries.Free;
+  fPendingTickets.Free;
   fScheduler.Free;
   fLock.Free;
 
@@ -1286,10 +1523,107 @@ begin
   if fSharedState <> nil then fSharedState.PublishIntervalWake(fId, aWakeUs, aHasDeadline);
 end;
 
+function TmaxCron.TryCapturePersistenceClock(out aUtcUs, aMonoUs: Int64): Boolean;
+const
+  cMaxClockAttempts = 8;
+  cClockToleranceUs = 2 * cCronUsPerMs;
+var
+  lAttempt: Integer;
+  lBeforeUs, lAfterUs, lUtc1Us, lUtc2Us, lUtcDeltaUs: Int64;
+begin
+  {$IFDEF MAXCRON_TESTS}
+  gMaxCronPersistenceClockValid := False;
+  {$ENDIF}
+  for lAttempt := 1 to cMaxClockAttempts do
+  begin
+    lBeforeUs := SchedulerMonoNowUs;
+    lUtc1Us := SchedulerUtcNowUs;
+    lUtc2Us := SchedulerUtcNowUs;
+    lAfterUs := SchedulerMonoNowUs;
+    lUtcDeltaUs := lUtc2Us - lUtc1Us;
+    if (lAfterUs >= lBeforeUs) and
+      (lUtcDeltaUs >= 0) and (lUtcDeltaUs <= lAfterUs - lBeforeUs + cClockToleranceUs) then
+    begin
+      // P6-02a: let m1/m2 be monotonic times at UTC1/UTC2 and r the net
+      // rollback. UTC2-UTC1 = (m2-m1)-r >= 0 implies r <= m2-m1 <= MONO2-m1.
+      // Thus UTC1-MONO2 <= the offset at UTC2. This remains conservative
+      // only if no further correction occurs after UTC2 (P6-02b boundary).
+      // Within that scope, earliest UTC/latest monotonic projects no due late,
+      // including a rollback masked by sampling delay. The upper acceptance
+      // bound only filters forward jumps; safety uses the nonnegative delta.
+      aUtcUs := lUtc1Us;
+      aMonoUs := lAfterUs;
+      {$IFDEF MAXCRON_TESTS}
+      gMaxCronPersistenceUtcUs := aUtcUs; gMaxCronPersistenceMonoUs := aMonoUs;
+      gMaxCronPersistenceClockValid := True;
+      {$ENDIF}
+      Exit(True);
+    end;
+  end;
+  aUtcUs := 0; aMonoUs := 0;
+  Result := False;
+end;
+
+function TmaxCronEvent.PersistenceCheckpointLocked(const aClockCoherent: Boolean;
+  const aUtcUs, aMonoUs: Int64; out aEarliestUtcUs: Int64): Int64;
+var
+  lDueUs, lPredecessorUs, lBoundUs: Int64;
+  lEntry: TCronSettleEntry;
+begin
+  // Every event uses the one immutable save-wide pair/fallback result.
+  // Never resample during serialization: the detectable window ends at UTC2.
+  // Low(Int64) requests the absent-checkpoint legacy fallback without using
+  // any rejected pair. Live decisions retain their existing pass anchor.
+  if not aClockCoherent and (fScheduleKind = TCronScheduleKind.Interval) then
+  begin
+    aEarliestUtcUs := Low(Int64);
+    Exit(0);
+  end;
+  aEarliestUtcUs := High(Int64);
+  if FEnabled then
+  begin
+    if (fScheduleKind = TCronScheduleKind.Interval) and fIntervalHasDeadline then
+      aEarliestUtcUs := aUtcUs + fIntervalDueUs - aMonoUs
+    else if (fScheduleKind = TCronScheduleKind.Cron) and (fNextDueUtcMs <> Low(Int64)) then
+      aEarliestUtcUs := fNextDueUtcMs * cCronUsPerMs;
+  end;
+  for lEntry in fSettleEntries do
+    if not lEntry.Settled then
+    begin
+      lDueUs := lEntry.DueUtcUs;
+      if lEntry.MonoDueUs <> Low(Int64) then
+      begin
+        if not aClockCoherent then
+        begin
+          aEarliestUtcUs := Low(Int64);
+          Exit(0);
+        end;
+        lDueUs := aUtcUs + lEntry.MonoDueUs - aMonoUs;
+      end;
+      if lDueUs < aEarliestUtcUs then aEarliestUtcUs := lDueUs;
+    end;
+  Result := fCompletedThroughUtcUs;
+  if not aClockCoherent then Result := 0;
+  if aEarliestUtcUs <> High(Int64) then
+  begin
+    // Derived from restore: interval resumes at C + I, so C <= due - I.
+    // Cron searches strictly after C, so C <= due - 1 ms. These are save
+    // bounds only; the in-memory ledger remains monotone between resets.
+    lPredecessorUs := cCronUsPerMs;
+    if fScheduleKind = TCronScheduleKind.Interval then
+      lPredecessorUs := Int64(fIntervalMs) * cCronUsPerMs;
+    lBoundUs := aEarliestUtcUs - lPredecessorUs;
+    if Result > lBoundUs then Result := lBoundUs;
+  end;
+  if Result <= 0 then Result := 0
+  else Result := CronFloorDiv(Result, cCronUsPerMs) * cCronUsPerMs;
+end;
+
 procedure TmaxCronEvent.ResetIntervalScheduleLocked;
 var
   lMonoUs, lWallUs, lIntervalUs, lValidFromUs: Int64;
 begin
+  if FEnabled then MarkSettledThroughLocked(UtcNowUs);
   Inc(fIntervalRunGeneration);
   fIntervalAwaitingCompletion := False;
   fIntervalDueUs := 0;
@@ -1300,7 +1634,7 @@ begin
     lIntervalUs := Int64(fIntervalMs) * cCronUsPerMs;
     if (CronDateTimeToInstantUs(FValidTo) > 0) and
       (CronDateTimeToInstantUs(FValidTo) < lWallUs) then
-      FEnabled := False
+      DisableAutomaticallyLocked
     else begin
       fIntervalDueUs := lMonoUs + lIntervalUs;
       lValidFromUs := CronDateTimeToInstantUs(FValidFrom);
@@ -1327,16 +1661,24 @@ begin
   Result := True;
 end;
 
-procedure TmaxCronEvent.CompleteIntervalRun(const aRunGeneration: UInt64);
+function TmaxCronEvent.CompleteIntervalRun(const aRunGeneration: UInt64): Int64;
+var
+  lMonoUs: Int64;
 begin
+  Result := 0;
   fLock.Acquire;
   try
     if not fIntervalAwaitingCompletion or (aRunGeneration <> fIntervalRunGeneration) then Exit;
+    // The same completion sample supplies both the checkpoint and any rearm.
+    Result := UtcNowUs;
     fIntervalAwaitingCompletion := False;
     if FEnabled and not fPendingDestroy and (fScheduleKind = TCronScheduleKind.Interval) and
       fIntervalFixedDelay then
     begin
-      fIntervalDueUs := SchedulerMonoNowUs + Int64(fIntervalMs) * cCronUsPerMs;
+      // UTC before monotonic is conservative if sampling is delayed. Settlement
+      // uses this same UTC sample, never a later read after rearming the due.
+      lMonoUs := SchedulerMonoNowUs;
+      fIntervalDueUs := lMonoUs + Int64(fIntervalMs) * cCronUsPerMs;
       SetIntervalWakeLocked(fIntervalDueUs);
     end;
   finally
@@ -1344,15 +1686,17 @@ begin
   end;
 end;
 
-procedure TmaxCronEvent.ProcessIntervalDue(const aMonoNowUs, aWallNowUs: Int64);
+procedure TmaxCronEvent.ProcessIntervalDue(const aClock: TmaxCron.TIntervalPassClock);
 var
   lOnEvent: TmaxCronNotifyEvent;
   lOnProc: TmaxCronNotifyProc;
   lInvokeMode: TmaxCronInvokeMode;
   lOverlap: TmaxCronOverlapMode;
   lMisfire: TmaxCronMisfirePolicy;
-  lCatchUpLimit, lFires, i: Cardinal;
+  lCatchUpLimit, lFires, i, j: Cardinal;
   lRunGeneration: UInt64;
+  lTickets: TArray<TCronDispatchTicket>;
+  lUtcUs, lFirstUs: Int64;
   lDueUs, lIntervalUs, lMissed, lNewDueUs, lWakeUs, lLastUs, lProjectedUs, lValidUs: Int64;
 begin
   fLock.Acquire;
@@ -1374,26 +1718,26 @@ begin
   fLock.Acquire;
   try
     if (fScheduleKind <> TCronScheduleKind.Interval) or not FEnabled or fPendingDestroy or
-      fIntervalAwaitingCompletion or not fIntervalHasDeadline or (aMonoNowUs < fIntervalWakeUs) then Exit;
+      fIntervalAwaitingCompletion or not fIntervalHasDeadline or (aClock.MonoUs < fIntervalWakeUs) then Exit;
     if (fIntervalExecutionLimit <> 0) and (fNumOfDue >= fIntervalExecutionLimit) then
     begin
-      FEnabled := False; fIntervalDueUs := 0; SetIntervalWakeLocked(0, False); Exit;
+      DisableAutomaticallyLocked; fIntervalDueUs := 0; SetIntervalWakeLocked(0, False); Exit;
     end;
     lDueUs := fIntervalDueUs;
     lIntervalUs := Int64(fIntervalMs) * cCronUsPerMs;
-    lProjectedUs := aWallNowUs - (aMonoNowUs - lDueUs);
+    lProjectedUs := aClock.WallUs - (aClock.MonoUs - lDueUs);
     lValidUs := CronDateTimeToInstantUs(FValidTo);
     if (lValidUs > 0) and (lProjectedUs > lValidUs) then
     begin
-      FEnabled := False; fIntervalDueUs := 0; SetIntervalWakeLocked(0, False); Exit;
+      DisableAutomaticallyLocked; fIntervalDueUs := 0; SetIntervalWakeLocked(0, False); Exit;
     end;
     lValidUs := CronDateTimeToInstantUs(FValidFrom);
     if lProjectedUs < lValidUs then
     begin
-      fIntervalDueUs := aMonoNowUs + (lValidUs - aWallNowUs);
+      fIntervalDueUs := aClock.MonoUs + (lValidUs - aClock.WallUs);
       SetIntervalWakeLocked(fIntervalDueUs); Exit;
     end;
-    lMissed := (aMonoNowUs - lDueUs) div lIntervalUs;
+    lMissed := (aClock.MonoUs - lDueUs) div lIntervalUs;
     lFires := 1;
     lLastUs := lDueUs;
     lNewDueUs := lDueUs + lIntervalUs;
@@ -1419,7 +1763,7 @@ begin
         ((not Assigned(lOnEvent)) and (not Assigned(lOnProc))) then
       begin
         lFires := 0;
-        lNewDueUs := aMonoNowUs + lIntervalUs;
+        lNewDueUs := aClock.MonoUs + lIntervalUs;
       end else begin
         lFires := 1;
         lLastUs := lDueUs;
@@ -1427,18 +1771,45 @@ begin
         fIntervalAwaitingCompletion := True;
       end;
     end;
+    // All occurrences and policy marks use the immutable pass anchor. Earlier
+    // callbacks may have advanced the clocks before this event is processed.
+    lUtcUs := aClock.UtcUs;
+    if lFires = 0 then
+    begin
+      if fIntervalFixedDelay then MarkSettledThroughLocked(lUtcUs)
+      else MarkSettledThroughLocked(lUtcUs - (aClock.MonoUs - (lNewDueUs - lIntervalUs)));
+    end;
+    SetLength(lTickets, lFires);
+    lFirstUs := lDueUs;
+    if lMisfire = mpFireOnceNow then lFirstUs := lLastUs;
+    for i := 1 to lFires do
+    begin
+      lTickets[i - 1].RunGeneration := lRunGeneration;
+      lTickets[i - 1].SettleSeq := OpenSettleTicketLocked(
+        lUtcUs - (aClock.MonoUs - (lFirstUs + Int64(i - 1) * lIntervalUs)), fIntervalFixedDelay,
+        lFirstUs + Int64(i - 1) * lIntervalUs);
+    end;
     fIntervalDueUs := lNewDueUs;
     lWakeUs := lNewDueUs;
-    if not fIntervalAwaitingCompletion and (lWakeUs <= aMonoNowUs) then lWakeUs := aMonoNowUs + lIntervalUs;
+    if not fIntervalAwaitingCompletion and (lWakeUs <= aClock.MonoUs) then lWakeUs := aClock.MonoUs + lIntervalUs;
     SetIntervalWakeLocked(lWakeUs, not fIntervalAwaitingCompletion);
     if lFires > 0 then
-      fLastExecutionTime := CronInstantUsToDateTime(aWallNowUs - (aMonoNowUs - lLastUs));
+      fLastExecutionTime := CronInstantUsToDateTime(aClock.WallUs - (aClock.MonoUs - lLastUs));
   finally
     fLock.Release;
   end;
   for i := 1 to lFires do
-    if not DispatchScheduledCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap, lRunGeneration) then
-      CompleteIntervalRun(lRunGeneration);
+  begin
+    try
+      if not DispatchScheduledCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap, lTickets[i - 1]) then
+        FinishDispatch(lTickets[i - 1], False);
+    except
+      // This pass already advanced the entire batch. Preserve its reported
+      // start-failure outcome for tickets that dispatch never reached.
+      for j := i + 1 to lFires do FinishDispatch(lTickets[j - 1], False);
+      raise;
+    end;
+  end;
 end;
 
 procedure TmaxCronEvent.ResetSchedule;
@@ -1458,9 +1829,10 @@ begin
     else lBaseUtcMs := CronPreciseUtcNowUs;
     lBaseUtcMs := CronInstantFloorSecond(lBaseUtcMs) * cCronMsPerSecond;
   end;
+  if FEnabled then MarkSettledThroughLocked(lBaseUtcMs * cCronUsPerMs);
   lFindResult := FindNextDueUtc(lBaseUtcMs, CronSystemZoneRules, lDueUtcMs);
   fNextScheduleNeedsResolve := lFindResult = TFindNextScheduleResult.fnsSearchLimitReached;
-  if lFindResult = TFindNextScheduleResult.fnsNotFound then FEnabled := False;
+  if lFindResult = TFindNextScheduleResult.fnsNotFound then DisableAutomaticallyLocked;
   if fSharedState <> nil then fSharedState.MarkHeapDirty;
 end;
 
@@ -1525,7 +1897,7 @@ begin
       (fNextDueUtcMs = Low(Int64)) then Exit;
     lResult := FindNextDueUtc(fDueBaseUtcMs, aHostZone, lDueUtcMs);
     fNextScheduleNeedsResolve := lResult = TFindNextScheduleResult.fnsSearchLimitReached;
-    if lResult = TFindNextScheduleResult.fnsNotFound then FEnabled := False;
+    if lResult = TFindNextScheduleResult.fnsNotFound then DisableAutomaticallyLocked;
   finally
     fLock.Release;
   end;
@@ -1556,11 +1928,13 @@ begin
 
   fLock.Acquire;
   try
+    fAutomaticallyDisabled := False;
     FEnabled := True;
     fNumOfExecutions := 0;
     fNumOfDue := 0;
     fLastExecutionTime := 0;
     fLastDueUtcMs := Low(Int64);
+    ResetSettleLedgerLocked(0);
     ResetSchedule;
   finally
     fLock.Release;
@@ -1573,15 +1947,18 @@ var
 begin
   fLock.Acquire;
   try
+    if not Value then fAutomaticallyDisabled := False;
     if FEnabled = Value then Exit;
     lChanged := True;
     if Value then
     begin
+      fAutomaticallyDisabled := False;
       FEnabled := True;
       fNumOfExecutions := 0;
       fNumOfDue := 0;
       fLastExecutionTime := 0;
       fLastDueUtcMs := Low(Int64);
+      ResetSettleLedgerLocked(0);
       ResetSchedule;
     end else begin
       FEnabled := False;
@@ -1739,6 +2116,7 @@ procedure TmaxCronEvent.Stop;
 begin
   fLock.Acquire;
   try
+    fAutomaticallyDisabled := False;
     FEnabled := False;
     if fScheduleKind = TCronScheduleKind.Interval then
     begin
@@ -4066,6 +4444,8 @@ var
   lCronEvent: TmaxCronEvent;
   lCount: Integer;
   lIndex: Integer;
+  lCheckpointUs, lEarliestUtcUs, lSaveUtcUs, lSaveMonoUs: Int64;
+  lClockCoherent: Boolean;
 begin
   Result := 0;
   lStore := GetScheduleStore;
@@ -4074,6 +4454,9 @@ begin
 
   lSnapshot := Snapshot;
   SetLength(lStates, Length(lSnapshot));
+  // P6-02b: one capture attempt sequence per save, shared by every event.
+  // Corrections after its final UTC2 belong to the documented after-save case.
+  lClockCoherent := TryCapturePersistenceClock(lSaveUtcUs, lSaveMonoUs);
   lCount := 0;
   for lIndex := 0 to Length(lSnapshot) - 1 do
   begin
@@ -4081,6 +4464,9 @@ begin
     if lEvent = nil then
       Continue;
 
+    {$IFDEF MAXCRON_TESTS}
+    if Assigned(gMaxCronBeforeSaveEventHook) then gMaxCronBeforeSaveEventHook(lEvent, lIndex);
+    {$ENDIF}
     lState := Default(TMaxCronPersistedEvent);
     lState.Name := lEvent.Name;
     lState.EventPlan := lEvent.EventPlan;
@@ -4112,6 +4498,9 @@ begin
       lCronEvent.fLock.Acquire;
       try
         lState.NextScheduleNeedsResolve := lCronEvent.fNextScheduleNeedsResolve;
+        lCheckpointUs := lCronEvent.PersistenceCheckpointLocked(
+          lClockCoherent, lSaveUtcUs, lSaveMonoUs, lEarliestUtcUs);
+        lState.CompletedThrough := CronInstantUsToDateTime(lCheckpointUs);
       finally
         lCronEvent.fLock.Release;
       end;
@@ -4361,18 +4750,22 @@ end;
 
 procedure TmaxCron.DoTick;
 var
-  lUtcUs, lWallUs, lKey: Int64;
+  lKey: Int64;
+  lClock: TIntervalPassClock;
 begin
   if IsShutdownRequested then
     Exit;
-  lUtcUs := SchedulerUtcNowUs;
-  lWallUs := SchedulerWallNowUs;
-  DoIntervalTickAt(SchedulerMonoNowUs, lWallUs);
-  lKey := CronPassKey(lUtcUs);
+  // Capture once before dispatch. Reading UTC before monotonic keeps due-to-UTC
+  // projections conservative even when acquiring the sample itself takes time.
+  lClock.UtcUs := SchedulerUtcNowUs;
+  lClock.WallUs := SchedulerWallNowUs;
+  lClock.MonoUs := SchedulerMonoNowUs;
+  DoIntervalTickAt(lClock);
+  lKey := CronPassKey(lClock.UtcUs);
   if lKey <> TInterlocked.Read(fLastCronPassKey) then
   begin
     TInterlocked.Exchange(fLastCronPassKey, lKey);
-    DoTickAtUs(lUtcUs);
+    DoTickAtUs(lClock.UtcUs);
   end;
 end;
 
@@ -4404,7 +4797,7 @@ begin
   if lChanged then WakeTimer;
 end;
 
-procedure TmaxCron.DoIntervalTickAt(const aMonoNowUs, aWallNowUs: Int64);
+procedure TmaxCron.DoIntervalTickAt(const aClock: TIntervalPassClock);
 var
   lIds: TList<Int64>;
   lSnapshot: TArray<IMaxCronEvent>;
@@ -4413,11 +4806,11 @@ var
   i, lIndex: Integer;
 begin
   if IsShutdownRequested then Exit;
-  if not fIntervalQueue.TryPeek(lWakeUs) or (lWakeUs > aMonoNowUs) then Exit;
+  if not fIntervalQueue.TryPeek(lWakeUs) or (lWakeUs > aClock.MonoUs) then Exit;
   lIds := TList<Int64>.Create;
   try
     // PopDue releases the leaf queue lock before acquiring fItemsLock.
-    fIntervalQueue.PopDue(aMonoNowUs, lIds);
+    fIntervalQueue.PopDue(aClock.MonoUs, lIds);
     fItemsLock.Acquire;
     try
       Inc(fTickDepth);
@@ -4430,7 +4823,7 @@ begin
     try
       for i := 0 to Length(lSnapshot) - 1 do
         if TryGetCronEvent(lSnapshot[i], lEvent) then
-          lEvent.ProcessIntervalDue(aMonoNowUs, aWallNowUs);
+          lEvent.ProcessIntervalDue(aClock);
     finally
       for i := 0 to Length(lSnapshot) - 1 do
         if TryGetCronEvent(lSnapshot[i], lEvent) then
@@ -4758,15 +5151,25 @@ begin
 end;
 
 procedure TmaxCron.TickAtUs(const aNowUs: TCronInstantUs);
+var
+  lClock: TIntervalPassClock;
 begin
-  DoIntervalTickAt(SchedulerMonoNowUs, aNowUs);
-  DoTickAtUs(WallUsToUtcUsForTests(aNowUs));
+  lClock.UtcUs := WallUsToUtcUsForTests(aNowUs);
+  lClock.WallUs := aNowUs;
+  lClock.MonoUs := SchedulerMonoNowUs;
+  DoIntervalTickAt(lClock);
+  DoTickAtUs(lClock.UtcUs);
 end;
 
 procedure TmaxCron.TickAtUtcUs(const aUtcUs: TCronInstantUs);
+var
+  lClock: TIntervalPassClock;
 begin
-  DoIntervalTickAt(SchedulerMonoNowUs, UtcUsToWallUs(aUtcUs));
-  DoTickAtUs(aUtcUs);
+  lClock.UtcUs := aUtcUs;
+  lClock.WallUs := UtcUsToWallUs(aUtcUs);
+  lClock.MonoUs := SchedulerMonoNowUs;
+  DoIntervalTickAt(lClock);
+  DoTickAtUs(lClock.UtcUs);
 end;
 
 procedure TmaxCron.TickAt(const aNow: TDateTime);
@@ -6024,18 +6427,18 @@ begin
   end;
 end;
 
-function TmaxCronEvent.TryReserveExecution(const aRunGeneration: UInt64): Boolean;
+function TmaxCronEvent.TryReserveExecution(const aTicket: TCronDispatchTicket): Boolean;
 begin
   fLock.Acquire;
   try
-    if fPendingDestroy or ((aRunGeneration <> 0) and (aRunGeneration <> fIntervalRunGeneration)) then
+    if fPendingDestroy or ((aTicket.RunGeneration <> 0) and (aTicket.RunGeneration <> fIntervalRunGeneration)) then
       Exit(False);
     if not FEnabled then
       if TInterlocked.CompareExchange(fAllowDisabledDispatch, 0, 0) = 0 then
         Exit(False);
     if (GetExecutionLimitLocked <> 0) and (fNumOfDue >= GetExecutionLimitLocked) then
     begin
-      FEnabled := False;
+      DisableAutomaticallyLocked;
       Exit(False);
     end;
 
@@ -6082,7 +6485,8 @@ begin
   end;
 end;
 
-procedure TmaxCronEvent.HandleQueuedAcquireFailure(const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64);
+procedure TmaxCronEvent.HandleQueuedAcquireFailure(const aOverlapMode: TmaxCronOverlapMode;
+  const aTicket: TCronDispatchTicket; const aAbandoned: Boolean);
 begin
   RollbackReservedExecution;
 
@@ -6094,10 +6498,10 @@ begin
       begin
         fLock.Acquire;
         try
-          while fPendingRunGenerations.Count > 0 do
+          while fPendingTickets.Count > 0 do
           begin
             RollbackReservedExecution;
-            CompleteIntervalRun(fPendingRunGenerations.Dequeue);
+            FinishDispatch(fPendingTickets.Dequeue, aAbandoned);
           end;
           TInterlocked.Exchange(fRunning, 0);
         finally
@@ -6106,12 +6510,12 @@ begin
       end;
   end;
 
-  CompleteIntervalRun(aRunGeneration);
+  FinishDispatch(aTicket, aAbandoned);
   if fSharedState <> nil then
     fSharedState.FlushPendingFree;
 end;
 
-procedure TmaxCronEvent.RollbackDispatchStartFailure(const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64);
+procedure TmaxCronEvent.RollbackDispatchStartFailure(const aOverlapMode: TmaxCronOverlapMode; const aTicket: TCronDispatchTicket);
 begin
   RollbackReservedExecution;
 
@@ -6128,10 +6532,10 @@ begin
       begin
         fLock.Acquire;
         try
-          while fPendingRunGenerations.Count > 0 do
+          while fPendingTickets.Count > 0 do
           begin
             RollbackReservedExecution;
-            CompleteIntervalRun(fPendingRunGenerations.Dequeue);
+            FinishDispatch(fPendingTickets.Dequeue, False);
           end;
           TInterlocked.Exchange(fRunning, 0);
         finally
@@ -6141,20 +6545,20 @@ begin
       end;
   end;
 
-  CompleteIntervalRun(aRunGeneration);
+  FinishDispatch(aTicket, False);
   if fSharedState <> nil then
     fSharedState.FlushPendingFree;
 end;
 
 procedure TmaxCronEvent.QueueMainThreadCallbacks(const aInvokeMode: TmaxCronInvokeMode;
   const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-  const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64);
+  const aOverlapMode: TmaxCronOverlapMode; const aTicket: TCronDispatchTicket);
 var
   lToken: ICronEventToken;
 begin
   if not Supports(fEventToken, ICronEventToken, lToken) then
   begin
-    HandleQueuedAcquireFailure(aOverlapMode, aRunGeneration);
+    HandleQueuedAcquireFailure(aOverlapMode, aTicket);
     Exit;
   end;
 
@@ -6163,17 +6567,17 @@ begin
     TThread.Queue(nil,
       procedure
       begin
-        ExecuteQueuedMainThread(lToken, aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+        ExecuteQueuedMainThread(lToken, aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
       end);
     {$ELSE}
     TThread.ForceQueue(nil,
       procedure
       begin
-        ExecuteQueuedMainThread(lToken, aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+        ExecuteQueuedMainThread(lToken, aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
       end);
     {$ENDIF}
   except
-    HandleQueuedAcquireFailure(aOverlapMode, aRunGeneration);
+    HandleQueuedAcquireFailure(aOverlapMode, aTicket, False);
     raise;
   end;
 end;
@@ -6188,7 +6592,7 @@ begin
     Inc(fIntervalRunGeneration);
     fIntervalAwaitingCompletion := False;
     SetIntervalWakeLocked(0, False);
-    fPendingRunGenerations.Clear;
+    fPendingTickets.Clear;
 
     FOnScheduleEvent := nil;
     FOnScheduleProc := nil;
@@ -6213,10 +6617,10 @@ end;
 
 procedure TmaxCronEvent.FinalizeOverlap(const aInvokeMode: TmaxCronInvokeMode;
   const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-  const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64);
+  const aOverlapMode: TmaxCronOverlapMode; const aTicket: TCronDispatchTicket);
 var
   lHasPending: Boolean;
-  lPendingGeneration: UInt64;
+  lPendingTicket: TCronDispatchTicket;
 begin
   case aOverlapMode of
     TmaxCronOverlapMode.omSkipIfRunning:
@@ -6226,10 +6630,10 @@ begin
       begin
         fLock.Acquire;
         try
-          if fPendingDestroy then fPendingRunGenerations.Clear;
-          lHasPending := fPendingRunGenerations.Count > 0;
-          lPendingGeneration := 0;
-          if lHasPending then lPendingGeneration := fPendingRunGenerations.Dequeue
+          if fPendingDestroy then fPendingTickets.Clear;
+          lHasPending := fPendingTickets.Count > 0;
+          lPendingTicket := Default(TCronDispatchTicket);
+          if lHasPending then lPendingTicket := fPendingTickets.Dequeue
           else TInterlocked.Exchange(fRunning, 0);
         finally
           fLock.Release;
@@ -6244,9 +6648,9 @@ begin
                 procedure
                 begin
                   try
-                    DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, lPendingGeneration);
+                    DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, lPendingTicket);
                   except
-                    RollbackDispatchStartFailure(aOverlapMode, lPendingGeneration);
+                    RollbackDispatchStartFailure(aOverlapMode, lPendingTicket);
                     raise;
                   end;
                 end);
@@ -6255,18 +6659,18 @@ begin
                 procedure
                 begin
                   try
-                    DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, lPendingGeneration);
+                    DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, lPendingTicket);
                   except
-                    RollbackDispatchStartFailure(aOverlapMode, lPendingGeneration);
+                    RollbackDispatchStartFailure(aOverlapMode, lPendingTicket);
                     raise;
                   end;
                 end);
               {$ENDIF}
             end else begin
-              DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, lPendingGeneration);
+              DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, lPendingTicket);
             end;
           except
-            RollbackDispatchStartFailure(aOverlapMode, lPendingGeneration);
+            RollbackDispatchStartFailure(aOverlapMode, lPendingTicket);
             raise;
           end;
           Exit; // keep execution acquired for the serialized chain
@@ -6283,7 +6687,7 @@ end;
 
 procedure TmaxCronEvent.ExecuteOnce(const aInvokeMode: TmaxCronInvokeMode;
   const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-  const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64);
+  const aOverlapMode: TmaxCronOverlapMode; const aTicket: TCronDispatchTicket);
 var
   lToken: ICronEventToken;
   lLifetime: IMaxCronEvent;
@@ -6303,7 +6707,17 @@ var
   lInvocationSucceeded: Boolean;
   lOwnerPointer: Pointer;
   lPreviousCron: Pointer;
+  {$IFDEF MAXCRON_TESTS}
+  lOccurrenceValid, lPreviousOccurrenceValid: Boolean;
+  lOccurrenceUtcUs, lOccurrenceMonoUs, lPreviousOccurrenceUtcUs, lPreviousOccurrenceMonoUs: Int64;
+  lOccurrence: TCronSettleEntry;
+  {$ENDIF}
 begin
+  {$IFDEF MAXCRON_TESTS}
+  lOccurrenceValid := False;
+  lOccurrenceUtcUs := 0; lOccurrenceMonoUs := Low(Int64);
+  {$ENDIF}
+  lAttemptCount := 0;
   lLifetime := Self;
   try
     lEvent := nil;
@@ -6321,6 +6735,16 @@ begin
     fLock.Acquire;
     try
       Inc(fNumOfExecutions);
+      if (aTicket.SettleSeq >= fSettleHeadSeq) and (aTicket.SettleSeq < fSettleNextSeq) then
+      begin
+        MarkExecutionStartedLocked(aTicket.SettleSeq);
+        {$IFDEF MAXCRON_TESTS}
+        lOccurrence := fSettleEntries[Integer(aTicket.SettleSeq - fSettleHeadSeq)];
+        lOccurrenceValid := True;
+        lOccurrenceUtcUs := lOccurrence.DueUtcUs;
+        lOccurrenceMonoUs := lOccurrence.MonoDueUs;
+        {$ENDIF}
+      end;
       lRetryMaxAttempts := fRetryMaxAttempts;
       lCurrentDelayMs := fRetryInitialDelayMs;
       lMaxDelayMs := fRetryMaxDelayMs;
@@ -6349,6 +6773,14 @@ begin
 
     lPreviousCron := gMaxCronExecutingCron;
     gMaxCronExecutingCron := lOwnerPointer;
+    {$IFDEF MAXCRON_TESTS}
+    lPreviousOccurrenceValid := gMaxCronOccurrenceValid;
+    lPreviousOccurrenceUtcUs := gMaxCronOccurrenceUtcUs;
+    lPreviousOccurrenceMonoUs := gMaxCronOccurrenceMonoUs;
+    gMaxCronOccurrenceValid := lOccurrenceValid;
+    gMaxCronOccurrenceUtcUs := lOccurrenceUtcUs;
+    gMaxCronOccurrenceMonoUs := lOccurrenceMonoUs;
+    {$ENDIF}
     try
       for lAttemptIndex := 0 to lRetryMaxAttempts do
       begin
@@ -6385,6 +6817,11 @@ begin
       end;
     finally
       gMaxCronExecutingCron := lPreviousCron;
+      {$IFDEF MAXCRON_TESTS}
+      gMaxCronOccurrenceValid := lPreviousOccurrenceValid;
+      gMaxCronOccurrenceUtcUs := lPreviousOccurrenceUtcUs;
+      gMaxCronOccurrenceMonoUs := lPreviousOccurrenceMonoUs;
+      {$ENDIF}
       if fSharedState <> nil then
         fSharedState.DecrementCallbackDepth;
       if lDispatchLimitsActive and lPermitAcquired and (fSharedState <> nil) then
@@ -6406,9 +6843,9 @@ begin
     if (aOverlapMode = TmaxCronOverlapMode.omAllowOverlap) or (aOverlapMode = TmaxCronOverlapMode.omSkipIfRunning) then
       ReleaseExecution;
     try
-      FinalizeOverlap(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+      FinalizeOverlap(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
     finally
-      CompleteIntervalRun(aRunGeneration);
+      FinishDispatch(aTicket, lAttemptCount = 0);
       lLifetime := nil;
     end;
   end;
@@ -6417,7 +6854,7 @@ end;
 procedure ExecuteQueuedMainThread(const aToken: ICronEventToken;
   const aInvokeMode: TmaxCronInvokeMode; const aOnEvent: TmaxCronNotifyEvent;
   const aOnProc: TmaxCronNotifyProc; const aOverlapMode: TmaxCronOverlapMode;
-  const aRunGeneration: UInt64);
+  const aTicket: TCronDispatchTicket);
 var
   lEvent: TmaxCronEvent;
 begin
@@ -6430,7 +6867,7 @@ begin
       gMaxCronBeforeQueuedAcquireHook(lEvent);
     except
       if aToken.TryGetEvent(lEvent) and (lEvent <> nil) then
-        lEvent.HandleQueuedAcquireFailure(aOverlapMode, aRunGeneration);
+        lEvent.HandleQueuedAcquireFailure(aOverlapMode, aTicket);
       Exit;
     end;
   end;
@@ -6438,16 +6875,16 @@ begin
   if not aToken.TryAcquireEvent(lEvent) then
   begin
     if aToken.TryGetEvent(lEvent) and (lEvent <> nil) then
-      lEvent.HandleQueuedAcquireFailure(aOverlapMode, aRunGeneration);
+      lEvent.HandleQueuedAcquireFailure(aOverlapMode, aTicket);
     Exit;
   end;
 
-  lEvent.ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+  lEvent.ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
 end;
 
 procedure TmaxCronEvent.DispatchCallbacks(const aInvokeMode: TmaxCronInvokeMode;
   const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-  const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64);
+  const aOverlapMode: TmaxCronOverlapMode; const aTicket: TCronDispatchTicket);
 var
   lThread: TThread;
   lKeepAlive: IInterface;
@@ -6466,13 +6903,13 @@ begin
         // WARNING: imMainThread requires a running main-thread message pump (VCL context).
         // In non-UI/service hosts this queue path may never execute.
         if TThread.CurrentThread.ThreadID = MainThreadID then
-          ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration)
+          ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket)
         else
         begin
           {$IFDEF ForceQueueNotAvailable}
-          TThread.Queue(nil, procedure begin ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration); end);
+          TThread.Queue(nil, procedure begin ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket); end);
           {$ELSE}
-          TThread.ForceQueue(nil, procedure begin ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration); end);
+          TThread.ForceQueue(nil, procedure begin ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket); end);
           {$ENDIF}
         end;
       end;
@@ -6484,7 +6921,7 @@ begin
           TTask.Run(
             procedure
             begin
-              ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+              ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
             end
             {$IFDEF MAXCRON_TESTS}
             {$IFNDEF FPC}
@@ -6496,7 +6933,7 @@ begin
           lThread := TThread.CreateAnonymousThread(
             procedure
             begin
-              ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+              ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
             end);
           lThread.FreeOnTerminate := True;
           lThread.Start;
@@ -6508,7 +6945,7 @@ begin
         TTask.Run(
           procedure
           begin
-            ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+            ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
           end);
       end;
 
@@ -6516,7 +6953,7 @@ begin
       begin
         if (fSharedState = nil) or (not fSharedState.IsAlive) then
         begin
-          DispatchCallbacks(TmaxCronInvokeMode.imTTask, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+          DispatchCallbacks(TmaxCronInvokeMode.imTTask, aOnEvent, aOnProc, aOverlapMode, aTicket);
           Exit;
         end;
 
@@ -6529,7 +6966,7 @@ begin
             procedure
             begin
               try
-                ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+                ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
               finally
                 lKeepAliveEntry.MarkDone;
               end;
@@ -6539,7 +6976,7 @@ begin
           on E: Exception do
           begin
             lKeepAliveEntry.MarkDone;
-            DispatchCallbacks(TmaxCronInvokeMode.imTTask, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+            DispatchCallbacks(TmaxCronInvokeMode.imTTask, aOnEvent, aOnProc, aOverlapMode, aTicket);
             Exit;
           end;
         end;
@@ -6547,20 +6984,20 @@ begin
         if lAsync = nil then
         begin
           lKeepAliveEntry.MarkDone;
-          DispatchCallbacks(TmaxCronInvokeMode.imTTask, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+          DispatchCallbacks(TmaxCronInvokeMode.imTTask, aOnEvent, aOnProc, aOverlapMode, aTicket);
           Exit;
         end;
 
         lKeepAliveEntry.AttachAsync(lAsync);
       end;
   else
-    ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+    ExecuteOnce(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
   end;
 end;
 
 function TmaxCronEvent.DispatchScheduledCallbacks(const aInvokeMode: TmaxCronInvokeMode;
   const aOnEvent: TmaxCronNotifyEvent; const aOnProc: TmaxCronNotifyProc;
-  const aOverlapMode: TmaxCronOverlapMode; const aRunGeneration: UInt64): Boolean;
+  const aOverlapMode: TmaxCronOverlapMode; const aTicket: TCronDispatchTicket): Boolean;
 var
   lQueueMain, lStartSerialized: Boolean;
 begin
@@ -6573,32 +7010,32 @@ begin
   case aOverlapMode of
     TmaxCronOverlapMode.omAllowOverlap:
       begin
-        if not TryReserveExecution(aRunGeneration) then
+        if not TryReserveExecution(aTicket) then
           Exit;
         if lQueueMain then
         begin
-          QueueMainThreadCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+          QueueMainThreadCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
           Exit(True);
         end;
         if not TryAcquireExecution then Exit;
         try
-          DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+          DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
         except
-          RollbackDispatchStartFailure(aOverlapMode, aRunGeneration);
+          RollbackDispatchStartFailure(aOverlapMode, aTicket);
           raise;
         end;
       end;
     TmaxCronOverlapMode.omSkipIfRunning:
       begin
         if TInterlocked.CompareExchange(fRunning, 1, 0) <> 0 then Exit;
-        if not TryReserveExecution(aRunGeneration) then
+        if not TryReserveExecution(aTicket) then
         begin
           TInterlocked.Exchange(fRunning, 0);
           Exit;
         end;
         if lQueueMain then
         begin
-          QueueMainThreadCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+          QueueMainThreadCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
           Exit(True);
         end;
         if not TryAcquireExecution then
@@ -6607,9 +7044,9 @@ begin
           Exit;
         end;
         try
-          DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+          DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
         except
-          RollbackDispatchStartFailure(aOverlapMode, aRunGeneration);
+          RollbackDispatchStartFailure(aOverlapMode, aTicket);
           raise;
         end;
       end;
@@ -6618,24 +7055,24 @@ begin
       begin
         fLock.Acquire;
         try
-          if (aRunGeneration <> 0) and (aRunGeneration <> fIntervalRunGeneration) then Exit;
+          if (aTicket.RunGeneration <> 0) and (aTicket.RunGeneration <> fIntervalRunGeneration) then Exit;
           lStartSerialized := TInterlocked.CompareExchange(fRunning, 1, 0) = 0;
           if not lStartSerialized and (aOverlapMode = TmaxCronOverlapMode.omSerializeCoalesce) and
-            (fPendingRunGenerations.Count > 0) then
+            (fPendingTickets.Count > 0) then
           begin
             // The one coalesced occurrence inherits the latest admitted owner.
-            fPendingRunGenerations.Dequeue;
-            fPendingRunGenerations.Enqueue(aRunGeneration);
+            SettleTicket(fPendingTickets.Dequeue.SettleSeq);
+            fPendingTickets.Enqueue(aTicket);
             Exit(True);
           end;
-          if not TryReserveExecution(aRunGeneration) then
+          if not TryReserveExecution(aTicket) then
           begin
             if lStartSerialized then TInterlocked.Exchange(fRunning, 0);
             Exit;
           end;
           if not lStartSerialized then
           begin
-            fPendingRunGenerations.Enqueue(aRunGeneration);
+            fPendingTickets.Enqueue(aTicket);
             Exit(True);
           end;
         finally
@@ -6643,7 +7080,7 @@ begin
         end;
         if lQueueMain then
         begin
-          QueueMainThreadCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+          QueueMainThreadCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
           Exit(True);
         end;
         if not TryAcquireExecution then
@@ -6652,9 +7089,9 @@ begin
           Exit;
         end;
         try
-          DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aRunGeneration);
+          DispatchCallbacks(aInvokeMode, aOnEvent, aOnProc, aOverlapMode, aTicket);
         except
-          RollbackDispatchStartFailure(aOverlapMode, aRunGeneration);
+          RollbackDispatchStartFailure(aOverlapMode, aTicket);
           raise;
         end;
       end;
@@ -6677,6 +7114,8 @@ var
   lFindResult: TFindNextScheduleResult;
   lNowBaseUtcMs, lNextUtcMs: Int64;
   lDueUs: TCronInstantUs;
+  lTicket: TCronDispatchTicket;
+  lThroughUs: Int64;
 begin
   lNowBaseUtcMs := CronInstantFloorSecond(aNowUs) * cCronMsPerSecond;
   lOnEvent := nil;
@@ -6694,6 +7133,7 @@ begin
     if fNextScheduleNeedsResolve then
     begin
       if aNowUs < fNextDueUtcMs * cCronUsPerMs then Exit;
+      MarkSettledThroughLocked(lNowBaseUtcMs * cCronUsPerMs);
       lFindResult := FindNextDueUtc(lNowBaseUtcMs, aHostZone, lNextUtcMs);
       case lFindResult of
         TFindNextScheduleResult.fnsFound:
@@ -6701,7 +7141,7 @@ begin
         TFindNextScheduleResult.fnsNotFound:
           begin
             fNextScheduleNeedsResolve := False;
-            FEnabled := False;
+            DisableAutomaticallyLocked;
           end;
         TFindNextScheduleResult.fnsSearchLimitReached:
           fNextScheduleNeedsResolve := True;
@@ -6716,7 +7156,7 @@ begin
     if fScheduler.ExecutionLimit <> 0 then
       if fNumOfDue >= fScheduler.ExecutionLimit then
       begin
-        FEnabled := False;
+        DisableAutomaticallyLocked;
         Exit;
       end;
 
@@ -6761,6 +7201,7 @@ begin
       if fNextScheduleNeedsResolve then
       begin
         if aNowUs < fNextDueUtcMs * cCronUsPerMs then Exit;
+        MarkSettledThroughLocked(lNowBaseUtcMs * cCronUsPerMs);
         lFindResult := FindNextDueUtc(lNowBaseUtcMs, aHostZone, lNextUtcMs);
         case lFindResult of
           TFindNextScheduleResult.fnsFound:
@@ -6768,7 +7209,7 @@ begin
           TFindNextScheduleResult.fnsNotFound:
             begin
               fNextScheduleNeedsResolve := False;
-              FEnabled := False;
+              DisableAutomaticallyLocked;
             end;
           TFindNextScheduleResult.fnsSearchLimitReached:
             fNextScheduleNeedsResolve := True;
@@ -6783,13 +7224,14 @@ begin
       if fScheduler.ExecutionLimit <> 0 then
         if fNumOfDue >= fScheduler.ExecutionLimit then
         begin
-          FEnabled := False;
+          DisableAutomaticallyLocked;
           Exit;
         end;
 
       if (lMisfire = TmaxCronMisfirePolicy.mpSkip) and (aNowUs - lDueUs >= cCronUsPerSecond) then
       begin
         fLastDueUtcMs := fNextDueUtcMs;
+        MarkSettledThroughLocked(lNowBaseUtcMs * cCronUsPerMs);
         lFindResult := FindNextDueUtc(lNowBaseUtcMs, aHostZone, lNextUtcMs);
         case lFindResult of
           TFindNextScheduleResult.fnsFound:
@@ -6797,7 +7239,7 @@ begin
           TFindNextScheduleResult.fnsNotFound:
             begin
               fNextScheduleNeedsResolve := False;
-              FEnabled := False;
+              DisableAutomaticallyLocked;
             end;
           TFindNextScheduleResult.fnsSearchLimitReached:
             fNextScheduleNeedsResolve := True;
@@ -6820,7 +7262,7 @@ begin
                 TFindNextScheduleResult.fnsNotFound:
                   begin
                     fNextScheduleNeedsResolve := False;
-                    FEnabled := False;
+                    DisableAutomaticallyLocked;
                     lAllowDisabledDispatch := True;
                   end;
                 TFindNextScheduleResult.fnsSearchLimitReached:
@@ -6842,7 +7284,7 @@ begin
               TFindNextScheduleResult.fnsNotFound:
                 begin
                   fNextScheduleNeedsResolve := False;
-                  FEnabled := False;
+                  DisableAutomaticallyLocked;
                   lAllowDisabledDispatch := True;
                 end;
               TFindNextScheduleResult.fnsSearchLimitReached:
@@ -6851,6 +7293,11 @@ begin
           end;
         end;
       end;
+      lThroughUs := lDueUs;
+      if lMisfire <> mpCatchUpAll then lThroughUs := lNowBaseUtcMs * cCronUsPerMs;
+      lTicket := Default(TCronDispatchTicket);
+      if lHasCallbacks then lTicket.SettleSeq := OpenSettleTicketLocked(lThroughUs, False, Low(Int64), lDueUs)
+      else MarkSettledThroughLocked(lThroughUs);
     finally
       fLock.Release;
     end;
@@ -6861,7 +7308,8 @@ begin
     if lAllowDisabledDispatch then
       TInterlocked.Exchange(fAllowDisabledDispatch, 1);
     try
-      DispatchScheduledCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap);
+      if not DispatchScheduledCallbacks(lInvokeMode, lOnEvent, lOnProc, lOverlap, lTicket) then
+        FinishDispatch(lTicket, False);
     finally
       if lAllowDisabledDispatch then
         TInterlocked.Exchange(fAllowDisabledDispatch, 0);

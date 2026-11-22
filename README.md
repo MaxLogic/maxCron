@@ -1608,3 +1608,5 @@ waits. The interval benchmark observed missed occurrences under load at 1 ms;
 Consumers listing units explicitly must include `maxCron.Internal.DeadlineQueue.pas`.
 The interval benchmark accepts `--mode=interval --interval-ms=10 --fires=500` and
 reports lateness, missed fires, and process CPU; use Release builds for measurements.
+
+`SaveScheduleState` also writes the additive UTC `CompletedThrough` checkpoint, floored to milliseconds. Restore continues to use the existing saved schedule fields and ignores this checkpoint.

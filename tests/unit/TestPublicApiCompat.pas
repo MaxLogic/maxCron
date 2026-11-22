@@ -16,10 +16,21 @@ type
     [Test] procedure TypeIdentityAndRtti;
     [Test] procedure CalculationAndPreview;
     [Test] procedure ExecutionLimitBoundary;
+    [Test] procedure RestartCheckpointField;
     [Test] procedure QueryApiAlias;
   end;
 
 implementation
+
+procedure TTestPublicApiCompat.RestartCheckpointField;
+var
+  lState: TMaxCronPersistedEvent;
+  lValue: TDateTime;
+begin
+  lState := Default(TMaxCronPersistedEvent);
+  lValue := lState.CompletedThrough;
+  Assert.AreEqual<TDateTime>(0, lValue);
+end;
 
 type
   // A consumer implementing the pre-interval interface must continue to compile.
