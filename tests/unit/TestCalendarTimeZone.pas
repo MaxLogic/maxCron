@@ -21,8 +21,7 @@ type
     function FindNextDayOfWeek(const aStart: TDateTime; const aDow: Integer): TDateTime;
     function TryFindInvalidLocalTime(out aDateTime: TDateTime): Boolean; overload;
     function TryFindInvalidLocalTime(const aNow: TDateTime; out aDateTime: TDateTime): Boolean; overload;
-    function TryFindAmbiguousLocalTime(out aDateTime: TDateTime): Boolean; overload;
-    function TryFindAmbiguousLocalTime(const aNow: TDateTime; out aDateTime: TDateTime): Boolean; overload;
+    function TryFindAmbiguousLocalTime(const aNow: TDateTime; out aDateTime: TDateTime): Boolean;
   public
     [Test]
     procedure TransitionSelection_PreservesSchedulingMargin;
@@ -120,11 +119,6 @@ begin
   end;
   Result := False;
   Assert.Fail('No LOCAL transition found in the two-year search window');
-end;
-
-function TTestCalendarTimeZone.TryFindAmbiguousLocalTime(out aDateTime: TDateTime): Boolean;
-begin
-  Result := TryFindAmbiguousLocalTime(Now, aDateTime);
 end;
 
 function TTestCalendarTimeZone.TryFindAmbiguousLocalTime(const aNow: TDateTime; out aDateTime: TDateTime): Boolean;
