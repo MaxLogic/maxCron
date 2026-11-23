@@ -7,12 +7,18 @@ from pathlib import Path
 import shutil
 import subprocess
 
+from fpc_toolchain import get_fpc_command
+
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--repository', required=True, type=Path)
     parser.add_argument('--scratch', required=True, type=Path)
     args = parser.parse_args()
+    try:
+        fpc_command = get_fpc_command()
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from None
     repo, out = args.repository.resolve(), args.scratch.resolve()
     if out.exists() or out == repo or repo in out.parents:
         raise RuntimeError('Use a fresh external scratch root')
@@ -108,8 +114,8 @@ end.
         path = build / 'SourceProbe.dpr'
         path.write_bytes(program.replace('\n', '\r\n').encode())
         if platform == 'FPC':
-            binpath = Path(r'F:\Tools\fpc-trunk\bin\x86_64-win64')
-            command = [binpath / 'fpc.exe', '-n', '@' + str(binpath / 'fpc.cfg'), '-FD' + str(binpath), r'-FuF:\Tools\fpc-trunk\units\x86_64-win64\*', '-Fu' + str(source), '-Fi' + str(source), '-FU' + str(build), '-FE' + str(build), '-O2', '-Sew', path]
+            command = fpc_command + ['-Fu' + str(source), '-Fi' + str(source),
+                                     '-FU' + str(build), '-FE' + str(build), '-O2', '-Sew', path]
         else:
             command = [bds / ('bin/dcc32.exe' if platform == 'Win32' else 'bin/dcc64.exe'), '-B', '-Q', '-NSSystem;Winapi;System.Win', '-I' + str(source), '-N0' + str(build), '-E' + str(build), path]
         compiled = run(platform + '-build', command)

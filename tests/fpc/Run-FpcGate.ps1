@@ -118,11 +118,7 @@ function Invoke-GateTest {
 
 try {
     Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Utility\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
-    $outputRoot = $env:MAXCRON_FPC_OUT
-    if (-not $outputRoot) {
-        $outputRoot = if ([IO.Directory]::Exists('F:\dev-artifacts')) { 'F:\dev-artifacts\builds\maxCron-main\fpc' }
-        else { Join-Path ([IO.Path]::GetTempPath()) 'maxCron-fpc' }
-    }
+    $outputRoot = Get-RosterOutputRoot -Override $env:MAXCRON_FPC_OUT -Suite 'fpc'
     # FPC's path handling and the supported IPC are ASCII only. Validate the
     # literal setting before normalization, allocation or any child process.
     if ($outputRoot -cmatch '[^A-Za-z0-9 \\:. _+\-]' -or $outputRoot -match '(?<!^[A-Za-z]):') {
@@ -144,6 +140,9 @@ try {
     if ($testArguments.Count -ne 0) {
         throw (New-RosterViolation count 'FPC qualification requires the complete roster; test selection arguments are not accepted.' arguments)
     }
+    $fpc = Get-FpcToolchain
+    $compiler = $fpc.Compiler
+    $bin = $fpc.Bin
     if ($env:MAXCRON_LONG_TESTS -eq '1') {
         $failureExit = 3
         $preflight = Invoke-RosterChild -Executable (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoProfile','-NonInteractive','-File',(Join-Path $PSScriptRoot '..\Test-LongManifest.ps1')) -WorkingDirectory $repository -Phase roster-check -Name long-preflight -TimeoutMs (Get-RosterPhaseTimeout -Phase roster-check -Name long-preflight)
@@ -153,16 +152,6 @@ try {
             throw ('Long preflight failed, native exit ' + $preflight.ExitCode)
         }
     }
-    $compiler = $env:MAXCRON_FPC
-    if (-not $compiler) {
-        $compiler = 'F:\Tools\fpc-trunk\bin\x86_64-win64\fpc.exe'
-        if (-not [IO.File]::Exists($compiler)) { $compiler = (Get-Command fpc.exe -CommandType Application -ErrorAction Stop).Source }
-    }
-    if (-not [IO.File]::Exists($compiler)) { throw 'Configured FPC compiler does not exist' }
-    $compiler = [IO.Path]::GetFullPath($compiler)
-    if ([IO.Path]::GetExtension($compiler) -ine '.exe') { throw 'FPC compiler must be a native .exe' }
-    $bin = [IO.Path]::GetDirectoryName($compiler)
-    $compilerRoot = [IO.Path]::GetFullPath((Join-Path $bin '..\..'))
     # Allocation uses in-memory Win32 declarations and starts no child/compiler.
     $runOutput = & (Join-Path $PSScriptRoot 'Check-OutputPath.ps1') -Repository $repository -OutputPath $outputRoot -CreateRun -InProcess
     if (-not [IO.Directory]::Exists($runOutput)) { throw 'Missing fresh output directory' }
@@ -186,12 +175,12 @@ try {
     [Console]::WriteLine("FPC $($version.Text.Trim()) $($cpu.Text.Trim())-$($target.Text.Trim()) at $compiler")
     if ($version.ExitCode -ne 0 -or $cpu.ExitCode -ne 0 -or $target.ExitCode -ne 0 -or
         $version.Text.Trim() -ne '3.3.1' -or $cpu.Text.Trim() -ne 'x86_64' -or $target.Text.Trim() -ne 'win64' -or
-        -not [IO.File]::Exists((Join-Path $bin 'fpc.cfg'))) { throw 'Requires FPC 3.3.1 x86_64-win64 and fpc.cfg' }
+        -not [IO.File]::Exists($fpc.Config)) { throw 'Requires FPC 3.3.1 x86_64-win64 and fpc.cfg' }
     $powershell = Join-Path $PSHOME 'powershell.exe'
     $optimization = @('-O2', '-gl')
     if ($env:MAXCRON_DEBUG_SAFETY -eq '1') { $optimization = @('-O-', '-gl', '-Cr', '-Co', '-Ct', '-Ci', '-Sa') }
-    $common = @('-n', ('@' + (Join-Path $bin 'fpc.cfg')), ('-FD' + (Join-Path $bin '.')),
-        ('-Fu' + (Join-Path $compilerRoot 'units\x86_64-win64\*')), ('-Fu' + $repository),
+    $common = @('-n', ('@' + $fpc.Config), ('-FD' + (Join-Path $bin '.')),
+        ('-Fu' + $fpc.UnitSearchPath), ('-Fu' + $repository),
         ('-Fu' + (Join-Path $repository 'tests')), ('-Fi' + $repository)) + $optimization
     # Same exhaustive test loops as Delphi's --define MAXCRON_LONG_TESTS.
     if ($env:MAXCRON_LONG_TESTS -eq '1') { $common += '-dMAXCRON_LONG_TESTS' }

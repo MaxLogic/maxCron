@@ -1137,7 +1137,6 @@ const
 
 procedure Log(const msg: string);
 begin
-  // pawel1.AddToLogFile(msg, 's:\tmp\te.log');
 end;
 
 function TryGetCronEvent(const aEvent: IMaxCronEvent; out aCronEvent: TmaxCronEvent): Boolean;

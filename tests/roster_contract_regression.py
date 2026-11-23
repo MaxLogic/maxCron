@@ -1,5 +1,6 @@
 """Exercise actual runners/wrappers with small native membership controls."""
 import argparse
+from fpc_toolchain import get_fpc_command
 import hashlib
 import json
 import os
@@ -114,13 +115,15 @@ def main():
     parser.add_argument('--contract-variant', choices=['enabled', 'disabled'], default='enabled', help='Disabled is a negative-case-only guard-removal mutation; setup and positive controls stay enabled')
     parser.add_argument('--inject-phase', choices=['generator','parity'])
     args = parser.parse_args()
+    fpc_command = get_fpc_command()
     repo, scratch = args.repository.resolve(), args.scratch.resolve()
     if scratch.exists() or repo == scratch or repo in scratch.parents:
         raise RuntimeError('Use a fresh external scratch root')
     scratch.mkdir(parents=True)
     env = {k: v for k, v in os.environ.items() if not k.startswith('MAXCRON_')}
     env['MAXLOGIC_MADEXCEPT_AI'] = '1'
-    env['WSLENV'] = env.get('WSLENV', '') + ':DAK_EXE:MAXCRON_LONG_OUT:MAXCRON_FPC_OUT:MAXCRON_TEST_ROOT:MAXCRON_ROSTER_OUT'
+    env['MAXCRON_FPC'] = fpc_command[0]
+    env['WSLENV'] = env.get('WSLENV', '') + ':DAK_EXE:MAXCRON_FPC:MAXCRON_LONG_OUT:MAXCRON_FPC_OUT:MAXCRON_TEST_ROOT:MAXCRON_ROSTER_OUT'
     results = []
     controls = []
     if sys.flags.utf8_mode or locale.getencoding().lower().replace('-', '') == 'utf8':
@@ -274,12 +277,11 @@ end;
         elif route in ('smoke', 'smoke-heap'):
             out = scratch / (label + '-native')
             out.mkdir(exist_ok=True)
-            binpath = Path(r'F:\Tools\fpc-trunk\bin\x86_64-win64')
-            compiler = binpath / 'fpc.exe'
-            flags = ['-n', '@' + str(binpath / 'fpc.cfg'), '-FD' + str(binpath), '-FuF:\\Tools\\fpc-trunk\\units\\x86_64-win64\\*', '-Fu' + str(work), '-Fu' + str(work / 'tests'), '-Fi' + str(work), '-O2', '-Sew', '-FU' + str(out), '-FE' + str(out)]
+            flags = ['-Fu' + str(work), '-Fu' + str(work / 'tests'), '-Fi' + str(work),
+                     '-O2', '-Sew', '-FU' + str(out), '-FE' + str(out)]
             if route == 'smoke-heap':
                 flags += ['-dMAXCRON_FPC_SMOKE_NOPOOL', '-gh']
-            code, text, log = run(label + '-build', [compiler] + flags + [work / 'tests/fpc/maxCronFpcSmoke.dpr'], work)
+            code, text, log = run(label + '-build', fpc_command + flags + [work / 'tests/fpc/maxCronFpcSmoke.dpr'], work)
             if code:
                 raise RuntimeError('Native build failure is not RED: ' + log)
             direct_builds.append(('native-build', code))
@@ -353,9 +355,7 @@ end;
                             commands.append((compiler.stem, [compiler, '-B', '-Q', '-DRELEASE;MAXCRON_TESTS', '-NSSystem;Xml;Data;Winapi;System.Win',
                                              '-U'+paths, '-I'+str(work), '-N0'+str(platform_output), '-E'+str(platform_output), work/'tests'/(target+'.dpr')]))
                     else:
-                        binpath = Path(r'F:\Tools\fpc-trunk\bin\x86_64-win64')
-                        common = [binpath/'fpc.exe', '-n', '@'+str(binpath/'fpc.cfg'), '-FD'+str(binpath),
-                                  r'-FuF:\Tools\fpc-trunk\units\x86_64-win64\*', '-Fu'+str(work), '-Fu'+str(work/'tests'),
+                        common = fpc_command + ['-Fu'+str(work), '-Fu'+str(work/'tests'),
                                   '-Fi'+str(work), '-O2', '-Sew', '-FU'+str(destination), '-FE'+str(destination)]
                         if backend == 'fpc-bat':
                             code, _, log = run(label+'-generator-build', common+['-vm4104,4105', work/'tests/fpc/maxCronFpcRegistryGen.dpr'], work)

@@ -24,6 +24,25 @@ Describe 'Roster matrix cannot use encoding corruption or build failure as proof
         $text | Should -Match '(?m)^ROSTER_PHASE phase=(build|generator|parity) name=\S+ native_exit=37'
         $text | Should -Match '(?m)^MATRIX_INFRASTRUCTURE_FAILURE Subprocess failure:'
     }
+    It 'requires MAXCRON_FPC before allocating gate output' -Tag FpcConfiguration {
+        $savedCompiler = $env:MAXCRON_FPC
+        $savedOutput = $env:MAXCRON_FPC_OUT
+        try {
+            $env:MAXCRON_FPC = $null
+            # The checkout is forbidden as an output root even if the gate
+            # mistakenly proceeds past the missing compiler.
+            $env:MAXCRON_FPC_OUT = $Repository
+            $gate = Join-Path $Repository 'tests/fpc/Run-FpcGate.ps1'
+            $messages = @(& powershell.exe -NoProfile -NonInteractive -File $gate 2>&1)
+            $LASTEXITCODE | Should -Be 2
+            ($messages -join "`n") | Should -Match 'Set MAXCRON_FPC to the path to fpc\.exe'
+            ($messages -join "`n") | Should -Not -Match 'FPC OUTPUT|ROSTER_PHASE'
+        } finally {
+            $env:MAXCRON_FPC = $savedCompiler
+            $env:MAXCRON_FPC_OUT = $savedOutput
+        }
+    }
+
     It 'rejects all 24 actual subprocess phase failures' {
         & python -X utf8=0 (Join-Path $Repository 'tests/roster_phase_faults.py') --scratch (Join-Path $ScratchRoot 'phase-faults') --compiler $Compiler
         $LASTEXITCODE | Should -Be 0

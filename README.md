@@ -28,18 +28,19 @@ The supported target is Windows x64 with FPC trunk 3.3.1, built from
 anonymous-method support required here. `maxCron.inc` rejects older versions and
 other FPC targets.
 
-The maintainer installation is `F:\Tools\fpc-trunk`. It was built from source
-using the official FPC 3.2.2 x86_64-win64 bootstrap, with the bootstrap's `make`:
+Build from source with the official FPC 3.2.2 x86_64-win64 bootstrap and its
+`make`. Replace `<bootstrap-compiler>` and `<fpc-root>` with your compiler and
+installation paths.
 
 ```bat
-make clean all install PP=<bootstrap ppcx64.exe> INSTALL_PREFIX=F:\Tools\fpc-trunk OS_TARGET=win64 CPU_TARGET=x86_64
+make clean all install "PP=<bootstrap-compiler>" "INSTALL_PREFIX=<fpc-root>" OS_TARGET=win64 CPU_TARGET=x86_64
 ```
 
-The compiler is `F:\Tools\fpc-trunk\bin\x86_64-win64\fpc.exe`. Invoke it explicitly,
-without loading a different installation's configuration:
+The compiler is `<fpc-root>\bin\x86_64-win64\fpc.exe`. Invoke it with the
+configuration and units from the same installation.
 
 ```bat
-F:\Tools\fpc-trunk\bin\x86_64-win64\fpc.exe -n @F:\Tools\fpc-trunk\bin\x86_64-win64\fpc.cfg -FDF:\Tools\fpc-trunk\bin\x86_64-win64 "-FuF:\Tools\fpc-trunk\units\x86_64-win64\*" -Fu<maxCron folder> <your program>
+"<fpc-root>\bin\x86_64-win64\fpc.exe" -n "@<fpc-root>\bin\x86_64-win64\fpc.cfg" "-FD<fpc-root>\bin\x86_64-win64" "-Fu<fpc-root>\units\x86_64-win64\*" "-Fu<maxCron folder>" "<your program>"
 ```
 
 The units set `delphiunicode`, `anonymousfunctions` and `functionreferences`
@@ -74,11 +75,16 @@ Run `build-and-run-tests-fpc.bat` from Windows, or
 `./build-and-run-tests-fpc.sh` from WSL (Bash, `wslpath`, and Python 3 for command-line
 test arguments). The batch file is a fixed PowerShell 5.1 launcher; the WSL wrapper
 invokes the same PowerShell gate directly. Neither passes settings through cmd.
-The gate verifies compiler version and
-target before building. The machine's older `fpc` on PATH is rejected.
-`MAXCRON_FPC` overrides the absolute compiler path; `MAXCRON_FPC_OUT` overrides
-the external output directory (default `F:\dev-artifacts\builds\maxCron-main\fpc`
-when available, otherwise `%TEMP%\maxCron-fpc`). Each invocation creates a new
+The gate verifies the compiler version and target before building.
+Set `MAXCRON_FPC` to the absolute Windows path to `fpc.exe` for the gate,
+roster export and Python roster regressions. The scripts use `fpc.cfg` and
+compiler tools beside that executable. For `<fpc-root>\bin\x86_64-win64\fpc.exe`,
+they search `<fpc-root>\units\x86_64-win64\*` for units. A missing setting or
+executable is a configuration error.
+
+Set `MAXCRON_BUILD_ROOT` to a Windows directory for persistent gate outputs.
+The FPC gate uses `<build-root>\fpc` or `%TEMP%\maxCron-fpc` if the build root
+is unset. `MAXCRON_FPC_OUT` takes precedence over both. Each invocation creates a new
 `run-<GUID>` directory under that root, fails if the name already exists, checks
 its final Windows path identity and writes all build/test outputs below it.
 Pre-existing output children are never reused. The printed `FPC OUTPUT` line
@@ -109,10 +115,10 @@ child; it does not defend against a concurrent malicious process replacing
 directories during the run. Existing directory ancestors must resolve to a
 Windows volume identity; inaccessible or unsupported destinations fail closed.
 `MAXCRON_DEBUG_SAFETY=1` enables range, overflow, stack and I/O checks.
-For WSL, supply Windows paths for the two overrides. The wrapper transfers
-settings using `WSLENV`; when invoking WSL from Windows, append their names to
-`WSLENV` if they must cross that boundary. Do not use its `/p` path conversion
-flag for values already written as Windows paths.
+For WSL, supply Windows paths for `MAXCRON_FPC`, `MAXCRON_BUILD_ROOT` and
+`MAXCRON_FPC_OUT`. The wrapper transfers them to Windows using `WSLENV`.
+When invoking WSL from Windows, append those names to `WSLENV` so the values
+reach WSL. Use `WSLENV` without the `/p` flag for Windows path values.
 
 The FPC runner reuses the calculation, corpus, fuzz/oracle, interval-plan,
 deadline queue, TZif/zone, text, time-boundary and deterministic scheduler tests.
@@ -465,19 +471,21 @@ fresh process, outside a debugger, while other CPU work is low.
 For a Delphi 12 Win64 Release build with outputs outside the checkout:
 
 ```powershell
-$buildDir = 'F:\dev-artifacts\builds\maxCron-main\benchmarks'
-New-Item -ItemType Directory -Force "$buildDir\dcc64" | Out-Null
-& 'C:\Program Files (x86)\Embarcadero\Studio\23.0\bin\dcc64.exe' -B -Q `
+$buildDir = '<build-root>\benchmarks'
+$runDir = '<run-root>'
+$delphiRoot = '<delphi-root>'
+New-Item -ItemType Directory -Force -Path "$buildDir\dcc64", $runDir | Out-Null
+& "$delphiRoot\bin\dcc64.exe" -B -Q `
   '-DRELEASE;MAXCRON_TESTS' '-NSSystem;Winapi;System.Win;Vcl' `
-  '-Ulib\MaxLogicFoundation;C:\Program Files (x86)\Embarcadero\Studio\23.0\lib\win64\release' `
+  "-Ulib\MaxLogicFoundation;$delphiRoot\lib\win64\release" `
   '-Ilib\MaxLogicFoundation' "-E$buildDir" "-N0$buildDir\dcc64" `
   benchmarks\maxCronBenchmarks.dpr
 $env:MAXCRON_ENGINE = 'scan' # repeat with heap and auto
 & "$buildDir\maxCronBenchmarks.exe" --mode=idle --events=1000 --seconds=30 `
-  --iterations=3 --csv=F:\dev-artifacts\runs\maxCron\idle-1000-scan.csv
+  --iterations=3 "--csv=$runDir\idle-1000-scan.csv"
 # Repeat with --events=10000, and each engine.
 & "$buildDir\maxCronBenchmarks.exe" --mode=latency --fires=60 `
-  --iterations=3 --csv=F:\dev-artifacts\runs\maxCron\latency-scan.csv
+  --iterations=3 "--csv=$runDir\latency-scan.csv"
 ```
 
 Adjust the compiler path to the installed Delphi version. The existing benchmark
@@ -507,7 +515,7 @@ the requested callbacks. Avoid DST transitions or clock changes during measureme
 This measures scheduler and dispatch latency together. Each run has `--fires`
 one-shot events rather than one recurring event.
 
-Baseline on THREADRIPPER, 2026-11-15, Delphi 12 Win64 Release, base `024b89b`:
+Baseline on the maintainer's workstation, 2026-11-15, Delphi 12 Win64 Release, base `024b89b`.
 AMD Ryzen Threadripper PRO 3975WX, 32 cores / 64 logical CPUs, Windows 11.
 Three fresh runs per row, 30-second idle windows. CPU columns show median and
 min-max across runs. Background jobs were active; the retained run records include
@@ -595,9 +603,9 @@ To inspect run-to-run behavior over recent benchmark history:
 
 The generated markdown includes per-scenario mean metrics and elapsed/visited deltas versus the previous included run.
 
-### Reference benchmark run (this machine)
+### Reference benchmark run
 
-Reference command used on `PAWEL3` (`2026-02-23`, `15` iterations, `2` warmup):
+The reference run on `2026-02-23` used 15 iterations and 2 warmup iterations.
 
 ```cmd
 benchmarks\maxCronBenchmarks.exe --iterations=15 --warmup=2 --out-dir=benchmarks\results --quiet
@@ -1033,8 +1041,11 @@ Set `DAK_EXE` to the absolute Windows path of `DelphiAIKit.exe` for the process
 running the gate; otherwise the scripts search `PATH`, then
 `..\..\DelphiAiKit\bin\DelphiAIKit.exe` relative to the scripts. An invalid
 explicit override fails immediately. No persistent environment setting is needed.
-For an override exported inside WSL, also export `WSLENV=DAK_EXE/w` so it reaches Windows. Build output paths stay as configured in the projects. Release is the default;
-`MAXCRON_DEBUG_SAFETY=1` selects Debug.
+For a `DAK_EXE` override exported inside WSL, add `DAK_EXE/w` to `WSLENV` so it
+reaches Windows. The Delphi projects select the binary output paths. Roster gate
+logs go under `<build-root>\roster-gates` when `MAXCRON_BUILD_ROOT` is set, or
+`%TEMP%\maxCron-roster-gates` otherwise. `MAXCRON_ROSTER_OUT` takes precedence.
+Release is the default. `MAXCRON_DEBUG_SAFETY=1` selects Debug.
 Default gates keep all curated UTC/DST regressions and the repeated-hour restore
 reviewer cases, plus deterministic matrix samples (seed `20261118`).
 
@@ -1051,9 +1062,9 @@ sample per day (seed `20261118`). The full probe-over-RTL comparison for
 
 Use `./build-and-run-tests-long.sh fpc` for the equivalent FPC qualification,
 and set `MAXCRON_LONG_PLATFORM=Win64` for Delphi Win64 (Win32 is the default).
-`MAXCRON_LONG_OUT` selects the Delphi long build directory; the default is
-`F:\dev-artifacts\builds\maxCron-main\long` when that drive is available,
-otherwise `%TEMP%\maxCron-long`. Long and default binaries use separate outputs.
+The Delphi long gate uses `<build-root>\long` when `MAXCRON_BUILD_ROOT` is set,
+or `%TEMP%\maxCron-long` otherwise. `MAXCRON_LONG_OUT` takes precedence. Long and
+default binaries use separate outputs.
 
 Every test runner checks complete executed identities, including case names,
 against its checked-in manifest. `tests/rosters/` contains separate Delphi
@@ -1066,6 +1077,7 @@ corpus or fixture under `tests/data`. The dependency set is conservative across
 the runners, so changing any of those inputs requires an explicit refresh:
 
 ```powershell
+$env:MAXCRON_FPC = '<fpc-root>\bin\x86_64-win64\fpc.exe'
 ./tests/Export-TestRosters.ps1 -Compiler '<Delphi bin>/dcc64.exe' `
   -DUnitXSource '<DUnitX>/Source' -OutputRoot '<external discovery output>'
 ```

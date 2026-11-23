@@ -185,10 +185,8 @@
                     <Source Name="MainSource">maxCronVclTests.dpr</Source>
                 </Source>
                 <Excluded_Packages>
-                    <Excluded_Packages Name="C:\Users\Public\Documents\Embarcadero\Studio\23.0\Bpl\wPDF5_DX14_Pack.bpl">File C:\Users\Public\Documents\Embarcadero\Studio\23.0\Bpl\wPDF5_DX14_Pack.bpl not found</Excluded_Packages>
                     <Excluded_Packages Name="$(BDSBIN)\dcloffice2k290.bpl">Microsoft Office 2000 Sample Automation Server Wrapper Components</Excluded_Packages>
                     <Excluded_Packages Name="$(BDSBIN)\dclofficexp290.bpl">Microsoft Office XP Sample Automation Server Wrapper Components</Excluded_Packages>
-                    <Excluded_Packages Name="F:\TMS-SmartSetUp\.tmssetup\build\bpl\Win32\VCL_TMSVCLGridExcelBridge_DESIGN290.bpl">TMS VCL Grid Excel Bridge (Design)</Excluded_Packages>
                 </Excluded_Packages>
             </Delphi.Personality>
             <Platforms>

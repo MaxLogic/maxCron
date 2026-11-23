@@ -1,6 +1,31 @@
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'Native protocol receipts must go directly to the console, outside PowerShell result objects.')]
 param()
 
+function Get-FpcToolchain {
+    param([string]$Compiler = $env:MAXCRON_FPC)
+
+    if ([string]::IsNullOrWhiteSpace($Compiler)) { throw 'Set MAXCRON_FPC to the path to fpc.exe.' }
+    if (-not [IO.File]::Exists($Compiler)) { throw "FPC compiler does not exist: $Compiler. Set MAXCRON_FPC to the path to fpc.exe." }
+    $Compiler = [IO.Path]::GetFullPath($Compiler)
+    if ([IO.Path]::GetExtension($Compiler) -ine '.exe') { throw 'FPC compiler must be a native .exe. Set MAXCRON_FPC to the path to fpc.exe.' }
+    $bin = [IO.Path]::GetDirectoryName($Compiler)
+    $root = [IO.Path]::GetFullPath((Join-Path $bin '..\..'))
+    return [pscustomobject]@{
+        Compiler = $Compiler
+        Bin = $bin
+        Config = Join-Path $bin 'fpc.cfg'
+        UnitSearchPath = Join-Path $root 'units\x86_64-win64\*'
+    }
+}
+
+function Get-RosterOutputRoot {
+    param([string]$Override, [string]$Suite)
+
+    if ($Override) { return $Override }
+    if ($env:MAXCRON_BUILD_ROOT) { return [IO.Path]::Combine($env:MAXCRON_BUILD_ROOT, $Suite) }
+    return Join-Path ([IO.Path]::GetTempPath()) ('maxCron-' + $Suite)
+}
+
 if (-not ('MaxCron.RosterViolation' -as [type])) {
     Add-Type -TypeDefinition 'namespace MaxCron { public sealed class RosterViolation : System.Exception { public readonly string Reason; public readonly string PhaseName; public RosterViolation(string reason, string detail, string name) : base(detail) { Reason = reason; PhaseName = name; } } }'
 }

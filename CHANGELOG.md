@@ -4,6 +4,7 @@ All notable user-visible changes to this project will be documented in this file
 
 ## [Unreleased]
 
+- FPC test tooling requires `MAXCRON_FPC`. Set `MAXCRON_BUILD_ROOT` to retain gate outputs in a shared parent directory.
 - Added Windows 8+ OS time zone resolution for IANA names through a built-in
   Unicode CLDR 49 name and alias table. No data files are needed on Windows;
   `MAXCRON_TZDIR` continues to select TZif data. FPC named zones and LOCAL share
@@ -148,7 +149,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added a guarded sparse-workload fast-promote path in auto mode so strongly sparse/high-cardinality low-churn phases can enter heap-stable earlier without waiting for a full trial window. (T-082)
 - Reduced heap-mode lock churn by batching post-callback heap reschedule pushes under a single lock section per tick instead of one lock/relock per due event. (T-080)
 - Changed auto dirty-signal sampling from binary mutation detection to normalized mutation density with bounded sensitivity scaling to better balance large-schedule stability and churn responsiveness. (T-081)
-- Added a documented reference benchmark run (PAWEL3, `2026-02-23`) with concrete sparse/adversarial metrics and conclusions, plus a concise production mode-selection guide for `scan`/`heap`/`auto`/`shadow`. (T-079)
+- Added a documented reference benchmark run (`2026-02-23`) with concrete sparse/adversarial metrics and conclusions, plus a concise production mode-selection guide for `scan`/`heap`/`auto`/`shadow`. (T-079)
 - Expanded benchmark documentation with standalone runner usage (`build-and-run-benchmarks.*`), output artifact format, and interpretation guidance for sparse high-N and adversarial churn scenarios. (T-078)
 - Expanded README benchmark guidance with runnable benchmark commands and expected outcomes across sparse and oscillation scenarios. (T-076)
 - Extended auto diagnostics snapshot/log payload with switch-budget counters (`SwitchBudgetHits`, `SwitchBudgetCooldownTicks`, `SwitchBudgetRecentSwitches`) for runtime budget-tuning visibility. (T-073)

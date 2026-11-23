@@ -2,10 +2,12 @@ param(
     [Parameter(Mandatory = $true)][string]$Compiler,
     [Parameter(Mandatory = $true)][string]$DUnitXSource,
     [Parameter(Mandatory = $true)][string]$OutputRoot,
-    [string]$FpcCompiler = 'F:\Tools\fpc-trunk\bin\x86_64-win64\fpc.exe'
+    [string]$FpcCompiler = $env:MAXCRON_FPC
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'RosterManifest.ps1')
+$fpc = Get-FpcToolchain -Compiler $FpcCompiler
 Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop
 $repository = Split-Path -Parent $PSScriptRoot
 $OutputRoot = & (Join-Path $PSScriptRoot 'fpc/Check-OutputPath.ps1') -Repository $repository -OutputPath $OutputRoot -CreateRun -InProcess
@@ -114,12 +116,11 @@ Copy-Item -LiteralPath (Join-Path $destination 'DelphiLong.txt') -Destination (J
 & (Join-Path $PSScriptRoot 'fpc/Export-DelphiTestNames.ps1') -Compiler $Compiler -DUnitXSource $DUnitXSource -OutputRoot (Join-Path $OutputRoot 'shared')
 if ($LASTEXITCODE -ne 0) { throw 'Native shared discovery failed' }
 $shared = @(Get-Content -Encoding UTF8 -LiteralPath (Join-Path $PSScriptRoot 'fpc/DelphiSharedTests.txt') | Where-Object { $_ -and -not $_.StartsWith('#') -and $_ -cne 'TestLocalZoneOs.TTestLocalZoneOs.MatchesRtlLocal' })
-$fpcBin = Split-Path -Parent $FpcCompiler
-$fpcRoot = Split-Path -Parent (Split-Path -Parent $fpcBin)
-$fpcArgs = @('-n', ('@' + (Join-Path $fpcBin 'fpc.cfg')), ('-FD' + $fpcBin), ('-Fu' + (Join-Path $fpcRoot 'units/x86_64-win64/*')), ('-Fu' + $repository), ('-Fu' + $PSScriptRoot), ('-Fi' + $repository), '-O2', '-gl')
+$fpcArgs = @('-n', ('@' + $fpc.Config), ('-FD' + $fpc.Bin), ('-Fu' + $fpc.UnitSearchPath),
+    ('-Fu' + $repository), ('-Fu' + $PSScriptRoot), ('-Fi' + $repository), '-O2', '-gl')
 $gen = Join-Path $OutputRoot 'fpc-gen'
 [void][IO.Directory]::CreateDirectory($gen)
-& $FpcCompiler @fpcArgs ('-FU' + $gen) ('-FE' + $gen) '-Sew' '-vm4104,4105' (Join-Path $PSScriptRoot 'fpc/maxCronFpcRegistryGen.dpr') > (Join-Path $gen 'build.log') 2>&1
+& $fpc.Compiler @fpcArgs ('-FU' + $gen) ('-FE' + $gen) '-Sew' '-vm4104,4105' (Join-Path $PSScriptRoot 'fpc/maxCronFpcRegistryGen.dpr') > (Join-Path $gen 'build.log') 2>&1
 if ($LASTEXITCODE -ne 0) { throw ('FPC registry build failed: ' + $gen) }
 $registry = Join-Path $gen 'registry.inc'
 & (Join-Path $gen 'maxCronFpcRegistryGen.exe') $repository $registry
@@ -157,7 +158,7 @@ foreach ($heap in $false, $true) {
     [IO.File]::WriteAllText($path, ($source -replace '\r?\n', "`r`n"))
     $defines = @()
     if ($heap) { $defines += '-dMAXCRON_FPC_SMOKE_NOPOOL' }
-    & $FpcCompiler @fpcArgs @defines ('-FU' + $out) ('-FE' + $out) '-Sew' $path > (Join-Path $out 'build.log') 2>&1
+    & $fpc.Compiler @fpcArgs @defines ('-FU' + $out) ('-FE' + $out) '-Sew' $path > (Join-Path $out 'build.log') 2>&1
     if ($LASTEXITCODE -ne 0) { throw ('Smoke discovery build failed: ' + $out) }
     $lines = @(& (Join-Path $out 'SmokeDiscovery.exe'))
     if ($LASTEXITCODE -ne 0) { throw ('Smoke discovery failed: ' + $out) }

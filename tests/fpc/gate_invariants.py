@@ -132,7 +132,7 @@ def containment(args):
                         assert run(out, label + '-subst', ['subst.exe', drive, configured], out)['exit'] == 0
                         configured = Path(drive + '\\')
                     before = inventory(source)
-                    env = {k: v for k, v in os.environ.items() if not k.startswith('MAXCRON_')}
+                    env = {k: v for k, v in os.environ.items() if not k.startswith('MAXCRON_') or k == 'MAXCRON_FPC'}
                     env['MAXCRON_FPC_OUT'] = str(configured).swapcase() + '\\.'
                     receipt = run(out, label, ['cmd.exe', '/d', '/c', source / 'build-and-run-tests-fpc.bat'], source, env)
                     after = inventory(source)
@@ -204,7 +204,7 @@ def path_text(args):
         # References are literal filename text, so '%' and '!' are unsupported.
         supported = bool(re.fullmatch(r'[A-Za-z0-9 ._+\\-]+', leaf)) and not leaf.endswith((' ', '.'))
         expected_exit = 0 if supported else 2
-        env = {k: v for k, v in os.environ.items() if not k.startswith('MAXCRON_')}
+        env = {k: v for k, v in os.environ.items() if not k.startswith('MAXCRON_') or k == 'MAXCRON_FPC'}
         env.update(MAXCRON_FPC_OUT=configured_text, R3_VALUE=value, bang='EXPANDED')
         before_source, before_case = inventory(source), inventory(case)
         receipt = run(out, 'path-' + str(index), ['cmd.exe', '/d', '/c', source / 'build-and-run-tests-fpc.bat'], source, env)
@@ -262,7 +262,7 @@ def child_environment(args):
         case.mkdir()
         inherited = 'inherited-heap.log' if label == 'relative' else str(case / 'outside-heap.log')
         configured = case / 'output with space +09'
-        env = {k: v for k, v in os.environ.items() if not k.startswith('MAXCRON_')}
+        env = {k: v for k, v in os.environ.items() if not k.startswith('MAXCRON_') or k == 'MAXCRON_FPC'}
         env.update(MAXCRON_FPC_OUT=str(configured), MAXCRON_TEST_ROOT=str(case / 'wrong-root'), HEAPTRC='log=' + inherited,
                    R4_ENV_POISON='must not reach children')
         before = inventory(source)

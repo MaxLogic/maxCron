@@ -4,6 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BAT_PATH_WINDOWS="${MAXCRON_BAT_PATH_WINDOWS:-$(wslpath -w -a "$ROOT_DIR/build-and-run-tests.bat")}"
 
+# These settings contain Windows paths. Pass them through without conversion.
+for name in MAXCRON_BUILD_ROOT MAXCRON_ROSTER_OUT; do
+  if [[ -v "$name" ]]; then
+    export "$name"
+    export WSLENV="${WSLENV:+$WSLENV:}$name/w"
+  fi
+done
+
 run_bat_via_launcher() {
   local bat_path_windows="$1"
   shift

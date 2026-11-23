@@ -10,11 +10,7 @@ $repository = Split-Path -Parent $PSScriptRoot
 try {
     $expected = (Read-RosterManifest -Repository $repository -Entry 'DelphiDefaultGate').Names
     $executed = @()
-    $output = $env:MAXCRON_ROSTER_OUT
-    if (-not $output) {
-        $output = if ([IO.Directory]::Exists('F:\dev-artifacts')) { 'F:\dev-artifacts\builds\maxCron-main\roster-gates' }
-        else { Join-Path ([IO.Path]::GetTempPath()) 'maxCron-roster-gates' }
-    }
+    $output = Get-RosterOutputRoot -Override $env:MAXCRON_ROSTER_OUT -Suite 'roster-gates'
     $run = & (Join-Path $PSScriptRoot 'fpc/Check-OutputPath.ps1') -Repository $repository -OutputPath $output -CreateRun -InProcess
     if (-not [IO.Directory]::Exists($run)) { throw 'Could not allocate roster gate output' }
     [Console]::WriteLine('ROSTER_GATE_OUTPUT ' + $run)
