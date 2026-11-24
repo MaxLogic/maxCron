@@ -11,7 +11,7 @@ BeforeAll {
     $units = 'TestCronInstant', 'TestCronParsing', 'TestCronInvalidCorpus', 'TestCronUtilsCorpus',
         'TestCronFuzzOracle', 'TestCronQuery', 'TestIntervalPlan', 'TestDeadlineQueue', 'TestTimeZoneRules',
         'TestTimeZoneTzif', 'TestCronTextParity', 'TestFpcShims', 'TestScheduleNext', 'TestHashJitter',
-        'TestCalendarTimeZone', 'TestNamedTimeZones', 'TestTimeBoundaries', 'TestMisfireOnTime',
+        'TestCalendarTimeZone', 'TestNamedTimeZones', 'TestLocalZoneTzif', 'TestTimeBoundaries', 'TestMisfireOnTime',
         'TestCronPhaseDifferential', 'TestLocalZoneOs', 'TestTimeZoneWindows', 'TestWindowsZoneOracle',
         'TestValidityZones', 'TestLocalOverlap', 'TestRestartCatchUp'
     $repo = Join-Path $ScratchRoot 'registry-source'

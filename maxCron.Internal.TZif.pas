@@ -13,6 +13,9 @@ uses
 
 function TryParseCronTzif(const aBytes: TBytes; out aSource: ICronZoneRuleSource;
   out aError: string): Boolean;
+function TryReadCronTzifBytes(const aPath: string; out aBytes: TBytes; out aError: string): Boolean;
+function TryParseCronPosixTz(const aText: string; out aSource: ICronZoneRuleSource;
+  out aError: string): Boolean;
 function TryLoadCronTzifFile(const aRoot, aName: string; out aSource: ICronZoneRuleSource;
   out aPath, aError: string): Boolean;
 
@@ -552,8 +555,7 @@ begin
   end;
 end;
 
-function TryLoadCronTzifFile(const aRoot, aName: string; out aSource: ICronZoneRuleSource;
-  out aPath, aError: string): Boolean;
+function TryReadCronTzifBytes(const aPath: string; out aBytes: TBytes; out aError: string): Boolean;
 var
   {$IFDEF FPC}
   lHandle: THandle;
@@ -561,6 +563,80 @@ var
   {$ELSE}
   lStream: TFileStream;
   {$ENDIF}
+begin
+  aBytes := nil;
+  aError := '';
+  try
+    {$IFDEF FPC}
+    lHandle := FileOpen(aPath, fmOpenRead or fmShareDenyWrite);
+    if lHandle = THandle(-1) then RaiseLastOSError;
+    lStream := THandleStream.Create(lHandle);
+    {$ELSE}
+    lStream := TFileStream.Create(aPath, fmOpenRead or fmShareDenyWrite);
+    {$ENDIF}
+    try
+      if lStream.Size > cMaxTzifSize then raise Exception.Create('TZif file exceeds 1 MiB');
+      SetLength(aBytes, lStream.Size);
+      if Length(aBytes) > 0 then lStream.ReadBuffer(aBytes[0], Length(aBytes));
+    finally
+      lStream.Free;
+      {$IFDEF FPC} FileClose(lHandle); {$ENDIF}
+    end;
+    Result := True;
+  except
+    on E: Exception do
+    begin
+      aBytes := nil;
+      aError := 'invalid TZif data in ' + aPath + ': ' + CronExceptionText(E);
+      Result := False;
+    end;
+  end;
+end;
+
+function TryParseCronPosixTz(const aText: string; out aSource: ICronZoneRuleSource;
+  out aError: string): Boolean;
+var
+  c: Char;
+  lSource: TCronTzifSource;
+  lKeepAlive: ICronZoneRuleSource;
+  lReader: TCronFooterReader;
+begin
+  aSource := nil;
+  aError := '';
+  if aText = '' then
+  begin
+    aError := 'empty POSIX TZ string';
+    Exit(False);
+  end;
+  for c in aText do
+    if (Ord(c) < 32) or (Ord(c) > 126) then
+    begin
+      aError := 'non-printable ASCII in POSIX TZ string';
+      Exit(False);
+    end;
+  lSource := TCronTzifSource.Create;
+  lKeepAlive := lSource;
+  lReader := TCronFooterReader.Create(aText);
+  try
+    try
+      lReader.Parse(lSource);
+      aSource := lKeepAlive;
+      Result := True;
+    except
+      on E: Exception do
+      begin
+        aError := CronExceptionText(E);
+        Result := False;
+      end;
+    end;
+  finally
+    lReader.Free;
+  end;
+end;
+
+function TryLoadCronTzifFile(const aRoot, aName: string; out aSource: ICronZoneRuleSource;
+  out aPath, aError: string): Boolean;
+var
   lBytes: TBytes;
   lParts: TArray<string>;
   lPart, lMatch: string;
@@ -602,21 +678,7 @@ begin
       end;
       aPath := {$IFDEF FPC}(IncludeTrailingPathDelimiter(aPath) + lMatch){$ELSE}TPath.Combine(aPath, lMatch){$ENDIF};
     end;
-    {$IFDEF FPC}
-    lHandle := FileOpen(aPath, fmOpenRead or fmShareDenyWrite);
-    if lHandle = THandle(-1) then RaiseLastOSError;
-    lStream := THandleStream.Create(lHandle);
-    {$ELSE}
-    lStream := TFileStream.Create(aPath, fmOpenRead or fmShareDenyWrite);
-    {$ENDIF}
-    try
-      if lStream.Size > cMaxTzifSize then raise Exception.Create('TZif file exceeds 1 MiB');
-      SetLength(lBytes, lStream.Size);
-      if Length(lBytes) > 0 then lStream.ReadBuffer(lBytes[0], Length(lBytes));
-    finally
-      lStream.Free;
-      {$IFDEF FPC} FileClose(lHandle); {$ENDIF}
-    end;
+    if not TryReadCronTzifBytes(aPath, lBytes, aError) then Exit(False);
     Result := TryParseCronTzif(lBytes, aSource, aError);
     if not Result then aError := 'invalid TZif data in ' + aPath + ': ' + aError;
   except

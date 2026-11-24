@@ -30,6 +30,7 @@ type
     [TestCase('never matching', '0')]
     procedure FastPathPreservesBudget(const aExcluded: Integer);
     [Test] procedure NamedSetterAccepts;
+    [Test] procedure ZoneDataRootOrder;
     [Test] procedure GmtFixedOffsetIndependentOfDataRoot;
     [Test] procedure TrollRegression;
     [Test] procedure ShiftedWindowsN6;
@@ -358,6 +359,56 @@ begin
   finally
     SetCronSystemTimeZoneForTests(nil);
     SetEnvironmentVariableW('MAXCRON_TZDIR', PChar(lOld));
+  end;
+end;
+
+procedure TTestNamedTimeZones.ZoneDataRootOrder;
+var
+  lOldMax, lOldTz: string;
+  lHadMax, lHadTz: Boolean;
+
+  function ReadValue(const aName: PWideChar; out aPresent: Boolean): string;
+  var
+    lSize: DWORD;
+  begin
+    SetLastError(ERROR_SUCCESS);
+    lSize := GetEnvironmentVariableW(aName, nil, 0);
+    aPresent := GetLastError <> ERROR_ENVVAR_NOT_FOUND;
+    SetLength(Result, lSize);
+    if lSize <> 0 then
+      SetLength(Result, GetEnvironmentVariableW(aName, PWideChar(Result), lSize));
+  end;
+
+  procedure RestoreValue(const aName: PWideChar; const aValue: string; const aPresent: Boolean);
+  var
+    c: WideChar;
+  begin
+    c := #0;
+    if not aPresent then
+      Assert.IsTrue(SetEnvironmentVariableW(aName, nil))
+    else if aValue = '' then
+      Assert.IsTrue(SetEnvironmentVariableW(aName, @c))
+    else
+      Assert.IsTrue(SetEnvironmentVariableW(aName, PWideChar(aValue)));
+  end;
+
+begin
+  lOldMax := ReadValue('MAXCRON_TZDIR', lHadMax);
+  lOldTz := ReadValue('TZDIR', lHadTz);
+  try
+    Assert.IsTrue(SetEnvironmentVariableW('TZDIR', 'tzdir-test-root'));
+    Assert.IsTrue(SetEnvironmentVariableW('MAXCRON_TZDIR', 'maxcron-test-root'));
+    Assert.AreEqual('maxcron-test-root', CronZoneDataRoot);
+    Assert.IsTrue(SetEnvironmentVariableW('MAXCRON_TZDIR', nil));
+    Assert.AreEqual('', CronZoneDataRoot);
+    Assert.IsTrue(SetEnvironmentVariableW('TZDIR', nil));
+    Assert.AreEqual('', CronZoneDataRoot);
+  finally
+    try
+      RestoreValue('MAXCRON_TZDIR', lOldMax, lHadMax);
+    finally
+      RestoreValue('TZDIR', lOldTz, lHadTz);
+    end;
   end;
 end;
 

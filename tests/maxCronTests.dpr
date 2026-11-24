@@ -31,6 +31,7 @@ uses
   TestWindowsZoneOracle in 'unit\TestWindowsZoneOracle.pas',
   TestTimeZoneTzif in 'unit\TestTimeZoneTzif.pas',
   TestNamedTimeZones in 'unit\TestNamedTimeZones.pas',
+  TestLocalZoneTzif in 'unit\TestLocalZoneTzif.pas',
   TestPublicApiCompat in 'unit\TestPublicApiCompat.pas',
   TestCronInvalidCorpus in 'unit\TestCronInvalidCorpus.pas',
   TestCronParsing in 'unit\TestCronParsing.pas',
@@ -83,6 +84,7 @@ begin
     TDUnitX.RegisterTestFixture(TTestWindowsZoneOracle);
     TDUnitX.RegisterTestFixture(TTestTimeZoneTzif);
     TDUnitX.RegisterTestFixture(TTestNamedTimeZones);
+    TDUnitX.RegisterTestFixture(TTestLocalZoneTzif);
     TDUnitX.RegisterTestFixture(TTestPublicApiCompat);
     TDUnitX.RegisterTestFixture(TTestCronInvalidCorpus);
     TDUnitX.RegisterTestFixture(TTestCronParsing);

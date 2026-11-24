@@ -77,7 +77,19 @@ function CronSystemZoneRules: ICronZoneRules;
 procedure CronBeginZonePeriodMemo;
 procedure CronEndZonePeriodMemo;
 
+function CronZoneDataRoot: string;
+
 {$IFDEF MAXCRON_TESTS}
+type
+  TCronLocalInputs = record
+    TzSet: Boolean;
+    Tz, ZoneRoot, LocaltimePath: string;
+  end;
+  TCronLocalInputsFunc = reference to function: TCronLocalInputs;
+
+function CreateCronTzifLocalTimeZoneForTests(const aInputs: TCronLocalInputsFunc;
+  const aRecheckUs: Int64): ICronTimeZone;
+function CronTzifLocalOriginForTests(const aZone: ICronTimeZone): string;
 function CreateCronProbeZoneForTests(const aZone: ICronTimeZone): ICronZoneRules;
 // Set before creating a scheduler; nil restores the RTL zone. Tests run serially.
 procedure SetCronSystemTimeZoneForTests(const aZone: ICronTimeZone);
@@ -153,7 +165,7 @@ uses
   System.DateUtils, System.Generics.Collections, System.Math, System.SyncObjs,
   {$IFDEF MSWINDOWS} Winapi.Windows, {$ENDIF}
   {$ENDIF}
-  maxCron.Internal.Text, maxCron.Internal.TZif, maxCron.Plan;
+  maxCron.Internal.Platform, maxCron.Internal.Text, maxCron.Internal.TZif, maxCron.Plan;
 
 {$I maxCron.Internal.TimeZoneNames.inc}
 
@@ -198,6 +210,50 @@ type
     constructor Create(const aZone: ICronTimeZone);
     destructor Destroy; override;
     function GetRawPeriod(const aUtcMs: Int64): TCronZonePeriod;
+  end;
+  TCronRulesLocalTimeZone = class(TInterfacedObject, ICronTimeZone, ICronTimeZoneRules)
+  protected
+    function CurrentZone: ICronZoneRules; virtual; abstract;
+  public
+    function GetRules: ICronZoneRules;
+    function ToUniversalTime(const aLocal: TDateTime; const aForceDaylight: Boolean): TDateTime;
+    function ToLocalTime(const aUtc: TDateTime): TDateTime;
+    function IsAmbiguousTime(const aLocal: TDateTime): Boolean;
+    function IsInvalidTime(const aLocal: TDateTime): Boolean;
+  end;
+{$IFNDEF MAXCRON_TESTS}
+  TCronLocalInputs = record
+    TzSet: Boolean;
+    Tz, ZoneRoot, LocaltimePath: string;
+  end;
+  TCronLocalInputsFunc = reference to function: TCronLocalInputs;
+{$ENDIF}
+  TCronLocalLocation = record
+    FileOrigin, PosixText, UtcOrigin: string;
+    Bytes: TBytes;
+  end;
+{$IFDEF MAXCRON_TESTS}
+  ICronTzifLocalOrigin = interface
+    ['{E9CF38D0-1D16-4557-BA8D-8A719FD7F6C4}']
+    function GetOrigin: string;
+  end;
+{$ENDIF}
+  TCronTzifLocalTimeZone = class(TCronRulesLocalTimeZone{$IFDEF MAXCRON_TESTS}, ICronTzifLocalOrigin{$ENDIF})
+  private
+    fInputs: TCronLocalInputsFunc;
+    fRecheckUs, fCheckedUs: Int64;
+    fHasChecked, fRechecking: Boolean;
+    fLocation: TCronLocalLocation;
+    fOrigin: string;
+    fZone: ICronZoneRules;
+    procedure RefreshZone;
+  protected
+    function CurrentZone: ICronZoneRules; override;
+  public
+    constructor Create(const aInputs: TCronLocalInputsFunc; const aRecheckUs: Int64);
+{$IFDEF MAXCRON_TESTS}
+    function GetOrigin: string;
+{$ENDIF}
   end;
   TCronRtlLocalTimeZone = class(TInterfacedObject, ICronTimeZone)
   public
@@ -342,17 +398,12 @@ type
     function OffsetAt(const aUtcMs: Int64): Int64; override;
     function CanCache: Boolean; override;
   end;
-  TCronOsLocalTimeZone = class(TInterfacedObject, ICronTimeZone, ICronTimeZoneRules)
+  TCronOsLocalTimeZone = class(TCronRulesLocalTimeZone)
   private
     fInfo: TCronWindowsDynamicInfo;
     fZone: ICronZoneRules;
-    function CurrentZone: ICronZoneRules;
-  public
-    function GetRules: ICronZoneRules;
-    function ToUniversalTime(const aLocal: TDateTime; const aForceDaylight: Boolean): TDateTime;
-    function ToLocalTime(const aUtc: TDateTime): TDateTime;
-    function IsAmbiguousTime(const aLocal: TDateTime): Boolean;
-    function IsInvalidTime(const aLocal: TDateTime): Boolean;
+  protected
+    function CurrentZone: ICronZoneRules; override;
   end;
 
 const
@@ -856,42 +907,6 @@ begin
   end;
 end;
 
-function TCronOsLocalTimeZone.GetRules: ICronZoneRules;
-begin
-  Result := CurrentZone;
-end;
-
-function TCronOsLocalTimeZone.ToUniversalTime(const aLocal: TDateTime;
-  const aForceDaylight: Boolean): TDateTime;
-var
-  lMap: TCronLocalMapping;
-begin
-  lMap := CurrentZone.MapLocal(CronDateTimeToMs(aLocal));
-  case lMap.Kind of
-    clkGap: raise ELocalTimeInvalid.Create('Invalid local time');
-    clkOverlap:
-      if aForceDaylight then Result := CronMsToDateTime(lMap.FirstUtcMs)
-      else Result := CronMsToDateTime(lMap.SecondUtcMs);
-  else
-    Result := CronMsToDateTime(lMap.FirstUtcMs);
-  end;
-end;
-
-function TCronOsLocalTimeZone.ToLocalTime(const aUtc: TDateTime): TDateTime;
-begin
-  Result := CronMsToDateTime(CurrentZone.UtcToLocalMs(CronDateTimeToMs(aUtc)));
-end;
-
-function TCronOsLocalTimeZone.IsAmbiguousTime(const aLocal: TDateTime): Boolean;
-begin
-  Result := CurrentZone.MapLocal(CronDateTimeToMs(aLocal)).Kind = clkOverlap;
-end;
-
-function TCronOsLocalTimeZone.IsInvalidTime(const aLocal: TDateTime): Boolean;
-begin
-  Result := CurrentZone.MapLocal(CronDateTimeToMs(aLocal)).Kind = clkGap;
-end;
-
 procedure InitializeWindowsZone;
 var
   lKernel: HMODULE;
@@ -937,6 +952,203 @@ begin
   Result := NamedWindowsSource(aWindowsId);
 end;
 {$ENDIF}
+{$ENDIF}
+
+function TCronRulesLocalTimeZone.GetRules: ICronZoneRules;
+begin
+  Result := CurrentZone;
+end;
+
+function TCronRulesLocalTimeZone.ToUniversalTime(const aLocal: TDateTime;
+  const aForceDaylight: Boolean): TDateTime;
+var
+  lMap: TCronLocalMapping;
+begin
+  lMap := CurrentZone.MapLocal(CronDateTimeToMs(aLocal));
+  case lMap.Kind of
+    clkGap: raise ELocalTimeInvalid.Create('Invalid local time');
+    clkOverlap:
+      if aForceDaylight then Result := CronMsToDateTime(lMap.FirstUtcMs)
+      else Result := CronMsToDateTime(lMap.SecondUtcMs);
+  else
+    Result := CronMsToDateTime(lMap.FirstUtcMs);
+  end;
+end;
+
+function TCronRulesLocalTimeZone.ToLocalTime(const aUtc: TDateTime): TDateTime;
+begin
+  Result := CronMsToDateTime(CurrentZone.UtcToLocalMs(CronDateTimeToMs(aUtc)));
+end;
+
+function TCronRulesLocalTimeZone.IsAmbiguousTime(const aLocal: TDateTime): Boolean;
+begin
+  Result := CurrentZone.MapLocal(CronDateTimeToMs(aLocal)).Kind = clkOverlap;
+end;
+
+function TCronRulesLocalTimeZone.IsInvalidTime(const aLocal: TDateTime): Boolean;
+begin
+  Result := CurrentZone.MapLocal(CronDateTimeToMs(aLocal)).Kind = clkGap;
+end;
+
+function CronZoneDataRoot: string;
+begin
+  Result := CronGetEnvironmentVariable('MAXCRON_TZDIR');
+{$IFNDEF MSWINDOWS}
+  if Result = '' then Result := CronGetEnvironmentVariable('TZDIR');
+  if Result = '' then Result := '/usr/share/zoneinfo';
+{$ENDIF}
+end;
+
+function LocateLocalZone(const aInputs: TCronLocalInputs): TCronLocalLocation;
+var
+  lPath, lOrigin, lError, v: string;
+begin
+  Result := Default(TCronLocalLocation);
+  if not aInputs.TzSet then
+  begin
+    Result.UtcOrigin := 'utc:no-localtime';
+    if TryReadCronTzifBytes(aInputs.LocaltimePath, Result.Bytes, lError) then
+      Result.FileOrigin := 'file:' + aInputs.LocaltimePath;
+    Exit;
+  end;
+
+  v := aInputs.Tz;
+  if (v <> '') and (v[1] = ':') then Delete(v, 1, 1);
+  if v = '' then
+  begin
+    Result.UtcOrigin := 'utc:empty';
+    Exit;
+  end;
+  Result.UtcOrigin := 'utc:invalid';
+  Result.PosixText := v;
+  if v[1] = '/' then
+  begin
+    lPath := v;
+    lOrigin := 'file:' + v;
+  end else if IsCronZoneNameSyntax(v) and (aInputs.ZoneRoot <> '') then
+  begin
+    lPath := IncludeTrailingPathDelimiter(aInputs.ZoneRoot) + CronReplaceTextAscii(v, '/', PathDelim);
+    lOrigin := 'zone:' + v;
+  end;
+  if (lPath <> '') and TryReadCronTzifBytes(lPath, Result.Bytes, lError) then
+    Result.FileOrigin := lOrigin;
+end;
+
+function SameLocalBytes(const aLeft, aRight: TBytes): Boolean;
+begin
+  Result := (Length(aLeft) = Length(aRight)) and
+    ((Length(aLeft) = 0) or CompareMem(Pointer(aLeft), Pointer(aRight), Length(aLeft)));
+end;
+
+constructor TCronTzifLocalTimeZone.Create(const aInputs: TCronLocalInputsFunc; const aRecheckUs: Int64);
+begin
+  inherited Create;
+  fInputs := aInputs;
+  fRecheckUs := aRecheckUs;
+  RefreshZone;
+  if fZone = nil then
+  begin
+    // The first input read failed. Publish the fallback and leave the check due.
+    fOrigin := 'utc:invalid';
+    fZone := CreateCronZone('LOCAL', TCronFixedZoneSource.Create(0));
+  end;
+end;
+
+procedure TCronTzifLocalTimeZone.RefreshZone;
+var
+  lLocation: TCronLocalLocation;
+  lOrigin, lError: string;
+  lSource: ICronZoneRuleSource;
+begin
+  try
+    lLocation := LocateLocalZone(fInputs());
+  except
+    // Keep the last rules and leave the check due when the input read fails.
+    Exit;
+  end;
+
+  gZoneLock.Acquire;
+  try
+    // Keep the located bytes even on a parse failure to avoid retrying the
+    // same invalid file. The published UTC or POSIX identity uses its origin alone.
+    if (fZone = nil) or (fLocation.FileOrigin <> lLocation.FileOrigin) or
+      (fLocation.PosixText <> lLocation.PosixText) or (fLocation.UtcOrigin <> lLocation.UtcOrigin) or
+      not SameLocalBytes(fLocation.Bytes, lLocation.Bytes) then
+    begin
+      if (lLocation.FileOrigin <> '') and TryParseCronTzif(lLocation.Bytes, lSource, lError) then
+        lOrigin := lLocation.FileOrigin
+      else if (lLocation.PosixText <> '') and TryParseCronPosixTz(lLocation.PosixText, lSource, lError) then
+        lOrigin := 'posix:' + lLocation.PosixText
+      else begin
+        lOrigin := lLocation.UtcOrigin;
+        lSource := TCronFixedZoneSource.Create(0);
+      end;
+      if (fZone = nil) or (fOrigin <> lOrigin) or
+        ((lOrigin = lLocation.FileOrigin) and not SameLocalBytes(fLocation.Bytes, lLocation.Bytes)) then
+      begin
+        fZone := CreateCronZone('LOCAL', lSource);
+        fOrigin := lOrigin;
+      end;
+      fLocation := lLocation;
+    end;
+    fCheckedUs := CronMonotonicNowUs;
+    fHasChecked := True;
+  finally
+    gZoneLock.Release;
+  end;
+end;
+
+function TCronTzifLocalTimeZone.CurrentZone: ICronZoneRules;
+begin
+  gZoneLock.Acquire;
+  try
+    Result := fZone;
+    if fRechecking or (fHasChecked and (CronMonotonicNowUs - fCheckedUs < fRecheckUs)) then
+      Exit;
+    fRechecking := True;
+  finally
+    gZoneLock.Release;
+  end;
+
+  try
+    RefreshZone;
+  finally
+    gZoneLock.Acquire;
+    try
+      Result := fZone;
+      fRechecking := False;
+    finally
+      gZoneLock.Release;
+    end;
+  end;
+end;
+
+{$IFDEF MAXCRON_TESTS}
+function TCronTzifLocalTimeZone.GetOrigin: string;
+begin
+  CurrentZone;
+  gZoneLock.Acquire;
+  try
+    Result := fOrigin;
+  finally
+    gZoneLock.Release;
+  end;
+end;
+
+function CreateCronTzifLocalTimeZoneForTests(const aInputs: TCronLocalInputsFunc;
+  const aRecheckUs: Int64): ICronTimeZone;
+begin
+  Result := TCronTzifLocalTimeZone.Create(aInputs, aRecheckUs);
+end;
+
+function CronTzifLocalOriginForTests(const aZone: ICronTimeZone): string;
+var
+  lProvider: ICronTzifLocalOrigin;
+begin
+  Result := '';
+  if Supports(aZone, ICronTzifLocalOrigin, lProvider) then
+    Result := lProvider.GetOrigin;
+end;
 {$ENDIF}
 
 function CronSystemTimeZone: ICronTimeZone;

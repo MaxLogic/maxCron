@@ -23,6 +23,7 @@ uses
   TestLocalOverlap in '..\unit\TestLocalOverlap.pas',
   TestMisfireOnTime in '..\unit\TestMisfireOnTime.pas',
   TestNamedTimeZones in '..\unit\TestNamedTimeZones.pas',
+  TestLocalZoneTzif in '..\unit\TestLocalZoneTzif.pas',
   TestRestartCatchUp in '..\unit\TestRestartCatchUp.pas',
   TestRoster in '..\TestRoster.pas',
   TestScheduleNext in '..\unit\TestScheduleNext.pas',

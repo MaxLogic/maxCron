@@ -5701,11 +5701,7 @@ begin
     lName := Trim(Value);
     if not IsCronZoneNameSyntax(lName) then
       raise Exception.CreateFmt('Invalid timezone "%s"; expected LOCAL, UTC, UTC+/-HH[:MM] or an IANA name such as Europe/Warsaw', [Value]);
-    lRoot := CronGetEnvironmentVariable('MAXCRON_TZDIR');
-{$IFNDEF MSWINDOWS}
-    if lRoot = '' then lRoot := CronGetEnvironmentVariable('TZDIR');
-    if lRoot = '' then lRoot := '/usr/share/zoneinfo';
-{$ENDIF}
+    lRoot := CronZoneDataRoot;
     if not TryResolveCronZone(lName, lRoot, lZone, lNormalized, lError) then
       raise Exception.CreateFmt('Unknown timezone "%s": %s', [Value, lError]);
     lKind := TCronTimeZoneKind.ctzNamed;

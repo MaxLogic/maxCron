@@ -212,6 +212,7 @@
         <DCCReference Include="unit\TestWindowsZoneOracle.pas"/>
         <DCCReference Include="unit\TestTimeZoneTzif.pas"/>
         <DCCReference Include="unit\TestNamedTimeZones.pas"/>
+        <DCCReference Include="unit\TestLocalZoneTzif.pas"/>
         <DCCReference Include="unit\TestPublicApiCompat.pas"/>
         <DCCReference Include="unit\TestRestartCatchUp.pas"/>
         <DCCReference Include="unit\TestCronQuery.pas"/>
