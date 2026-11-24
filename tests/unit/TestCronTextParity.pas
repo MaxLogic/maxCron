@@ -20,13 +20,19 @@ type
     [Test] procedure SplitEdges;
     [Test] procedure ReplaceAscii;
     [Test] procedure NumericHelpers;
+    [Test] procedure DecimalIntegerHelpers;
+    [Test] procedure ExcludedDateRejectsHex;
+    [Test] procedure AutoIntegerEnvironmentUsesDecimal;
+    [Test] procedure LongDecimalPadding;
+    [Test] procedure AutoIntegerEnvironmentLongDecimalPadding;
     [Test] procedure SpecialFloatSpellings;
   end;
 
 implementation
 
 uses
-  maxCron.Internal.Text, maxCron.Plan;
+  {$IFDEF FPC} Windows, {$ELSE} Winapi.Windows, {$ENDIF}
+  maxCron, maxCron.Internal.Text, maxCron.Plan;
 
 procedure RequireRejected(const s: string);
 var
@@ -81,16 +87,23 @@ end;
 procedure TTestCronTextParity.ValidAsciiForms;
 var
   lPlan: TCronSchedulePlan;
-  s: string;
   lNext: TDateTime;
 begin
   lPlan := TCronSchedulePlan.Create;
   try
-    for s in ['$A', '0xA', '+5', '05'] do
-    begin
-      lPlan.Parse(s + ' 0 * * *');
-      Assert.IsTrue(lPlan.FindNextScheduleDate(EncodeDate(2026, 1, 1), lNext));
-    end;
+    lPlan.Parse('05 0 * * *');
+    Assert.IsTrue(lPlan.FindNextScheduleDate(EncodeDate(2026, 1, 1), lNext));
+    Assert.AreEqual<TDateTime>(EncodeDate(2026, 1, 1) + EncodeTime(0, 5, 0, 0), lNext);
+    lPlan.Parse('00 0 1 1 *');
+    Assert.IsTrue(lPlan.FindNextScheduleDate(EncodeDate(2025, 12, 31), lNext));
+    Assert.AreEqual<TDateTime>(EncodeDate(2026, 1, 1), lNext);
+    lPlan.Parse('0 0 15W * *');
+    Assert.IsTrue(lPlan.FindNextScheduleDate(EncodeDate(2026, 8, 1), lNext));
+    Assert.AreEqual<TDateTime>(EncodeDate(2026, 8, 14), lNext);
+    lPlan.Parse('0 0 L-3 * * * 0 10');
+    Assert.IsTrue(lPlan.FindNextScheduleDate(EncodeDate(2026, 1, 1), lNext));
+    Assert.AreEqual<TDateTime>(EncodeDate(2026, 1, 28), lNext);
+    Assert.AreEqual<LongWord>(10, lPlan.ExecutionLimit);
     lPlan.Parse('0 0 * jan mon');
     Assert.IsTrue(lPlan.FindNextScheduleDate(EncodeDate(2026, 1, 1), lNext));
   finally
@@ -151,6 +164,173 @@ begin
     end;
   end;
   Assert.IsTrue(lRejected, 'Numeric rejection must use EConvertError');
+end;
+
+procedure TTestCronTextParity.DecimalIntegerHelpers;
+const
+  cInvalid: array[0..13] of string = ('', '$A', '0xA', 'xA', '+10', '-10',
+    '1-0', ' 10', '10 ', '1 0', #9 + '10', '10' + #9, #$FF11, '999999999999999999999999');
+var
+  s, lFailures: string;
+  lInt: Integer;
+  lInt64: Int64;
+  lRejected: Boolean;
+begin
+  for s in cInvalid do
+  begin
+    if CronTryStrToInt(s, lInt) then
+      lFailures := lFailures + 'TryStrToInt accepted [' + s + ']' + sLineBreak;
+    if CronTryStrToInt64(s, lInt64) then
+      lFailures := lFailures + 'TryStrToInt64 accepted [' + s + ']' + sLineBreak;
+    if CronStrToIntDef(s, -1) <> -1 then
+      lFailures := lFailures + 'StrToIntDef accepted [' + s + ']' + sLineBreak;
+    lRejected := False;
+    try
+      CronStrToInt(s);
+    except
+      on E: EConvertError do lRejected := True;
+    end;
+    if not lRejected then
+      lFailures := lFailures + 'StrToInt accepted [' + s + ']' + sLineBreak;
+    lRejected := False;
+    try
+      CronStrToInt64(s);
+    except
+      on E: EConvertError do lRejected := True;
+    end;
+    if not lRejected then
+      lFailures := lFailures + 'StrToInt64 accepted [' + s + ']' + sLineBreak;
+  end;
+  Assert.AreEqual<string>('', lFailures, lFailures);
+  Assert.AreEqual<Integer>(0, CronStrToInt('0'));
+  Assert.AreEqual<Integer>(0, CronStrToIntDef('00', -1));
+  Assert.AreEqual<Integer>(High(Integer), CronStrToInt('02147483647'));
+  Assert.AreEqual<Int64>(High(Int64), CronStrToInt64('09223372036854775807'));
+  Assert.IsFalse(CronTryStrToInt('2147483648', lInt));
+  Assert.IsFalse(CronTryStrToInt64('9223372036854775808', lInt64));
+end;
+
+procedure TTestCronTextParity.ExcludedDateRejectsHex;
+var
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lDiagnostic: string;
+
+  function Diagnostic(const s: string): string;
+  begin
+    Result := '';
+    try
+      lEvent.ExcludedDatesCsv := s;
+    except
+      on E: EConvertError do Result := CronExceptionText(E);
+    end;
+  end;
+
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lEvent := lCron.Add('ExcludedDateDecimal');
+    lEvent.ExcludedDatesCsv := '2026-12-01';
+    Assert.AreEqual<string>('2026-12-01', lEvent.ExcludedDatesCsv);
+    lDiagnostic := Diagnostic('ZZZZ-12-01');
+    Assert.IsTrue(lDiagnostic <> '', 'Non-numeric date must raise EConvertError');
+    Assert.AreEqual<string>(StringReplace(lDiagnostic, 'ZZZZ', '$7EA', []), Diagnostic('$7EA-12-01'));
+  finally
+    lCron.Free;
+  end;
+end;
+
+procedure TTestCronTextParity.AutoIntegerEnvironmentUsesDecimal;
+const
+  cEnvName = 'MAXCRON_GLOBAL_MAX_CONCURRENT';
+var
+  lPrevious: string;
+  lHadPrevious: Boolean;
+  c: Char;
+
+  procedure Check(const s: string; const aExpected: Integer);
+  var
+    lCron: TmaxCron;
+  begin
+    Assert.IsTrue(SetEnvironmentVariableW(cEnvName, PChar(s)));
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      Assert.AreEqual<Integer>(aExpected, lCron.GlobalMaxConcurrentCallbacks, '[' + s + ']');
+    finally
+      lCron.Free;
+    end;
+  end;
+
+begin
+  SetLastError(0);
+  lHadPrevious := (GetEnvironmentVariableW(cEnvName, @c, 1) <> 0) or
+    (GetLastError <> ERROR_ENVVAR_NOT_FOUND);
+  lPrevious := {$IFDEF FPC}SysUtils{$ELSE}System.SysUtils{$ENDIF}.GetEnvironmentVariable(cEnvName);
+  try
+    Check('019', 19);
+    Check('19', 19);
+    Check('invalid', 0);
+    Check('0x13', 0);
+    Check('+19', 0);
+    Check(' 19 ', 19);
+    Check('19' + #9, 19);
+  finally
+    if lHadPrevious then
+      SetEnvironmentVariableW(cEnvName, PChar(lPrevious))
+    else
+      SetEnvironmentVariableW(cEnvName, nil);
+  end;
+end;
+
+procedure TTestCronTextParity.LongDecimalPadding;
+var
+  lInt: Integer;
+  lInt64: Int64;
+  lPadding: string;
+  i: Integer;
+begin
+  for i := 255 to 256 do
+  begin
+    lPadding := StringOfChar('0', i);
+    Assert.AreEqual<Integer>(7, CronStrToInt(lPadding + '7'));
+    Assert.AreEqual<Int64>(7, CronStrToInt64(lPadding + '7'));
+    Assert.AreEqual<Integer>(High(Integer), CronStrToInt(lPadding + '2147483647'));
+    Assert.AreEqual<Int64>(High(Int64), CronStrToInt64(lPadding + '9223372036854775807'));
+    Assert.IsFalse(CronTryStrToInt(lPadding + '2147483648', lInt));
+    Assert.IsFalse(CronTryStrToInt64(lPadding + '9223372036854775808', lInt64));
+  end;
+  lPadding := StringOfChar('0', 300);
+  Assert.AreEqual<Integer>(0, CronStrToInt(lPadding));
+  Assert.AreEqual<Int64>(0, CronStrToInt64(lPadding));
+end;
+
+procedure TTestCronTextParity.AutoIntegerEnvironmentLongDecimalPadding;
+const
+  cEnvName = 'MAXCRON_GLOBAL_MAX_CONCURRENT';
+var
+  lPrevious: string;
+  lHadPrevious: Boolean;
+  lCron: TmaxCron;
+  c: Char;
+begin
+  SetLastError(0);
+  lHadPrevious := (GetEnvironmentVariableW(cEnvName, @c, 1) <> 0) or
+    (GetLastError <> ERROR_ENVVAR_NOT_FOUND);
+  lPrevious := {$IFDEF FPC}SysUtils{$ELSE}System.SysUtils{$ENDIF}.GetEnvironmentVariable(cEnvName);
+  Assert.IsTrue(SetEnvironmentVariableW(cEnvName, PChar(StringOfChar('0', 256) + '19')));
+  try
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      Assert.AreEqual<Integer>(19, lCron.GlobalMaxConcurrentCallbacks);
+    finally
+      lCron.Free;
+    end;
+  finally
+    if lHadPrevious then
+      SetEnvironmentVariableW(cEnvName, PChar(lPrevious))
+    else
+      SetEnvironmentVariableW(cEnvName, nil);
+  end;
 end;
 
 procedure TTestCronTextParity.SpecialFloatSpellings;

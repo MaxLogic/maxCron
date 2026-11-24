@@ -38,6 +38,7 @@ All notable user-visible changes to this project will be documented in this file
 - Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
 
 ### Changed
+- Numbers in cron expressions, execution limits, excluded dates and integer environment variables accept decimal digits only. Hex forms like `$A` and signed forms like `+10` are rejected.
 - Stores that persist `CompletedThrough` replay work that was unfinished at save time. Missing checkpoints retain the existing restore behavior. Persisted `Enabled` keeps automatically exhausted events eligible while tickets remain unsettled; explicit stops remain disabled. Persisted execution counts cover the settled prefix so replay still respects execution limits.
 - LOCAL `dspRunAtNextValidTime` now shifts a missing occurrence to the transition instant, matching named zones. For example, 02:30:30 shifts to 03:00:00 instead of 03:00:30.
 - LOCAL on Windows uses the Windows conversion rules on both Delphi and FPC, and picks up a host-zone change on the next scheduler pass.

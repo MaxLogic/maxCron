@@ -307,6 +307,37 @@ begin
     raise Exception.Create('Invalid cron token');
 end;
 
+// Preserve the diagnostics for negative operands that were already invalid.
+function IsNegativeDecimalInRange(const s: string; const aMin, aMax: UInt64): Boolean;
+var
+  i: Integer;
+  lDigit, lMagnitude: UInt64;
+begin
+  if (Length(s) < 2) or (s[1] <> '-') then
+    Exit(False);
+
+  lMagnitude := 0;
+  for i := 2 to Length(s) do
+  begin
+    if not CharInSet(s[i], ['0'..'9']) then
+      Exit(False);
+    lDigit := Ord(s[i]) - Ord('0');
+    if lMagnitude > (aMax - lDigit) div 10 then
+      Exit(False);
+    lMagnitude := lMagnitude * 10 + lDigit;
+  end;
+  Result := lMagnitude >= aMin;
+end;
+
+function ParseCronStep(const s: string): Integer;
+begin
+  if IsNegativeDecimalInRange(s, 0, UInt64(High(Integer)) + 1) then
+    raise Exception.Create('Invalid cron step');
+  Result := ParseCronInteger(s);
+  if Result = 0 then
+    raise Exception.Create('Invalid cron step');
+end;
+
 function CronFloorDiv(const aValue, aDivisor: Int64): Int64;
 begin
   Result := aValue div aDivisor;
@@ -1590,7 +1621,11 @@ begin
   if (lText <> '') and (lText <> '*') then
   begin
     if not CronTryStrToInt64(lText, lNum) then
+    begin
+      if IsNegativeDecimalInRange(lText, 1, UInt64(High(Int64)) + 1) then
+        raise Exception.Create('Cron value out of range');
       raise Exception.Create('Invalid cron token');
+    end;
     if (lNum < 0) or (lNum > High(LongWord)) then
       raise Exception.Create('Cron value out of range');
     fExecutionLimit := LongWord(lNum);
@@ -1879,9 +1914,7 @@ begin
   lSlashPos := Pos('/', lText);
   if lSlashPos > 0 then
   begin
-    lStep := ParseCronInteger(Copy(lText, lSlashPos + 1, MaxInt));
-    if lStep <= 0 then
-      raise Exception.Create('Invalid cron step');
+    lStep := ParseCronStep(Copy(lText, lSlashPos + 1, MaxInt));
     lText := Copy(lText, 1, lSlashPos - 1);
   end;
 
@@ -2483,9 +2516,7 @@ begin
   iSlash := Pos('/', s);
   if iSlash > 0 then
   begin
-    Repeater := ParseCronInteger(Copy(s, iSlash + 1, MaxInt));
-    if Repeater <= 0 then
-      raise Exception.Create('Invalid cron step');
+    Repeater := ParseCronStep(Copy(s, iSlash + 1, MaxInt));
     s := Copy(s, 1, iSlash - 1);
   end else
     Repeater := 1;

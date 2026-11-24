@@ -99,6 +99,8 @@ type
     [Test] procedure Parse_WrappedRanges_Expansion;
     [Test] procedure Parse_DowFullCycleRows;
     [Test] procedure Parse_InvalidIntegerGrammar_UsesParseException;
+    [Test] procedure Parse_NumbersRequireDecimalDigits;
+    [Test] procedure Parse_PaddedExecutionLimit;
     [Test] procedure Parse_MonthEndOffsetLists_ErrorPrecedence;
     [Test] procedure Parse_MonthEndOffsets_LaterFieldDiagnostics;
     [Test] procedure Parse_MonthEndOffsets;
@@ -756,6 +758,69 @@ begin
   end;
   Assert.IsTrue(lRejected > 0, 'Generated invalid expressions must reach the parser');
   Assert.AreEqual(0, lLeaks, lFailures);
+end;
+
+procedure TTestCronParsing.Parse_NumbersRequireDecimalDigits;
+var
+  lFailures, s: string;
+
+  procedure Check(const aText, aExpected: string);
+  var
+    lActual: string;
+  begin
+    lActual := 'accepted';
+    try
+      AssertParses(aText);
+    except
+      on E: Exception do lActual := E.ClassName + ': ' + E.Message;
+    end;
+    if lActual <> 'Exception: ' + aExpected then
+      lFailures := lFailures + aText + ': ' + lActual + sLineBreak;
+  end;
+
+begin
+  for s in ['$AW', '0xAW', 'xAW', '+10W', 'x10W', 'ZZW'] do
+    Check('0 0 ' + s + ' * *', 'Cron value out of range');
+  for s in ['$1#2', '$5L', 'ZZ#2', 'ZZL'] do
+    Check('0 0 * * ' + s, 'Cron value out of range');
+  for s in ['$A 0 * * *', '0xA 0 * * *', '+5 0 * * *', '0 0 * $A *',
+    '0 0 * * * * 0 $10', '0 0 * * * * 0 +10', '0 0 * * * * 0 -0',
+    '0 0 * * * * 0 -9223372036854775809', '0/-2147483649 * * * * *',
+    '999999999999999999999999 0 * * *'] do
+    Check(s, 'Invalid cron token');
+  Check('0/-1 * * * * *', 'Invalid cron step');
+  Check('H/-2147483648 * * * * *', 'Invalid cron step');
+  Check('0 0 * * * * 0 -9223372036854775808', 'Cron value out of range');
+  Assert.AreEqual<string>('', lFailures, lFailures);
+end;
+
+procedure TTestCronParsing.Parse_PaddedExecutionLimit;
+const
+  cPlan = '0 0 * * * * 0 ';
+var
+  lPlan: TCronSchedulePlan;
+  lPlain, lPadded: string;
+
+  function Diagnostic(const s: string): string;
+  begin
+    Result := '';
+    try
+      lPlan.Parse(cPlan + s);
+    except
+      on E: Exception do Result := E.ClassName + ': ' + E.Message;
+    end;
+  end;
+
+begin
+  lPlan := TCronSchedulePlan.Create;
+  try
+    lPlain := Diagnostic('4294967296');
+    lPadded := Diagnostic(StringOfChar('0', 256) + '4294967296');
+    Assert.AreEqual<string>('Exception: Cron value out of range', lPlain);
+    Assert.AreEqual<string>(lPlain, lPadded);
+  finally
+    lPlan.Free;
+  end;
 end;
 
 procedure TTestCronParsing.Parse_MonthEndOffsetLists_ErrorPrecedence;

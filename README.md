@@ -47,7 +47,7 @@ The units set `delphiunicode`, `anonymousfunctions` and `functionreferences`
 through `maxCron.inc`, with real constants kept at Double precision.
 Add the same library units listed under Installation,
 including `maxCron.Internal.Text.pas`. MaxLogicFoundation is not needed on FPC.
-Plan text stays Unicode and uses Delphi-compatible numeric syntax.
+Plan text stays Unicode.
 
 On FPC, `imMaxAsync` runs on the RTL `System.Threading` pool, as does `imTTask`.
 The tested FPC build has an RTL pool shutdown race that can double-free a worker
@@ -803,6 +803,9 @@ Environment alternatives (read at scheduler creation):
 - `MAXCRON_GLOBAL_MAX_CONCURRENT`
 - `MAXCRON_GLOBAL_MAX_DISPATCH_PER_SECOND`
 
+Integer environment settings accept decimal digits after trimming surrounding whitespace.
+An empty value counts as unset and uses the default.
+
 ### Graceful shutdown API
 
 `Shutdown` lets us stop new dispatch and optionally drain running callbacks:
@@ -1418,6 +1421,8 @@ apply to shifted spring-gap occurrences and to each eligible repeated-hour insta
 ```
 
 # Cron Format
+
+Numbers in cron expressions use decimal digits only, with leading zeros allowed.
 
 Cron format is a simple, yet powerful and flexible way to define time and frequency of various actions.
 

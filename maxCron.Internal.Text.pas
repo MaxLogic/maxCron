@@ -24,20 +24,44 @@ function CronExceptionText(const E: Exception): string;
 
 implementation
 
-{$IFDEF FPC}
-const
-  cCronInvalidIntegerText = '''%s'' is not a valid integer value';
+{$IFNDEF FPC}
+uses
+  System.SysConst;
+{$ENDIF}
 
-function IsIntegerAlphabet(const s: string): Boolean;
+function TryNormalizeDecimalInteger(const s: string; out aDigits: string): Boolean;
 var
   c: Char;
+  i: Integer;
 begin
+  if s = '' then
+    Exit(False);
   for c in s do
-    if not CharInSet(c, [' ', '+', '-', '$', 'x', 'X', '0'..'9', 'A'..'F', 'a'..'f']) then
+    if not CharInSet(c, ['0'..'9']) then
       Exit(False);
+
+  // FPC's integer converter rejects long strings even when most digits are zeros.
+  i := 1;
+  while (i < Length(s)) and (s[i] = '0') do
+    Inc(i);
+  aDigits := Copy(s, i, MaxInt);
   Result := True;
 end;
 
+procedure RaiseInvalidInteger(const s: string);
+{$IFDEF FPC}
+const
+  cCronInvalidIntegerText = '''%s'' is not a valid integer value';
+{$ENDIF}
+begin
+  {$IFDEF FPC}
+  raise EConvertError.CreateFmt(cCronInvalidIntegerText, [s]);
+  {$ELSE}
+  raise EConvertError.CreateResFmt(@SInvalidInteger, [s]);
+  {$ENDIF}
+end;
+
+{$IFDEF FPC}
 function TrySpecialFloat(const s: string; out aValue: Double): Boolean;
 const
   cPositiveInf: UInt64 = $7FF0000000000000;
@@ -99,52 +123,45 @@ end;
 {$ENDIF}
 
 function CronTryStrToInt(const s: string; out aValue: Integer): Boolean;
+var
+  lDigits: string;
 begin
-  {$IFDEF FPC}
-  aValue := 0;
-  Result := IsIntegerAlphabet(s) and TryStrToInt(AnsiString(s), aValue);
-  {$ELSE}
-  Result := TryStrToInt(s, aValue);
-  {$ENDIF}
+  if not TryNormalizeDecimalInteger(s, lDigits) then
+  begin
+    aValue := 0;
+    Exit(False);
+  end;
+  Result := TryStrToInt({$IFDEF FPC}AnsiString(lDigits){$ELSE}lDigits{$ENDIF}, aValue);
 end;
 
 function CronTryStrToInt64(const s: string; out aValue: Int64): Boolean;
+var
+  lDigits: string;
 begin
-  {$IFDEF FPC}
-  aValue := 0;
-  Result := IsIntegerAlphabet(s) and TryStrToInt64(AnsiString(s), aValue);
-  {$ELSE}
-  Result := TryStrToInt64(s, aValue);
-  {$ENDIF}
+  if not TryNormalizeDecimalInteger(s, lDigits) then
+  begin
+    aValue := 0;
+    Exit(False);
+  end;
+  Result := TryStrToInt64({$IFDEF FPC}AnsiString(lDigits){$ELSE}lDigits{$ENDIF}, aValue);
 end;
 
 function CronStrToInt(const s: string): Integer;
 begin
-  {$IFDEF FPC}
   if not CronTryStrToInt(s, Result) then
-    raise EConvertError.CreateFmt(cCronInvalidIntegerText, [s]);
-  {$ELSE}
-  Result := StrToInt(s);
-  {$ENDIF}
+    RaiseInvalidInteger(s);
 end;
 
 function CronStrToInt64(const s: string): Int64;
 begin
-  {$IFDEF FPC}
   if not CronTryStrToInt64(s, Result) then
-    raise EConvertError.CreateFmt(cCronInvalidIntegerText, [s]);
-  {$ELSE}
-  Result := StrToInt64(s);
-  {$ENDIF}
+    RaiseInvalidInteger(s);
 end;
 
 function CronStrToIntDef(const s: string; const aDefault: Integer): Integer;
 begin
-  {$IFDEF FPC}
-  if not CronTryStrToInt(s, Result) then Result := aDefault;
-  {$ELSE}
-  Result := StrToIntDef(s, aDefault);
-  {$ENDIF}
+  if not CronTryStrToInt(s, Result) then
+    Result := aDefault;
 end;
 
 function CronTryStrToFloatInvariant(const s: string; out aValue: Double): Boolean;
