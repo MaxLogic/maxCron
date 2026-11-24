@@ -22,33 +22,59 @@ if [[ $# != 1 ]]; then
 fi
 lane=$1
 case "$lane" in
-    delphi) ;;
-    fpc|fpc-aarch64) configuration_error "The $lane Linux lane is not available yet." ;;
+    delphi|fpc) ;;
+    fpc-aarch64) configuration_error "The $lane Linux lane is not available yet." ;;
     *) reject_roster arguments count "Unsupported Linux lane: $lane" ;;
 esac
 
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] ||
-    configuration_error 'The Delphi Linux64 gate requires an x86_64 Linux host.'
+    configuration_error "The $lane gate requires an x86_64 Linux host."
 [[ -n ${HOME:-} ]] || configuration_error 'HOME must be set.'
-root=${MAXCRON_ROSTER_OUT:-"$HOME/dev-artifacts/runs/maxCron"}
+root_setting=MAXCRON_ROSTER_OUT
+[[ $lane != fpc ]] || root_setting=MAXCRON_FPC_OUT
+root=${!root_setting:-"$HOME/dev-artifacts/runs/maxCron"}
 [[ $root =~ ^/[A-Za-z0-9/._+-]*$ ]] ||
-    configuration_error 'MAXCRON_ROSTER_OUT must be an absolute Linux path using only A-Z, a-z, 0-9, /, ., _, + or -.'
+    configuration_error "$root_setting must be an absolute Linux path using only A-Z, a-z, 0-9, /, ., _, + or -."
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) ||
     configuration_error 'Cannot resolve the repository path.'
 prebuilt=${MAXCRON_LINUX_PREBUILT:-}
-entries=(unit)
-manifests=(DelphiLinuxLong)
-programs=(maxCronTests)
-seconds=172800
-if [[ ${MAXCRON_LONG_TESTS:-} != 1 ]]; then
-    entries+=(stress)
+long=${MAXCRON_LONG_TESTS:-0}
+runner_seconds=7200
+[[ $long != 1 ]] || runner_seconds=172800
+if [[ $lane == fpc ]]; then
+    entries=(tests smoke smoke-heaptrc)
+    manifests=(FpcLinux FpcSmoke FpcSmokeHeap)
+    programs=(maxCronFpcTests maxCronFpcSmoke maxCronFpcSmoke)
+    limits=("$runner_seconds" 600 600)
+    [[ $long != 1 ]] || manifests[0]=FpcLinuxLong
+    gate_name=FpcLinuxGate
+elif [[ $long == 1 ]]; then
+    entries=(unit)
+    manifests=(DelphiLinuxLong)
+    programs=(maxCronTests)
+    limits=("$runner_seconds")
+    gate_name=DelphiLinuxGate
+else
+    entries=(unit stress)
     manifests=(DelphiLinuxUnit DelphiLinuxStress)
-    programs+=(maxCronStressTests)
-    seconds=7200
+    programs=(maxCronTests maxCronStressTests)
+    limits=("$runner_seconds" "$runner_seconds")
+    gate_name=DelphiLinuxGate
 fi
-seconds=${MAXCRON_LINUX_TIMEOUT_SECONDS:-$seconds}
-[[ $seconds =~ ^[1-9][0-9]*$ ]] ||
+time_override=${MAXCRON_LINUX_TIMEOUT_SECONDS:-}
+[[ -z $time_override || $time_override =~ ^[1-9][0-9]*$ ]] ||
     configuration_error 'MAXCRON_LINUX_TIMEOUT_SECONDS must be a positive integer.'
+
+fpc_flags=()
+child_path=/usr/bin:/bin
+check_fpc_tool() {
+    local option=$1 expected=$2 actual
+    actual=$(env -i "PATH=$child_path" "HOME=$HOME" LANG=C.UTF-8 "$fpc" "${fpc_flags[@]}" "$option" 2>&1) ||
+        configuration_error "FPC $option failed: $actual"
+    [[ $actual == "$expected" ]] ||
+        configuration_error "FPC $option must report $expected; got $actual."
+}
+
 if [[ -n $prebuilt ]]; then
     prebuilt=$(cd -- "$prebuilt" && pwd -P) ||
         configuration_error 'MAXCRON_LINUX_PREBUILT must name an existing lane directory.'
@@ -56,10 +82,22 @@ if [[ -n $prebuilt ]]; then
         [[ -f $prebuilt/${entries[i]}/${programs[i]} ]] ||
             configuration_error "Missing prebuilt runner: ${entries[i]}/${programs[i]}"
     done
-else
+elif [[ $lane == delphi ]]; then
     powershell=/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe
     [[ -x $powershell ]] && command -v wslpath >/dev/null ||
         configuration_error 'Building Delphi Linux64 requires Windows PowerShell and wslpath in WSL.'
+else
+    [[ -n ${MAXCRON_FPC:-} ]] || configuration_error 'Set MAXCRON_FPC to the Linux FPC driver.'
+    fpc=$(realpath -s -- "$MAXCRON_FPC") || configuration_error 'Cannot resolve MAXCRON_FPC.'
+    fpc_bin=${fpc%/*}
+    [[ -f $fpc && -x $fpc && -r $fpc_bin/fpc.cfg ]] ||
+        configuration_error 'MAXCRON_FPC must name an executable FPC driver with fpc.cfg beside it.'
+    child_path="$fpc_bin:$child_path"
+    fpc_flags=(-n "@$fpc_bin/fpc.cfg")
+    check_fpc_tool -iV 3.3.1
+    check_fpc_tool -iTO linux
+    check_fpc_tool -iTP x86_64
+    printf 'FPC 3.3.1 x86_64-linux at %s\n' "$fpc"
 fi
 
 mkdir -p -- "$root" || fail_gate 3 output "Cannot create output root: $root"
@@ -69,7 +107,47 @@ run=$(mktemp -d "$root/linux-$lane-$stamp-XXXXXX") ||
 printf 'LINUX GATE OUTPUT %s\n' "$run"
 mkdir -- "$run/tmp" || fail_gate 3 output "Cannot create $run/tmp"
 
-if [[ -z $prebuilt ]]; then
+child_env=(env -i "PATH=$child_path" "HOME=$HOME" LANG=C.UTF-8 "TMPDIR=$run/tmp"
+    "MAXCRON_TEST_ROOT=$repo")
+for setting in MAXCRON_LONG_TESTS MAXCRON_STRESS MAXCRON_DEBUG_SAFETY; do
+    if [[ -v $setting ]]; then
+        child_env+=("$setting=${!setting}")
+    fi
+done
+
+build_fpc_program() {
+    local name=$1 program=$2 work="$run/$1" rc
+    shift 2
+    mkdir -- "$work" || fail_gate 3 output "Cannot create $work"
+    (cd -- "$work" && "${child_env[@]}" "$fpc" "${fpc_flags[@]}" -Sew "-FU$work" "-FE$work" \
+        "$@" "$repo/tests/fpc/$program.dpr") > "$work/build.log" 2>&1
+    rc=$?
+    cat -- "$work/build.log" || fail_gate 3 log "Cannot read $work/build.log"
+    [[ $rc == 0 && -f $work/$program && -x $work/$program ]] ||
+        fail_gate 3 build "FPC must produce $name/$program (native exit $rc)."
+}
+
+if [[ -z $prebuilt && $lane == fpc ]]; then
+    fpc_flags+=("-Fu$repo" "-Fu$repo/tests" "-Fi$repo")
+    if [[ ${MAXCRON_DEBUG_SAFETY:-} == 1 ]]; then
+        fpc_flags+=(-O- -gl -Cr -Co -Ct -Ci -Sa)
+    else
+        fpc_flags+=(-O2 -gl)
+    fi
+    [[ $long != 1 ]] || fpc_flags+=(-dMAXCRON_LONG_TESTS)
+    build_fpc_program check-public maxCronFpcCompileCheck
+    build_fpc_program check-tests maxCronFpcCompileCheck -dMAXCRON_TESTS
+    build_fpc_program gen maxCronFpcRegistryGen -vm4104,4105
+    registry="$run/gen/maxCronFpcRegistry.inc"
+    (cd -- "$run/gen" && "${child_env[@]}" ./maxCronFpcRegistryGen "$repo" "$registry") > "$run/gen/run.log" 2>&1
+    rc=$?
+    cat -- "$run/gen/run.log" || fail_gate 3 log "Cannot read $run/gen/run.log"
+    [[ $rc == 0 && -s $registry ]] || fail_gate 3 build "FPC registry generation failed (native exit $rc)."
+    build_fpc_program tests maxCronFpcTests -dMAXCRON_TESTS -gh -vm4104,4105 \
+        "-Fu$repo/tests/fpc" "-Fu$repo/tests/unit" "-Fi$run/gen"
+    build_fpc_program smoke maxCronFpcSmoke
+    build_fpc_program smoke-heaptrc maxCronFpcSmoke -gh -dMAXCRON_FPC_SMOKE_NOPOOL
+elif [[ -z $prebuilt ]]; then
     win_build=$(wslpath -w -a "$repo/tests/linux/Build-DelphiLinux64.ps1") ||
         fail_gate 3 build 'Cannot resolve the Windows build script path.'
     export WSLENV="${WSLENV:+$WSLENV:}MAXCRON_BUILD_ROOT/w:MAXCRON_DCCLINUX64/w:MAXCRON_LINUX_SDK/w:MAXCRON_LONG_TESTS/w:MAXCRON_DEBUG_SAFETY/w"
@@ -94,6 +172,9 @@ if [[ -z $prebuilt ]]; then
 fi
 
 for i in "${!entries[@]}"; do
+    if [[ -z $prebuilt && $lane == fpc ]]; then
+        break
+    fi
     work="$run/${entries[i]}"
     exe="${programs[i]}"
     mkdir -- "$work" || fail_gate 3 output "Cannot create $work"
@@ -105,14 +186,6 @@ for i in "${!entries[@]}"; do
     fi
     cp -- "$source/$exe" "$work/$exe" && chmod +x -- "$work/$exe" ||
         fail_gate 3 output "Cannot stage $exe in $work"
-done
-
-child_env=(env -i PATH=/usr/bin:/bin "HOME=$HOME" LANG=C.UTF-8 "TMPDIR=$run/tmp"
-    "MAXCRON_TEST_ROOT=$repo")
-for setting in MAXCRON_LONG_TESTS MAXCRON_STRESS MAXCRON_DEBUG_SAFETY; do
-    if [[ -v $setting ]]; then
-        child_env+=("$setting=${!setting}")
-    fi
 done
 
 verify_run() {
@@ -187,7 +260,16 @@ for i in "${!entries[@]}"; do
     work="$run/${entries[i]}"
     log="$work/run.log"
     checks="$work/verify.log"
-    (cd -- "$work" && "${child_env[@]}" timeout --kill-after=30 "$seconds" "./${programs[i]}") > "$log" 2>&1
+    run_env=("${child_env[@]}")
+    heap=
+    case "$entry" in
+        FpcLinux|FpcLinuxLong|FpcSmokeHeap)
+            heap="$work/child.heaptrc.log"
+            run_env+=(HEAPTRC=log=child.heaptrc.log)
+            ;;
+    esac
+    (cd -- "$work" && "${run_env[@]}" timeout --kill-after=30 \
+        "${time_override:-${limits[i]}}" "./${programs[i]}") > "$log" 2>&1
     rc=$?
     cat -- "$log" || fail_gate 3 log "Cannot read $log"
     # DUnitX emits ANSI CSI sequences even with redirected output.
@@ -211,7 +293,15 @@ for i in "${!entries[@]}"; do
             ;;
         *) fail_gate 1 runner "$entry exited $rc." ;;
     esac
+    if [[ -n $heap ]]; then
+        [[ -f $heap ]] || fail_gate 1 heap "$entry did not write its heaptrc log."
+        cat -- "$heap" || fail_gate 3 log "Cannot read $heap"
+        heap_summary=$(grep -E '^[0-9]+ unfreed memory blocks' "$heap") ||
+            fail_gate 1 heap "$entry did not report an unfreed block count."
+        [[ $heap_summary =~ ^0\ unfreed\ memory\ blocks([[:blank:]]*:[[:blank:]]*0)?[[:space:]]*$ ]] ||
+            fail_gate 1 heap "$entry did not report exactly one zero-unfreed heaptrc summary."
+    fi
 done
 
-printf 'ROSTER_GATE_VERIFIED DelphiLinuxGate %s\n' "$total"
+printf 'ROSTER_GATE_VERIFIED %s %s\n' "$gate_name" "$total"
 printf 'LINUX GATE PASSED (%s, %s tests)\n' "$lane" "$total"

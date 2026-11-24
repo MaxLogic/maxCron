@@ -27,6 +27,7 @@ unit-qualified RTTI names now use `maxCron.Plan` (for example,
 | Windows x64/x86 | Delphi 12 | High-resolution waits |
 | Windows x64 | FPC trunk 3.3.1 | High-resolution waits |
 | Linux x86_64 | Delphi 12 Linux64 | Millisecond waits |
+| Linux x86_64 | FPC trunk 3.3.1 | Millisecond waits |
 
 `ctVcl`, `maxCronHlpDlg`, the VCL test runner, the Windows zone provider
 and `MAXCRON_TIMER_RESOLUTION` are Windows-only. Other Delphi targets are untested.
@@ -38,15 +39,15 @@ binary on the Linux target, with `tzdata` installed for LOCAL and named zones.
 
 ## Free Pascal (FPC)
 
-The supported target is Windows x64 with FPC trunk 3.3.1, built from
+Windows x64 and Linux x86_64 are supported with FPC trunk 3.3.1, built from
 `https://gitlab.com/freepascal.org/fpc/source` main commit
 `ad23c1f3ddadfe9b82768d4f9f8fa5e5783c21ec` (2026-11-15). FPC 3.2.x lacks the
 anonymous-method support required here. `maxCron.inc` rejects older versions and
-other FPC targets.
+targets outside Windows x64 and Linux x86_64/aarch64.
 
-Build from source with the official FPC 3.2.2 x86_64-win64 bootstrap and its
-`make`. Replace `<bootstrap-compiler>` and `<fpc-root>` with your compiler and
-installation paths.
+On Windows, build from source with the official FPC 3.2.2 x86_64-win64
+bootstrap and its `make`. Replace `<bootstrap-compiler>` and `<fpc-root>` with
+your compiler and installation paths.
 
 ```bat
 make clean all install "PP=<bootstrap-compiler>" "INSTALL_PREFIX=<fpc-root>" OS_TARGET=win64 CPU_TARGET=x86_64
@@ -58,6 +59,10 @@ configuration and units from the same installation.
 ```bat
 "<fpc-root>\bin\x86_64-win64\fpc.exe" -n "@<fpc-root>\bin\x86_64-win64\fpc.cfg" "-FD<fpc-root>\bin\x86_64-win64" "-Fu<fpc-root>\units\x86_64-win64\*" "-Fu<maxCron folder>" "<your program>"
 ```
+
+On Linux, use the native x86_64 build of the same compiler revision. List
+`cthreads` first in the program's `uses` clause, followed by `cwstring` for Unicode conversions. Install `tzdata` for LOCAL
+and named zones.
 
 The units set `delphiunicode`, `anonymousfunctions` and `functionreferences`
 through `maxCron.inc`, with real constants kept at Double precision.
@@ -1076,7 +1081,12 @@ absolute Linux output path, or use the default `~/dev-artifacts/runs/maxCron`.
 Windows paths for the build root, compiler and SDK. `MAXCRON_LINUX_PREBUILT`
 points to an existing Linux lane layout to run without rebuilding.
 `MAXCRON_LINUX_TIMEOUT_SECONDS` overrides runner timeouts for diagnostics.
-The gate passes through `MAXCRON_STRESS`. The explicit Linux exclusions are
+Run `./build-and-run-tests-linux.sh fpc` to build and run the FPC suite and both
+smokes. Set `MAXCRON_FPC` to the Linux x86_64 FPC 3.3.1 driver, with `fpc.cfg`
+beside it. `MAXCRON_FPC_OUT` sets the native Linux output root and uses the same
+default as the Delphi lane.
+
+Both lanes pass through `MAXCRON_STRESS`. The explicit Linux exclusions are
 in `tests/linux/LinuxExcluded.txt`.
 
 The `build-and-run-tests.bat` and `build-and-run-tests-stress.bat` gates (and
@@ -1193,6 +1203,7 @@ paired Windows `.sh` and `.bat` entry points use the same gate and exit codes.
 | --- | ---: | --- | ---: | ---: |
 | Delphi default `build-and-run-tests.bat` / `.sh` | 0 | 3, including a native runner returning 1 or 2 | 5 | 124 |
 | Delphi Linux `build-and-run-tests-linux.sh delphi` | 0 | 1 for test failure; 2 for configuration; 3 for build or infrastructure | 5 | 124 |
+| FPC Linux `build-and-run-tests-linux.sh fpc` | 0 | 1 for test or heap failure; 2 for tool or output configuration; 3 for build or infrastructure | 5 | 124 |
 | Delphi stress `build-and-run-tests-stress.bat` / `.sh` | 0 | 3, including a native runner returning 1 or 2 | 5 | 124 |
 | Delphi long `build-and-run-tests-long.bat` / `.sh` | 0 | 3, including build failure, native runner error 2, or invalid helper output | 5 | 124 |
 | FPC gate `build-and-run-tests-fpc.bat` / `.sh` | 0 | 1 for test/heap/result failure; 2 for tool/output configuration; 3 for build, generator or parity infrastructure failure | 5 | 124 |

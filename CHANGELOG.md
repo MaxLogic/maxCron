@@ -16,6 +16,7 @@ All notable user-visible changes to this project will be documented in this file
 
 ### Added
 - Linux x86_64 support with Delphi 12 Linux64, TZif-backed LOCAL and a Linux test gate.
+- Linux x86_64 support with FPC trunk 3.3.1 and a native Linux test gate. Programs must list `cthreads` first.
 - Restart catch-up with a UTC `TMaxCronPersistedEvent.CompletedThrough` checkpoint and a `RestoreScheduleState` binder overload that attaches callbacks before restored events start. Delivery is at least once; handlers must be idempotent.
 - Production test wrappers enforce per-phase deadlines, terminate timed-out child trees, and return non-roster timeout status 124.
 - Test entry points reserve exit 5 for typed roster violations and report native phase completion codes; compiler, generator and runner failures cannot count as roster rejection.

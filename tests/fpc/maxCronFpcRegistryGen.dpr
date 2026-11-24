@@ -5,11 +5,16 @@ uses
   Classes, StrUtils, SysUtils;
 
 const
-  cUnits: array[0..25] of string = ('TestCronInstant', 'TestCronParsing', 'TestCronInvalidCorpus',
+  cUnits: array[0..{$IFDEF MSWINDOWS}25{$ELSE}23{$ENDIF}] of string = ('TestCronInstant', 'TestCronParsing', 'TestCronInvalidCorpus',
     'TestCronUtilsCorpus', 'TestCronFuzzOracle', 'TestCronQuery', 'TestIntervalPlan', 'TestDeadlineQueue',
     'TestTimeZoneRules', 'TestTimeZoneTzif', 'TestCronTextParity', 'TestFpcShims', 'TestScheduleNext',
     'TestHashJitter', 'TestCalendarTimeZone', 'TestNamedTimeZones', 'TestLocalZoneTzif', 'TestTimeBoundaries', 'TestMisfireOnTime',
-    'TestCronPhaseDifferential', 'TestLocalZoneOs', 'TestTimeZoneWindows', 'TestWindowsZoneOracle',
+    'TestCronPhaseDifferential',
+    {$IFDEF MSWINDOWS}
+    'TestLocalZoneOs', 'TestTimeZoneWindows', 'TestWindowsZoneOracle',
+    {$ELSE}
+    'TestLocalZoneUnix',
+    {$ENDIF}
     'TestValidityZones', 'TestLocalOverlap', 'TestRestartCatchUp');
 
 var
@@ -112,9 +117,13 @@ type
 // closed rather than guessing whether an attributed declaration is active.
 function GateDefined(const aSymbol: string): Boolean;
 begin
-  if SameText(aSymbol, 'FPC') or SameText(aSymbol, 'MAXCRON_TESTS') or
-    SameText(aSymbol, 'MSWINDOWS') or SameText(aSymbol, 'WIN64') or
-    SameText(aSymbol, 'CPUX86_64') then Exit(True);
+  if SameText(aSymbol, 'FPC') or SameText(aSymbol, 'MAXCRON_TESTS') then Exit(True);
+  if SameText(aSymbol, 'MSWINDOWS') then Exit({$IFDEF MSWINDOWS}True{$ELSE}False{$ENDIF});
+  if SameText(aSymbol, 'WIN64') then Exit({$IFDEF WIN64}True{$ELSE}False{$ENDIF});
+  if SameText(aSymbol, 'LINUX') then Exit({$IFDEF LINUX}True{$ELSE}False{$ENDIF});
+  if SameText(aSymbol, 'UNIX') then Exit({$IFDEF UNIX}True{$ELSE}False{$ENDIF});
+  if SameText(aSymbol, 'CPUX86_64') then Exit({$IFDEF CPUX86_64}True{$ELSE}False{$ENDIF});
+  if SameText(aSymbol, 'CPUAARCH64') then Exit({$IFDEF CPUAARCH64}True{$ELSE}False{$ENDIF});
   if SameText(aSymbol, 'WIN32') then Exit(False);
   Reject('Unsupported conditional symbol ' + aSymbol);
   Result := False;
@@ -341,13 +350,15 @@ end;
 procedure ScanUnit(const aRoot, aUnit: string);
 var
   lLines, lCases, lNames: TStringList;
-  s, lClass, lMethod, lParams, lCase, lValues, lDecl: string;
+  s, lClass, lMethod, lParams, lCase, lValues, lDecl, lUnitDirectory: string;
   lFixturePending, lTestPending, lFoundFixture: Boolean;
   i, j, lEnd, lPos, lStartCount, lUnitCount: Integer;
 begin
-  gFile := IncludeTrailingPathDelimiter(aRoot) + 'tests\unit\' + aUnit + '.pas';
   if aUnit = 'TestFpcShims' then
-    gFile := IncludeTrailingPathDelimiter(aRoot) + 'tests\fpc\' + aUnit + '.pas';
+    lUnitDirectory := 'fpc'
+  else
+    lUnitDirectory := 'unit';
+  gFile := ConcatPaths([aRoot, 'tests', lUnitDirectory, aUnit + '.pas']);
   lLines := TStringList.Create;
   lCases := TStringList.Create;
   lNames := TStringList.Create;

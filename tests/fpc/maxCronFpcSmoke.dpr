@@ -2,6 +2,7 @@ program maxCronFpcSmoke;
 {$I maxCron.inc}
 
 uses
+  {$IFDEF UNIX}cthreads, cwstring,{$ENDIF}
   Classes, SyncObjs, System.Diagnostics, SysUtils,
   maxCron,
   TestRoster in '..\TestRoster.pas';

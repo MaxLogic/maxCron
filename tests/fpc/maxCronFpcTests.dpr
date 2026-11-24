@@ -2,6 +2,7 @@ program maxCronFpcTests;
 {$I maxCron.inc}
 
 uses
+  {$IFDEF UNIX}cthreads, cwstring,{$ENDIF}
   SysUtils,
   AutoFree in 'AutoFree.pas',
   DUnitX.TestFramework in 'DUnitX.TestFramework.pas',
@@ -19,7 +20,12 @@ uses
   TestFpcShims in 'TestFpcShims.pas',
   TestHashJitter in '..\unit\TestHashJitter.pas',
   TestIntervalPlan in '..\unit\TestIntervalPlan.pas',
+  {$IFDEF MSWINDOWS}
   TestLocalZoneOs in '..\unit\TestLocalZoneOs.pas',
+  {$ELSE}
+  TestEnvironment in '../unit/TestEnvironment.pas',
+  TestLocalZoneUnix in '../unit/TestLocalZoneUnix.pas',
+  {$ENDIF}
   TestLocalOverlap in '..\unit\TestLocalOverlap.pas',
   TestMisfireOnTime in '..\unit\TestMisfireOnTime.pas',
   TestNamedTimeZones in '..\unit\TestNamedTimeZones.pas',
@@ -30,9 +36,11 @@ uses
   TestTimeBoundaries in '..\unit\TestTimeBoundaries.pas',
   TestTimeZoneRules in '..\unit\TestTimeZoneRules.pas',
   TestTimeZoneTzif in '..\unit\TestTimeZoneTzif.pas',
+  {$IFDEF MSWINDOWS}
   TestTimeZoneWindows in '..\unit\TestTimeZoneWindows.pas',
-  TestValidityZones in '..\unit\TestValidityZones.pas',
   TestWindowsZoneOracle in '..\unit\TestWindowsZoneOracle.pas',
+  {$ENDIF}
+  TestValidityZones in '..\unit\TestValidityZones.pas',
   TestZoneFakes in '..\unit\TestZoneFakes.pas';
 
 {$I maxCronFpcRegistry.inc}
@@ -40,9 +48,9 @@ uses
 begin
   try
     {$IFDEF MAXCRON_LONG_TESTS}
-    BeginRoster('FpcLong');
+    BeginRoster({$IFDEF LINUX}'FpcLinuxLong'{$ELSE}'FpcLong'{$ENDIF});
     {$ELSE}
-    BeginRoster('FpcDefault');
+    BeginRoster({$IFDEF LINUX}'FpcLinux'{$ELSE}'FpcDefault'{$ENDIF});
     {$ENDIF}
     if ParamCount <> 0 then raise Exception.Create('The FPC runner currently accepts no test filters');
     RegisterGeneratedTests;

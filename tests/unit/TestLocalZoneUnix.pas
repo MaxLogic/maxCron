@@ -256,7 +256,9 @@ begin
   Assert.AreEqual<Int64>(0, lMismatches, Format('%d mismatches%s', [lMismatches, lReport]));
 end;
 
+{$IFNDEF FPC}
 initialization
   TDUnitX.RegisterTestFixture(TTestLocalZoneUnix);
+{$ENDIF}
 
 end.

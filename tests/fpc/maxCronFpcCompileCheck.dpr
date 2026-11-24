@@ -2,6 +2,7 @@ program maxCronFpcCompileCheck;
 {$I maxCron.inc}
 
 uses
+  {$IFDEF UNIX}cthreads, cwstring,{$ENDIF}
   maxCron in '..\..\maxCron.pas',
   maxCron.Internal.DeadlineQueue in '..\..\maxCron.Internal.DeadlineQueue.pas',
   maxCron.Internal.Platform in '..\..\maxCron.Internal.Platform.pas',

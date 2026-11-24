@@ -65,6 +65,9 @@ make_stub() {
             if [[ $scenario == duplicate && $n == 2 ]]; then
                 line=${names[0]}
             fi
+            if [[ $scenario == renamed && $n == 1 ]]; then
+                line=TestRenamed.Fixture.Method
+            fi
             printf 'printf "%%s\\n" %q\n' "ROSTER_TEST $line"
         done
     } > "$path"
@@ -131,4 +134,69 @@ check ignored 1
 check timeout 124
 check arguments 5 extra
 check relative 2
+
+mkdir -- "$scratch/tests" "$scratch/smoke" "$scratch/smoke-heaptrc" "$scratch/tool"
+make_stub "$scratch/smoke/maxCronFpcSmoke" FpcSmoke pass
+
+check_fpc() {
+    local scenario=$1 expected=$2 reason=$3 actual=0
+    shift 3
+    "$@" > "$scratch/fpc-$scenario.log" 2>&1 || actual=$?
+    if [[ $actual != "$expected" ]] || ! grep -Eq "$reason" "$scratch/fpc-$scenario.log"; then
+        cat -- "$scratch/fpc-$scenario.log"
+        printf 'FAIL fpc-%s expected=%s actual=%s\n' "$scenario" "$expected" "$actual" >&2
+        ((failures += 1))
+        return
+    fi
+    printf 'PASS fpc-%s exit=%s\n' "$scenario" "$actual"
+}
+
+fpc_gate=(bash "$repo/build-and-run-tests-linux.sh" fpc)
+fpc_prebuilt=(env -u MAXCRON_LONG_TESTS -u MAXCRON_FPC
+    MAXCRON_LINUX_PREBUILT="$scratch" MAXCRON_FPC_OUT="$scratch/runs"
+    MAXCRON_LINUX_TIMEOUT_SECONDS=2 "${fpc_gate[@]}")
+write_heap_summary() {
+    printf '%s\n' '[[ $HEAPTRC == log=child.heaptrc.log ]] || exit 1' \
+        "printf '%s\\n' '$2 unfreed memory blocks' > child.heaptrc.log" >> "$1"
+}
+
+make_stub "$scratch/tests/maxCronFpcTests" FpcLinux pass
+write_heap_summary "$scratch/tests/maxCronFpcTests" 0
+make_stub "$scratch/smoke-heaptrc/maxCronFpcSmoke" FpcSmokeHeap pass
+check_fpc no-heap-receipt 1 '^LINUX GATE FAILED reason=heap .*FpcSmokeHeap' "${fpc_prebuilt[@]}"
+write_heap_summary "$scratch/smoke-heaptrc/maxCronFpcSmoke" 1
+check_fpc heap-leak 1 '^LINUX GATE FAILED reason=heap .*FpcSmokeHeap' "${fpc_prebuilt[@]}"
+make_stub "$scratch/smoke-heaptrc/maxCronFpcSmoke" FpcSmokeHeap pass
+write_heap_summary "$scratch/smoke-heaptrc/maxCronFpcSmoke" 0
+check_fpc pass 0 '^ROSTER_GATE_VERIFIED FpcLinuxGate [1-9][0-9]*$' "${fpc_prebuilt[@]}"
+make_stub "$scratch/tests/maxCronFpcTests" FpcLinux duplicate
+check_fpc duplicate 5 '^ROSTER_REJECTED reason=duplicate ' "${fpc_prebuilt[@]}"
+make_stub "$scratch/tests/maxCronFpcTests" FpcLinux renamed
+check_fpc renamed 5 '^ROSTER_REJECTED reason=renamed ' "${fpc_prebuilt[@]}"
+
+cat > "$scratch/tool/fpc" <<'EOF'
+#!/bin/bash
+case "${!#}" in
+    -iV) printf '%s\n' '3.3.0' ;;
+    -iTO) printf '%s\n' 'win64' ;;
+    -iTP) printf '%s\n' 'i386' ;;
+    *) exit 99 ;;
+esac
+EOF
+chmod +x -- "$scratch/tool/fpc"
+: > "$scratch/tool/fpc.cfg"
+tool_root="$scratch/tool-runs"
+fpc_tool=(env -u MAXCRON_LINUX_PREBUILT MAXCRON_FPC="$scratch/tool/fpc"
+    MAXCRON_FPC_OUT="$tool_root" "${fpc_gate[@]}")
+check_fpc wrong-version 2 '^LINUX GATE FAILED reason=configuration .*3\.3\.1.*3\.3\.0' "${fpc_tool[@]}"
+sed -i 's/3\.3\.0/3.3.1/' "$scratch/tool/fpc"
+check_fpc wrong-target 2 '^LINUX GATE FAILED reason=configuration .*linux.*win64' "${fpc_tool[@]}"
+sed -i 's/win64/linux/' "$scratch/tool/fpc"
+check_fpc wrong-cpu 2 '^LINUX GATE FAILED reason=configuration .*x86_64.*i386' "${fpc_tool[@]}"
+if [[ -e $tool_root ]]; then
+    printf 'FAIL fpc-tool-check allocated an output directory\n' >&2
+    ((failures += 1))
+fi
+sed -i -e 's/i386/x86_64/' -e 's/exit 99/exit 0/' "$scratch/tool/fpc"
+check_fpc missing-build-output 3 '^LINUX GATE FAILED reason=build .*check-public/maxCronFpcCompileCheck.*native exit 0' "${fpc_tool[@]}"
 ((failures == 0))
