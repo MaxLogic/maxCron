@@ -89,6 +89,7 @@
     </PropertyGroup>
     <Import Project="..\..\..\MaxLogicFoundation\MaxLogicDefault.optset" Condition="'$(Base)'!='' And Exists('..\..\..\MaxLogicFoundation\MaxLogicDefault.optset')"/>
     <PropertyGroup Condition="'$(Base)'!=''">
+        <DCC_DcuOutput>.\$(Platform)\$(Config)\dcu\maxCronBenchmarks</DCC_DcuOutput>
         <DCC_E>false</DCC_E>
         <DCC_F>false</DCC_F>
         <DCC_K>false</DCC_K>
