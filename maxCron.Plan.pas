@@ -130,8 +130,7 @@ type
     procedure Parse;
     procedure SetData(const Value: string);
     procedure ParsePart(const Value: string);
-    function ReplaceMonthNames(const Value: string): string;
-    function ReplaceDaynames(const Value: string): string;
+    function ResolveValueName(const s: string): string;
     Procedure Add2Range(Value: word);
     function FindInRange(Value: word; out index: integer): boolean;
     function TryPrevVal(const aValue: Word; out aResult: Word): Boolean;
@@ -2060,25 +2059,26 @@ end;
 function TCronPart.TryParseDowSpecial(const aToken: string): Boolean;
 var
   s: string;
-  lHashPos: Integer;
+  i, lHashPos: Integer;
   lLeft: string;
   lRight: string;
   lNum: Integer;
   lNth: Integer;
 begin
   Result := False;
-  s := ReplaceDaynames(Trim(aToken));
-  s := CronUpperAscii(s);
+  s := CronUpperAscii(Trim(aToken));
 
-  if Pos('W', s) > 0 then
-    raise Exception.Create('Invalid cron token');
+  // The W in a weekday name does not trigger the invalid-modifier diagnostic.
+  for i := 1 to Length(s) do
+    if (s[i] = 'W') and (Copy(s, i, 3) <> 'WED') then
+      raise Exception.Create('Invalid cron token');
 
   lHashPos := Pos('#', s);
   if lHashPos > 0 then
   begin
     if (Pos('L', s) > 0) or (Pos('/', s) > 0) or (Pos('-', s) > 0) then
       raise Exception.Create('Invalid cron token');
-    lLeft := Copy(s, 1, lHashPos - 1);
+    lLeft := ResolveValueName(Copy(s, 1, lHashPos - 1));
     lRight := Copy(s, lHashPos + 1, MaxInt);
     if (lLeft = '') or (lRight = '') then
       raise Exception.Create('Invalid cron token');
@@ -2099,7 +2099,7 @@ begin
   begin
     if (Pos('/', s) > 0) or (Pos('-', s) > 0) then
       raise Exception.Create('Invalid cron token');
-    lLeft := Copy(s, 1, Length(s) - 1);
+    lLeft := ResolveValueName(Copy(s, 1, Length(s) - 1));
     lNum := CronStrToIntDef(lLeft, -1);
     lNum := NormalizeDowValue(lNum);
     if (lNum < FValidFrom) or (lNum > FValidTo) then
@@ -2504,15 +2504,6 @@ begin
     Exit;
   if Pos('?', s) > 0 then
     raise Exception.Create('Invalid cron token');
-  case fPartKind of
-    ckMonth:
-      s := ReplaceMonthNames(s);
-    ckDayOfTheWeek:
-      s := ReplaceDaynames(s);
-  else
-    ; // Other cron parts have no textual names.
-  end;
-
   iSlash := Pos('/', s);
   if iSlash > 0 then
   begin
@@ -2529,11 +2520,11 @@ begin
     RangeTo := FValidTo;
   end else if iR > 0 then
   begin
-    RangeFrom := ParseCronInteger(Copy(s, 1, iR - 1));
-    RangeTo := ParseCronInteger(Copy(s, iR + 1, MaxInt));
+    RangeFrom := ParseCronInteger(ResolveValueName(Copy(s, 1, iR - 1)));
+    RangeTo := ParseCronInteger(ResolveValueName(Copy(s, iR + 1, MaxInt)));
   end else
   begin
-    RangeFrom := ParseCronInteger(s);
+    RangeFrom := ParseCronInteger(ResolveValueName(s));
     if iSlash > 0 then
     begin
       if (fPartKind = ckDayOfTheWeek) and fDowOneBased then
@@ -2822,42 +2813,31 @@ begin
   end;
 end;
 
-function TCronPart.ReplaceDaynames(const Value: string): string;
+function TCronPart.ResolveValueName(const s: string): string;
 var
-  x: integer;
-  s: string;
+  i: Integer;
 begin
-  s := Value;
-  for x := 1 to 7 do
-  begin
-    if fDowOneBased then
-    begin
-      // Quartz-compatible: Sun = 1, Mon = 2, ... Sat = 7
-      if x = 7 then
-        s := CronReplaceTextAscii(s, DayNames[x], '1')
-      else
-        s := CronReplaceTextAscii(s, DayNames[x], CronIntToStr(x + 1));
-    end else
-    begin
-      // Cron-compatible: Sun = 0 (also accept 7 as Sunday numerically in ParsePart)
-      if x = 7 then
-        s := CronReplaceTextAscii(s, DayNames[x], '0')
-      else
-        s := CronReplaceTextAscii(s, DayNames[x], CronIntToStr(x));
-    end;
-  end;
   Result := s;
-end;
+  if Length(s) <> 3 then
+    Exit;
 
-function TCronPart.ReplaceMonthNames(const Value: string): string;
-var
-  x: integer;
-  s: string;
-begin
-  s := Value;
-  for x := 1 to 12 do
-    s := CronReplaceTextAscii(s, MonthNames[x], CronIntToStr(x));
-  Result := s;
+  case fPartKind of
+    ckMonth:
+      for i := Low(MonthNames) to High(MonthNames) do
+        if CronSameTextAscii(s, MonthNames[i]) then
+          Exit(CronIntToStr(i));
+    ckDayOfTheWeek:
+      for i := Low(DayNames) to High(DayNames) do
+        if CronSameTextAscii(s, DayNames[i]) then
+        begin
+          // Sunday wraps to 0, or 1 in Quartz.
+          if fDowOneBased then
+            Exit(CronIntToStr(i mod 7 + 1));
+          Exit(CronIntToStr(i mod 7));
+        end;
+  else
+    Exit;
+  end;
 end;
 
 procedure TCronPart.SetData(const Value: string);

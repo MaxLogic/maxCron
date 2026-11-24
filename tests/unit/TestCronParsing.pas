@@ -7,11 +7,11 @@ uses
   {$IFDEF FPC}
   SysUtils,
   DUnitX.TestFramework,
-  maxCron
+  maxCron, maxCron.Internal.Text
   {$ELSE}
   System.SysUtils,
   DUnitX.TestFramework,
-  maxCron
+  maxCron, maxCron.Internal.Text
   {$ENDIF};
 
 type
@@ -101,6 +101,8 @@ type
     [Test] procedure Parse_InvalidIntegerGrammar_UsesParseException;
     [Test] procedure Parse_NumbersRequireDecimalDigits;
     [Test] procedure Parse_PaddedExecutionLimit;
+    [Test] procedure Parse_NamesRequireValueAtoms;
+    [Test] procedure Parse_MalformedNumberDiagnostics;
     [Test] procedure Parse_MonthEndOffsetLists_ErrorPrecedence;
     [Test] procedure Parse_MonthEndOffsets_LaterFieldDiagnostics;
     [Test] procedure Parse_MonthEndOffsets;
@@ -821,6 +823,179 @@ begin
   finally
     lPlan.Free;
   end;
+end;
+
+procedure TTestCronParsing.Parse_NamesRequireValueAtoms;
+var
+  lPlan: TCronSchedulePlan;
+  lFailures: string;
+
+  function Diagnostic(const s: string): string;
+  begin
+    Result := 'accepted';
+    try
+      lPlan.Parse(s);
+    except
+      on E: Exception do Result := E.ClassName + ': ' + E.Message;
+    end;
+  end;
+
+  procedure Check(const aText, aControl: string);
+  var
+    lExpected, lActual: string;
+  begin
+    lExpected := Diagnostic(aControl);
+    Assert.AreEqual<string>('Exception: Invalid cron token', lExpected, aControl);
+    lActual := Diagnostic(aText);
+    if lActual <> lExpected then
+      lFailures := lFailures + aText + ': ' + lActual + sLineBreak;
+  end;
+
+begin
+  lPlan := TCronSchedulePlan.Create;
+  try
+    lPlan.Dialect := cdMaxCron;
+    lPlan.Parse('0 0 * JAN-MAR MON-FRI');
+    lPlan.Parse('0 0 * jan,feb SUN-SAT');
+    lPlan.Parse('0 0 * JAN-MAR/2 WED/2');
+    lPlan.Parse('0 0 * * MON#2');
+    lPlan.Parse('0 0 * * FRI#5');
+    lPlan.Parse('0 0 * * WED#2');
+    lPlan.Parse('0 0 * * 5L');
+    lPlan.Parse('0 0 * * FRIL');
+    lPlan.Parse('0 0 * * WEDL');
+    Check('0 0 * * MON#TUE', '0 0 * * MON#X');
+    Check('0 0 * JAN-MAR/FEB *', '0 0 * JAN-MAR/X *');
+    Check('0 0 * JANJAN *', '0 0 * XYZ *');
+    Check('0 0 * * MONMON', '0 0 * * XYZ');
+    Check('0 0 * 1-MAR/JAN *', '0 0 * 1-MAR/X *');
+    Check('0 0 * * MON-FRI/SUN', '0 0 * * MON-FRI/X');
+    FreeAndNil(lPlan);
+    lPlan := TCronSchedulePlan.Create;
+    lPlan.Dialect := cdQuartzSecondsFirst;
+    lPlan.Parse('00 07 08 ? feb MON#2 02026');
+    Check('00 07 08 ? feb MON#TUE 02026', '00 07 08 ? feb MON#X 02026');
+    Assert.AreEqual<string>('', lFailures, lFailures);
+  finally
+    lPlan.Free;
+  end;
+end;
+
+procedure TTestCronParsing.Parse_MalformedNumberDiagnostics;
+const
+  cFields: array[0..6] of string = (
+    '%s 0 * * * * 0 0', '0 %s * * * * 0 0', '0 0 %s * * * 0 0',
+    '0 0 * %s * * 0 0', '0 0 * * %s * 0 0', '0 0 * * * %s 0 0',
+    '0 0 * * * * %s 0');
+  cForms: array[0..7] of string = (
+    '%s,2', '%s-3', '1-%s', '*/%s', '%s/2', 'H(%s-3)', 'H(1-%s)', 'H/%s');
+  cYearForms: array[0..7] of string = (
+    '%s,2026', '%s-2030', '2000-%s', '*/%s', '%s/2',
+    'H(%s-2030)', 'H(2000-%s)', 'H/%s');
+  cOtherPositions: array[0..7] of string = (
+    '0 0 %sW * *', '0 0 * * %s#2', '0 0 * * 3#%s', '0 0 * * %sL',
+    '0 0 L-%s * *', '0 0 LW-%s * *', '0 0 L-%sW * *', '0 0 * * * * 0 %s');
+  cMalformed: array[0..4] of string = ('$2', '0x2', 'x2', '+2', 'XJAN');
+  cMalformedDow: array[0..4] of string = ('$2', '0x2', 'x2', '+2', 'WEDWED');
+  cDateParts: array[0..2] of string = ('%s-12-01', '2026-%s-01', '2026-12-%s');
+  cMalformedYear: array[0..4] of string = ('$7EA', '0x7E', 'x7EA', '+026', 'XJAN');
+  cMalformedDatePart: array[0..4] of string = ('$1', '0x1', 'x1', '+1', 'XJAN');
+var
+  lPlan: TCronSchedulePlan;
+  lCron: TmaxCron;
+  lEvent: IMaxCronEvent;
+  lFailures, lValue, lForm, lTemplate, lControl, lActual, lExpected: string;
+  i, j, k: Integer;
+
+  function PlanDiagnostic(const s: string): string;
+  begin
+    Result := 'accepted';
+    try
+      lPlan.Parse(s);
+    except
+      on E: Exception do Result := E.ClassName + ': ' + E.Message;
+    end;
+  end;
+
+  function DateDiagnostic(const aText, aPart: string): string;
+  begin
+    Result := 'accepted';
+    try
+      lEvent.ExcludedDatesCsv := aText;
+    except
+      on E: Exception do
+        // Conversion errors can echo the offending part.
+        Result := E.ClassName + ': ' + StringReplace(CronExceptionText(E), aPart, '<part>', []);
+    end;
+  end;
+
+  procedure Compare(const aText, aActual, aExpected: string);
+  begin
+    if (aExpected = 'accepted') or (aActual <> aExpected) then
+      lFailures := lFailures + aText + ': expected ' + aExpected + ', got ' + aActual + sLineBreak;
+  end;
+
+  procedure CheckPlan(const aText, aControl: string);
+  begin
+    Compare(aText + ' vs ' + aControl, PlanDiagnostic(aText), PlanDiagnostic(aControl));
+  end;
+
+begin
+  lPlan := TCronSchedulePlan.Create;
+  try
+    lPlan.Dialect := cdMaxCron;
+    for i := Low(cFields) to High(cFields) do
+      for j := Low(cForms) to High(cForms) do
+      begin
+        lForm := cForms[j];
+        if i = Ord(ckYear) then
+          lForm := cYearForms[j];
+        for k := Low(cMalformed) to High(cMalformed) do
+        begin
+          lValue := cMalformed[k];
+          if i = Ord(ckDayOfTheWeek) then
+            lValue := cMalformedDow[k];
+          CheckPlan(Format(cFields[i], [Format(lForm, [lValue])]),
+            Format(cFields[i], [Format(lForm, ['QQQ'])]));
+        end;
+      end;
+    for lTemplate in cOtherPositions do
+      for k := Low(cMalformed) to High(cMalformed) do
+      begin
+        lValue := cMalformed[k];
+        if Pos('0 0 * * ', lTemplate) = 1 then
+          lValue := cMalformedDow[k];
+        CheckPlan(Format(lTemplate, [lValue]), Format(lTemplate, ['QQQ']));
+      end;
+    for lValue in ['$WED#2', 'xWED#2', 'WEDWED#2'] do
+      CheckPlan('0 0 * * ' + lValue, '0 0 * * $QQQ#2');
+    for lValue in ['$WEDL', 'xWEDL'] do
+      CheckPlan('0 0 * * ' + lValue, '0 0 * * xQQQL');
+    for lValue in ['WED#2', '3#2', 'WEDL', '5L'] do
+      lPlan.Parse('0 0 * * ' + lValue);
+  finally
+    lPlan.Free;
+  end;
+
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lEvent := lCron.Add('MalformedDateDiagnostics');
+    for i := Low(cDateParts) to High(cDateParts) do
+      for k := Low(cMalformedYear) to High(cMalformedYear) do
+      begin
+        lValue := cMalformedDatePart[k];
+        if i = 0 then
+          lValue := cMalformedYear[k];
+        lControl := StringOfChar('Q', Length(lValue));
+        lTemplate := cDateParts[i];
+        lActual := DateDiagnostic(Format(lTemplate, [lValue]), lValue);
+        lExpected := DateDiagnostic(Format(lTemplate, [lControl]), lControl);
+        Compare(Format(lTemplate, [lValue]), lActual, lExpected);
+      end;
+  finally
+    lCron.Free;
+  end;
+  Assert.AreEqual<string>('', lFailures, lFailures);
 end;
 
 procedure TTestCronParsing.Parse_MonthEndOffsetLists_ErrorPrecedence;

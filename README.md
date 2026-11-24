@@ -1423,6 +1423,8 @@ apply to shifted spring-gap occurrences and to each eligible repeated-hour insta
 # Cron Format
 
 Numbers in cron expressions use decimal digits only, with leading zeros allowed.
+Month and weekday names must occupy a whole value position, such as `JAN-MAR` or
+`MON#2`. Steps and the ordinal after `#` require numbers.
 
 Cron format is a simple, yet powerful and flexible way to define time and frequency of various actions.
 
