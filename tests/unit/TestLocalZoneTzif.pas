@@ -40,6 +40,7 @@ uses
   Classes, SyncObjs, System.IOUtils, SysUtils,
   {$ELSE}
   System.Classes, System.IOUtils, System.SyncObjs, System.SysUtils,
+  {$IFDEF LINUX} Posix.Unistd, {$ENDIF}
   {$ENDIF}
   maxCron, TestRestartCatchUp, TestZoneFakes;
 

@@ -207,6 +207,8 @@
         <DCCReference Include="unit\TestLocalZoneOs.pas"/>
         <DCCReference Include="unit\TestLocalOverlap.pas"/>
         <DCCReference Include="unit\TestZoneFakes.pas"/>
+        <DCCReference Include="unit\TestEnvironment.pas"/>
+        <DCCReference Include="unit\TestLocalZoneUnix.pas" Condition="'$(Platform)'=='Linux64'"/>
         <DCCReference Include="unit\TestTimeZoneRules.pas"/>
         <DCCReference Include="unit\TestTimeZoneWindows.pas"/>
         <DCCReference Include="unit\TestWindowsZoneOracle.pas"/>

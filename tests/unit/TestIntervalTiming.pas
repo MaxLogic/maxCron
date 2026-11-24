@@ -2,9 +2,8 @@ unit TestIntervalTiming;
 interface
 uses
   System.Classes, System.Diagnostics, System.SyncObjs, System.SysUtils,
-  Winapi.Windows,
   DUnitX.TestFramework,
-  maxCron, maxCron.Internal.Platform;
+  maxCron, maxCron.Internal.Platform, maxCron.Internal.TimeZone, TestEnvironment;
 type
   [TestFixture]
   TTestIntervalTiming = class
@@ -27,14 +26,16 @@ var
   lStart,lNow,lTemp: Int64;
   lValues: array[0..63] of Int64;
   lCount,lBad,i,j: Integer;
-  lOld: string;
+  lSavedTimerMode: TTestEnvSnapshot;
   lTicks,lSpin,lExceptions: UInt64;
 begin
-  lOld := GetEnvironmentVariable('MAXCRON_TIMER_RESOLUTION');
-  Winapi.Windows.SetEnvironmentVariable('MAXCRON_TIMER_RESOLUTION',PChar(aResolution));
-  lLock := TCriticalSection.Create; lCron := TmaxCron.Create(ctPortable);
-  lCount := 0; lBad := 0; lStart := 0;
+  lSavedTimerMode := SaveTestEnvironmentVariable('MAXCRON_TIMER_RESOLUTION');
+  lCron := nil;
+  lLock := nil;
   try
+    SetTestEnvironmentVariable('MAXCRON_TIMER_RESOLUTION', aResolution);
+    lLock := TCriticalSection.Create; lCron := TmaxCron.Create(ctPortable);
+    lCount := 0; lBad := 0; lStart := 0;
     lEvent := lCron.AddInterval('accuracy',20,
       procedure(aSender: IMaxCronEvent)
       var lAt: Int64;
@@ -63,7 +64,7 @@ begin
     Assert.AreEqual<UInt64>(0,lSpin); Assert.AreEqual<UInt64>(0,lExceptions);
   finally
     lEvent := nil; lCron.Free; lLock.Free;
-    Winapi.Windows.SetEnvironmentVariable('MAXCRON_TIMER_RESOLUTION',PChar(lOld));
+    RestoreTestEnvironmentVariable(lSavedTimerMode);
   end;
 end;
 
@@ -72,12 +73,13 @@ var
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
   lCount: Integer;
-  lOld: string;
+  lSavedPool: TTestEnvSnapshot;
 begin
-  lOld := GetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL');
-  Winapi.Windows.SetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL','1');
-  lCron := TmaxCron.Create(ctPortable); lCount := 0;
+  lSavedPool := SaveTestEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL');
+  lCron := nil;
   try
+    SetTestEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL', '1');
+    lCron := TmaxCron.Create(ctPortable); lCount := 0;
     lEvent := lCron.AddInterval('ten seconds',100,
       procedure(aSender: IMaxCronEvent) begin TInterlocked.Increment(lCount); end);
     lEvent.InvokeMode := imThread; lEvent.Run; lCron.StartTimerForTests(1000);
@@ -87,7 +89,7 @@ begin
     Assert.IsTrue((lCount>=90) and (lCount<=102),'100ms/10s count '+IntToStr(lCount));
   finally
     lEvent := nil; lCron.Free;
-    Winapi.Windows.SetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL',PChar(lOld));
+    RestoreTestEnvironmentVariable(lSavedPool);
   end;
 end;
 

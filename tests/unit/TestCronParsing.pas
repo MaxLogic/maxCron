@@ -269,22 +269,22 @@ end;
 
 procedure TTestCronParsing.Parse_ExecutionLimit_Range;
 const
-  cMaxExecutionLimit = Int64(High(LongWord));
+  cMaxExecutionLimit = Int64(4294967295);
 var
-  Plan: TCronSchedulePlan;
+  lPlan: TCronSchedulePlan;
 begin
-  Plan := TCronSchedulePlan.Create;
+  lPlan := TCronSchedulePlan.Create;
   try
-    Plan.Parse('0 0 * * * * 0 0');
-    Assert.AreEqual(0, Integer(Plan.ExecutionLimit));
-    Plan.Parse('0 0 * * * * 0 1');
-    Assert.AreEqual(1, Integer(Plan.ExecutionLimit));
-    Plan.Parse('0 0 * * * * 0 ' + IntToStr(Int64(MaxInt) + 1));
-    Assert.AreEqual(LongWord(Int64(MaxInt) + 1), Plan.ExecutionLimit);
-    Plan.Parse('0 0 * * * * 0 ' + IntToStr(cMaxExecutionLimit));
-    Assert.AreEqual(High(LongWord), Plan.ExecutionLimit);
+    lPlan.Parse('0 0 * * * * 0 0');
+    Assert.AreEqual<LongWord>(0, lPlan.ExecutionLimit);
+    lPlan.Parse('0 0 * * * * 0 1');
+    Assert.AreEqual<LongWord>(1, lPlan.ExecutionLimit);
+    lPlan.Parse('0 0 * * * * 0 ' + IntToStr(Int64(MaxInt) + 1));
+    Assert.AreEqual<LongWord>(LongWord(Int64(MaxInt) + 1), lPlan.ExecutionLimit);
+    lPlan.Parse('0 0 * * * * 0 ' + IntToStr(cMaxExecutionLimit));
+    Assert.AreEqual<LongWord>(LongWord(cMaxExecutionLimit), lPlan.ExecutionLimit);
   finally
-    Plan.Free;
+    lPlan.Free;
   end;
 
   AssertRaisesOnParse('0 0 * * * * 0 -1');

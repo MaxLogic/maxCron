@@ -4,9 +4,8 @@ interface
 
 uses
   System.Classes, System.DateUtils, System.SyncObjs, System.SysUtils,
-  Winapi.Windows,
   DUnitX.TestFramework,
-  maxCron;
+  maxCron, TestEnvironment;
 
 type
   [TestFixture]
@@ -14,8 +13,6 @@ type
   private
     procedure AssertRaises(const aProc: TProc; const aMessage: string = 'Expected exception');
     procedure NoopSchedule(aSender: IMaxCronEvent);
-    procedure SetEngineEnv(const aValue: string; out aPreviousValue: string; out aHadPrevious: Boolean);
-    procedure RestoreEngineEnv(const aPreviousValue: string; const aHadPrevious: Boolean);
     function BuildOneShotPlan(const aDateTime: TDateTime): string;
     function FindNextForPlan(const aPlan: string; const aBase: TDateTime;
       const aDayMatchMode: TmaxCronDayMatchMode): TDateTime;
@@ -129,22 +126,6 @@ end;
 
 procedure TTestRobustCoverage.NoopSchedule(aSender: IMaxCronEvent);
 begin
-end;
-
-procedure TTestRobustCoverage.SetEngineEnv(const aValue: string; out aPreviousValue: string;
-  out aHadPrevious: Boolean);
-begin
-  aPreviousValue := GetEnvironmentVariable('MAXCRON_ENGINE');
-  aHadPrevious := aPreviousValue <> '';
-  Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(aValue));
-end;
-
-procedure TTestRobustCoverage.RestoreEngineEnv(const aPreviousValue: string; const aHadPrevious: Boolean);
-begin
-  if aHadPrevious then
-    Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', PChar(aPreviousValue))
-  else
-    Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE', nil);
 end;
 
 function TTestRobustCoverage.BuildOneShotPlan(const aDateTime: TDateTime): string;
@@ -863,14 +844,14 @@ var
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
   lFireCount: Integer;
-  lPreviousValue: string;
-  lHadPrevious: Boolean;
+  lSavedEngine: TTestEnvSnapshot;
   lVisited: UInt64;
   lRebuilds: UInt64;
 begin
   lFireCount := 0;
-  SetEngineEnv('heap', lPreviousValue, lHadPrevious);
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', 'heap');
     lCron := TmaxCron.Create(ctPortable);
     try
       lEvent := lCron.Add('HeapEngineBasic');
@@ -893,7 +874,7 @@ begin
       lCron.Free;
     end;
   finally
-    RestoreEngineEnv(lPreviousValue, lHadPrevious);
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
@@ -907,12 +888,12 @@ var
   lTickAt: TDateTime;
   lFireCount: Integer;
   lIndex: Integer;
-  lPreviousValue: string;
-  lHadPrevious: Boolean;
+  lSavedEngine: TTestEnvSnapshot;
 begin
   lFireCount := 0;
-  SetEngineEnv('shadow', lPreviousValue, lHadPrevious);
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', 'shadow');
     lCron := TmaxCron.Create(ctPortable);
     try
       lEventA := lCron.Add('ShadowA');
@@ -969,7 +950,7 @@ begin
       lCron.Free;
     end;
   finally
-    RestoreEngineEnv(lPreviousValue, lHadPrevious);
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 

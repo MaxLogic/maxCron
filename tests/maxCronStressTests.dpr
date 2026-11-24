@@ -11,6 +11,7 @@ uses
   DUnitX.TestFramework,
   DelphiRoster in 'DelphiRoster.pas',
   TestRoster in 'TestRoster.pas',
+  TestEnvironment in 'unit\TestEnvironment.pas',
   maxCron.Internal.DeadlineQueue in '..\maxCron.Internal.DeadlineQueue.pas',
   maxCron.Internal.Platform in '..\maxCron.Internal.Platform.pas',
   maxCron.Internal.Text in '..\maxCron.Internal.Text.pas',
@@ -36,7 +37,11 @@ var
 begin
   ReportMemoryLeaksOnShutdown := True;
   try
+    {$IFDEF LINUX}
+    BeginRoster('DelphiLinuxStress');
+    {$ELSE}
     BeginRoster('DelphiStress');
+    {$ENDIF}
     TDUnitX.CheckCommandLine;
     TDUnitX.RegisterTestFixture(TTestGlobalLimits);
     TDUnitX.RegisterTestFixture(TTestHeavyStress);
@@ -47,7 +52,9 @@ begin
     TDUnitX.RegisterTestFixture(TTestDeadlineTimerStress);
     TDUnitX.RegisterTestFixture(TTestLocalOverlapStress);
     Runner := TDUnitX.CreateRunner;
-    Runner.UseRTTI := True;
+    // Linux preserves RTTI for unit fixtures linked by the stress helpers.
+    // Use only this runner's explicit fixture registrations.
+    Runner.UseRTTI := False;
     Runner.AddLogger(TDUnitXConsoleLogger.Create(True));
     Results := ExecuteRoster(Runner);
     if not Results.AllPassed then

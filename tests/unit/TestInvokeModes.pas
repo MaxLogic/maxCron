@@ -4,16 +4,13 @@ interface
 
 uses
   System.Classes, System.DateUtils, System.Diagnostics, System.Generics.Collections, System.SyncObjs, System.SysUtils, System.Threading,
-  Winapi.Windows,
   DUnitX.TestFramework,
-  maxCron;
+  maxCron, TestEnvironment;
 
 type
   [TestFixture]
   TTestInvokeModes = class
   private
-    procedure SetEnvVar(const aName, aValue: string; out aPreviousValue: string; out aHadPrevious: Boolean);
-    procedure RestoreEnvVar(const aName, aPreviousValue: string; const aHadPrevious: Boolean);
   public
     [Test]
     procedure Invoke_MainThread_QueuedFromWorker;
@@ -38,22 +35,6 @@ type
   end;
 
 implementation
-
-procedure TTestInvokeModes.SetEnvVar(const aName, aValue: string; out aPreviousValue: string;
-  out aHadPrevious: Boolean);
-begin
-  aPreviousValue := GetEnvironmentVariable(aName);
-  aHadPrevious := aPreviousValue <> '';
-  Winapi.Windows.SetEnvironmentVariable(PChar(aName), PChar(aValue));
-end;
-
-procedure TTestInvokeModes.RestoreEnvVar(const aName, aPreviousValue: string; const aHadPrevious: Boolean);
-begin
-  if aHadPrevious then
-    Winapi.Windows.SetEnvironmentVariable(PChar(aName), PChar(aPreviousValue))
-  else
-    Winapi.Windows.SetEnvironmentVariable(PChar(aName), nil);
-end;
 
 procedure TTestInvokeModes.Invoke_MainThread_QueuedFromWorker;
 var
@@ -329,8 +310,7 @@ var
   lWorkerCount: Integer;
   lHasReusedWorker: Boolean;
   lIndex: Integer;
-  lPreviousValue: string;
-  lHadPrevious: Boolean;
+  lSavedPool: TTestEnvSnapshot;
 begin
   // Own the pool so earlier tests cannot leave an oversized worker set.
   lPool := TThreadPool.Create;
@@ -340,8 +320,9 @@ begin
   lPreviousPool := ExchangeMaxCronThreadDispatchPoolForTests(lPool);
   lCompleted := 0;
   lTickAt := Now;
-  SetEnvVar('MAXCRON_THREAD_DISPATCH_POOL', '1', lPreviousValue, lHadPrevious);
+  lSavedPool := SaveTestEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL');
   try
+    SetTestEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL', '1');
     lCron := TmaxCron.Create(ctPortable);
     lDone := TEvent.Create(nil, True, False, '');
     lLock := TCriticalSection.Create;
@@ -415,7 +396,7 @@ begin
   finally
     ExchangeMaxCronThreadDispatchPoolForTests(lPreviousPool);
     lPool.Free;
-    RestoreEnvVar('MAXCRON_THREAD_DISPATCH_POOL', lPreviousValue, lHadPrevious);
+    RestoreTestEnvironmentVariable(lSavedPool);
   end;
 end;
 

@@ -11,6 +11,10 @@ uses
   DUnitX.TestFramework,
   DelphiRoster in 'DelphiRoster.pas',
   TestRoster in 'TestRoster.pas',
+  {$IFDEF LINUX}
+  TestLocalZoneUnix in 'unit\TestLocalZoneUnix.pas',
+  {$ENDIF}
+  TestEnvironment in 'unit\TestEnvironment.pas',
   maxCron.Internal.DeadlineQueue in '..\maxCron.Internal.DeadlineQueue.pas',
   maxCron.Internal.Platform in '..\maxCron.Internal.Platform.pas',
   maxCron.Internal.Text in '..\maxCron.Internal.Text.pas',
@@ -23,12 +27,18 @@ uses
   maxCron.Plan in '..\maxCron.Plan.pas',
   maxCron in '..\maxCron.pas',
   TestCronTextParity in 'unit\TestCronTextParity.pas',
+  {$IFDEF MSWINDOWS}
   TestLocalZoneOs in 'unit\TestLocalZoneOs.pas',
+  {$ENDIF}
   TestLocalOverlap in 'unit\TestLocalOverlap.pas',
   TestZoneFakes in 'unit\TestZoneFakes.pas',
   TestTimeZoneRules in 'unit\TestTimeZoneRules.pas',
+  {$IFDEF MSWINDOWS}
   TestTimeZoneWindows in 'unit\TestTimeZoneWindows.pas',
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
   TestWindowsZoneOracle in 'unit\TestWindowsZoneOracle.pas',
+  {$ENDIF}
   TestTimeZoneTzif in 'unit\TestTimeZoneTzif.pas',
   TestNamedTimeZones in 'unit\TestNamedTimeZones.pas',
   TestLocalZoneTzif in 'unit\TestLocalZoneTzif.pas',
@@ -71,17 +81,31 @@ begin
   ReportMemoryLeaksOnShutdown := True;
   try
     {$IFDEF MAXCRON_LONG_TESTS}
+      {$IFDEF LINUX}
+    BeginRoster('DelphiLinuxLong');
+      {$ELSE}
     BeginRoster('DelphiLong');
+      {$ENDIF}
     {$ELSE}
+      {$IFDEF LINUX}
+    BeginRoster('DelphiLinuxUnit');
+      {$ELSE}
     BeginRoster('DelphiUnit');
+      {$ENDIF}
     {$ENDIF}
     TDUnitX.CheckCommandLine;
     TDUnitX.RegisterTestFixture(TTestCronTextParity);
+    {$IFDEF MSWINDOWS}
     TDUnitX.RegisterTestFixture(TTestLocalZoneOs);
+    {$ENDIF}
     TDUnitX.RegisterTestFixture(TTestLocalOverlap);
     TDUnitX.RegisterTestFixture(TTestTimeZoneRules);
+    {$IFDEF MSWINDOWS}
     TDUnitX.RegisterTestFixture(TTestTimeZoneWindows);
+    {$ENDIF}
+    {$IFDEF MSWINDOWS}
     TDUnitX.RegisterTestFixture(TTestWindowsZoneOracle);
+    {$ENDIF}
     TDUnitX.RegisterTestFixture(TTestTimeZoneTzif);
     TDUnitX.RegisterTestFixture(TTestNamedTimeZones);
     TDUnitX.RegisterTestFixture(TTestLocalZoneTzif);

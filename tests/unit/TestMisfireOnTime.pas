@@ -5,16 +5,14 @@ interface
 
 uses
   {$IFDEF FPC}
-  Windows,
   DateUtils, SysUtils,
   AutoFree, DUnitX.TestFramework,
   maxCron
   {$ELSE}
   System.DateUtils, System.SysUtils,
-  Winapi.Windows,
   AutoFree, DUnitX.TestFramework,
   maxCron
-  {$ENDIF};
+  {$ENDIF}, TestEnvironment;
 
 type
   [TestFixture]
@@ -54,11 +52,11 @@ var
   lEvent: IMaxCronEvent;
   lDue, lTick: TDateTime;
   lCount: Integer;
-  lOldEngine: string;
+  lSavedEngine: TTestEnvSnapshot;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
-  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', aEngine);
     GC(lCron, TmaxCron.Create(ctPortable), g);
     lCron.DefaultMisfirePolicy := TmaxCronMisfirePolicy.mpSkip;
     lCount := 0;
@@ -93,7 +91,7 @@ begin
     end;
   finally
     g.Clear;
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
@@ -109,11 +107,12 @@ var
   lDue, lTick, lRequestedDue, lFloatBoundary: TDateTime;
   lStamp: TTimeStamp;
   lCount, lFailures, lSecond: Integer;
-  lOldEngine, lFirstFailure: string;
+  lFirstFailure: string;
+  lSavedEngine: TTestEnvSnapshot;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
-  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', aEngine);
     GC(lCron, TmaxCron.Create(ctPortable), g);
     lCron.DefaultMisfirePolicy := TmaxCronMisfirePolicy.mpSkip;
     lEvent := lCron.Add('GeneratedDueInstants');
@@ -160,7 +159,7 @@ begin
     Assert.AreEqual(0, lFailures, Format('%d generated instants; %s', [cSamples, lFirstFailure]));
   finally
     g.Clear;
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 

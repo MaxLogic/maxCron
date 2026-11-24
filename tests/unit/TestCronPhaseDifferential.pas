@@ -5,16 +5,14 @@ interface
 
 uses
   {$IFDEF FPC}
-  Windows,
   DateUtils, Generics.Collections, SysUtils,
   DUnitX.TestFramework,
   maxCron
   {$ELSE}
   System.DateUtils, System.Generics.Collections, System.SysUtils,
-  Winapi.Windows,
   DUnitX.TestFramework,
   maxCron
-  {$ENDIF};
+  {$ENDIF}, TestEnvironment;
 
 type
   [TestFixture]
@@ -110,11 +108,11 @@ var
   lBase: TDateTime;
   lDialect: TmaxCronDialect;
   lMode: TmaxCronDayMatchMode;
-  lPlan, lOldEngine: string;
+  lPlan: string;
+  lSavedEngine: TTestEnvSnapshot;
   lOldSeed, i, j, k, lStart, lLength: Integer;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
-  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   lOldSeed := RandSeed;
   RandSeed := 20261115;
   lBase := EncodeDateTime(2026, 6, 15, 0, 0, 0, 0);
@@ -126,6 +124,7 @@ begin
       lRowsA[i] := nil; lRowsB[i] := nil;
     end;
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', aEngine);
     lA := TmaxCron.Create(ctPortable); lB := TmaxCron.Create(ctPortable);
     case aPolicy of
       0: begin lA.DefaultMisfirePolicy := TmaxCronMisfirePolicy.mpSkip; lB.DefaultMisfirePolicy := TmaxCronMisfirePolicy.mpSkip;
@@ -176,7 +175,7 @@ begin
     end;
     SetMaxCronWallClockHook(nil);
     RandSeed := lOldSeed;
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 

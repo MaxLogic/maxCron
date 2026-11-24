@@ -20,6 +20,22 @@ unit-qualified RTTI names now use `maxCron.Plan` (for example,
 `TCronSchedulePlan.UnitName`); update reflection that looks up the old qualified names.
 
 
+## Platforms
+
+| Platform | Compiler | Timers |
+| --- | --- | --- |
+| Windows x64/x86 | Delphi 12 | High-resolution waits |
+| Windows x64 | FPC trunk 3.3.1 | High-resolution waits |
+| Linux x86_64 | Delphi 12 Linux64 | Millisecond waits |
+
+`ctVcl`, `maxCronHlpDlg`, the VCL test runner, the Windows zone provider
+and `MAXCRON_TIMER_RESOLUTION` are Windows-only. Other Delphi targets are untested.
+
+### Linux setup
+
+Install the Linux64 SDK in Delphi 12 and cross-compile on Windows. Run the
+binary on the Linux target, with `tzdata` installed for LOCAL and named zones.
+
 ## Free Pascal (FPC)
 
 The supported target is Windows x64 with FPC trunk 3.3.1, built from
@@ -932,6 +948,21 @@ is bundled for application use. The reader supports signed and extended POSIX
 footer rule times when both rule-local transitions stay at least 2 local days from the year boundaries and both DST and standard parts last at least 28 days throughout a 400-year Gregorian cycle. Fixed-offset and RFC all-year-DST footers are also supported; unsupported footer rules fail when setting the zone and preserve its previous value.
 Leap-second (`right/`) files are rejected.
 
+On Linux, LOCAL follows `/etc/localtime` when `TZ` is unset. For a set
+`TZ`, maxCron removes one leading colon. An empty value then selects UTC.
+A slash-rooted value selects that TZif file. A zone name selects a file under
+`MAXCRON_TZDIR`, `TZDIR` or `/usr/share/zoneinfo`, in that order. If the
+file cannot be used, maxCron tries the value as a POSIX TZ rule and falls back
+to UTC. Missing or invalid `/etc/localtime` also falls back to UTC.
+Changes to `TZ` and the selected file are picked up on the next use after
+the one-second recheck interval. LOCAL uses the same gap and overlap rules
+as named zones.
+
+maxCron uses UTC for an unsupported POSIX rule, including a DST abbreviation
+without transition rules when there is no corresponding file. glibc may use
+`posixrules` in that case. maxCron does not look up relative paths rejected
+by its zone-name syntax, such as `../x`.
+
 The built-in name table is derived from Unicode CLDR 49 data, copyright
 2001-2026 Unicode, Inc., under the Unicode License v3. The full notice is retained
 in `maxCron.Internal.TimeZoneNames.inc`. To regenerate it from a verified CLDR
@@ -1035,6 +1066,18 @@ When we change `DayMatchMode` on an enabled event, or change scheduler `DefaultD
 ## Unit tests
 
 DUnitX tests live under `tests/` (runner: `tests/maxCronTests.dpr`).
+
+In x86_64 WSL, run `./build-and-run-tests-linux.sh delphi` to build with
+Delphi 12 on Windows and run the unit and stress suites in Linux.
+`MAXCRON_LONG_TESTS=1` selects the long unit suite and
+`MAXCRON_DEBUG_SAFETY=1` selects Debug. Set `MAXCRON_ROSTER_OUT` to an
+absolute Linux output path, or use the default `~/dev-artifacts/runs/maxCron`.
+`MAXCRON_BUILD_ROOT`, `MAXCRON_DCCLINUX64` and `MAXCRON_LINUX_SDK` are
+Windows paths for the build root, compiler and SDK. `MAXCRON_LINUX_PREBUILT`
+points to an existing Linux lane layout to run without rebuilding.
+`MAXCRON_LINUX_TIMEOUT_SECONDS` overrides runner timeouts for diagnostics.
+The gate passes through `MAXCRON_STRESS`. The explicit Linux exclusions are
+in `tests/linux/LinuxExcluded.txt`.
 
 The `build-and-run-tests.bat` and `build-and-run-tests-stress.bat` gates (and
 their WSL `.sh` wrappers) require Delphi 12 (23.0) and DelphiAIKit. They build
@@ -1143,13 +1186,13 @@ helper to forge or replay a verdict is outside this threat model.
 
 #### Test exit codes and propagation
 
-These tables describe a successfully started wrapper or native program. Each
-`.sh` entry delegates to the same Windows gate as its `.bat` counterpart and
-preserves its defined status.
+These tables describe a successfully started wrapper or native program. The
+paired Windows `.sh` and `.bat` entry points use the same gate and exit codes.
 
 | Entry point | Success | Ordinary test or infrastructure failure | Roster violation | Timeout |
 | --- | ---: | --- | ---: | ---: |
 | Delphi default `build-and-run-tests.bat` / `.sh` | 0 | 3, including a native runner returning 1 or 2 | 5 | 124 |
+| Delphi Linux `build-and-run-tests-linux.sh delphi` | 0 | 1 for test failure; 2 for configuration; 3 for build or infrastructure | 5 | 124 |
 | Delphi stress `build-and-run-tests-stress.bat` / `.sh` | 0 | 3, including a native runner returning 1 or 2 | 5 | 124 |
 | Delphi long `build-and-run-tests-long.bat` / `.sh` | 0 | 3, including build failure, native runner error 2, or invalid helper output | 5 | 124 |
 | FPC gate `build-and-run-tests-fpc.bat` / `.sh` | 0 | 1 for test/heap/result failure; 2 for tool/output configuration; 3 for build, generator or parity infrastructure failure | 5 | 124 |
@@ -1638,7 +1681,7 @@ the main thread through `TThread.ForceQueue` and requires a message pump. Main-t
 load and callback dispatch add latency. The default callback mode is `imMainThread`;
 a console application must pump queued work or select `imTTask`/`imThread`.
 
-`MAXCRON_TIMER_RESOLUTION` is read when creating the scheduler: `high` (default)
+On Windows, `MAXCRON_TIMER_RESOLUTION` is read when creating the scheduler: `high` (default)
 uses a high-resolution waitable timer, `period` requests 1 ms timer resolution only
 for the final 20 ms of each wait, and `default` uses the system wait resolution.
 If a high-resolution timer is unavailable, maxCron falls back to `period`.

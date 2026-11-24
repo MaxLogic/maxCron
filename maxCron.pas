@@ -644,6 +644,15 @@ uses
   {$ENDIF}
   maxCron.Internal.Text;
 
+function CronLocalNowDateTime: TDateTime;
+begin
+  {$IFDEF MSWINDOWS}
+  Result := Now;
+  {$ELSE}
+  Result := CronInstantUsToDateTime(CronPreciseLocalNowUs);
+  {$ENDIF}
+end;
+
 function CronFloorDiv(const aValue, aDivisor: Int64): Int64;
 begin
   Result := maxCron.Plan.CronFloorDiv(aValue, aDivisor);
@@ -4827,7 +4836,11 @@ var
   lAutoDiagnostics: TMaxCronAutoDiagnostics;
 begin
   Result := Default(TMaxCronMetricsSnapshot);
+  {$IFDEF MSWINDOWS}
   Result.CapturedAtUtc := CronSystemTimeZone.ToUniversalTime(Now, False);
+  {$ELSE}
+  Result.CapturedAtUtc := CronInstantUsToDateTime(CronPreciseUtcNowUs);
+  {$ENDIF}
   Result.ConfiguredEngine := SchedulerEngineToText(fSchedulerEngine);
   Result.EffectiveEngine := Result.ConfiguredEngine;
   Result.AutoState := AutoStateToText(TAutoSchedulerState.asDisabled);
@@ -5399,7 +5412,7 @@ begin
   try
     scheduler.Dialect := Dialect;
     scheduler.Parse(SchedulePlan);
-    scheduler.GetNextOccurrences(Limit, Now, Dates);
+    scheduler.GetNextOccurrences(Limit, CronLocalNowDateTime, Dates);
     Result := True;
   finally
     scheduler.Free;

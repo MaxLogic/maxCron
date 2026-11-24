@@ -6,13 +6,11 @@ interface
 uses
   {$IFDEF FPC}
   Classes, DateUtils, Generics.Collections, SyncObjs, SysUtils,
-  Windows,
   {$ELSE}
   System.Classes, System.DateUtils, System.Generics.Collections, System.SyncObjs, System.SysUtils,
-  Winapi.Windows,
   {$ENDIF}
   DUnitX.TestFramework,
-  maxCron, maxCron.Internal.TimeZone, TestZoneFakes;
+  maxCron, maxCron.Internal.TimeZone, TestZoneFakes, TestEnvironment;
 
 type
   TRestartStore = class(TInterfacedObject, IMaxCronScheduleStore)
@@ -257,15 +255,16 @@ procedure TTestRestartCatchUp.AutomaticDisableIntent;
 const
   cEngines: array[0..2] of string = ('scan', 'heap', 'shadow');
 var
-  lEngine, lOldEngine: string;
+  lEngine: string;
+  lSavedEngine: TTestEnvSnapshot;
   lKind, lStop: Integer;
   lState: TMaxCronPersistedEvent;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
     for lEngine in cEngines do for lKind := 0 to 2 do for lStop := 0 to 1 do
     begin
-      SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lEngine));
+      SetTestEnvironmentVariable('MAXCRON_ENGINE', lEngine);
       Start;
       try
         case lKind of
@@ -291,7 +290,7 @@ begin
       end;
     end;
   finally
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
@@ -411,18 +410,19 @@ procedure TTestRestartCatchUp.RestoreAutomaticReplay;
 const
   cEngines: array[0..2] of string = ('scan', 'heap', 'shadow');
 var
-  lEngine, lOldEngine: string;
+  lEngine: string;
+  lSavedEngine: TTestEnvSnapshot;
   lKind, lStop, lWindow, lCalls: Integer;
   lCapture: IMaxCronScheduleStore;
   lRestored: TmaxCron;
   lState: TMaxCronPersistedEvent;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
     for lEngine in cEngines do for lKind := 0 to 2 do
       for lStop := 0 to 1 do for lWindow := 0 to 1 do
     begin
-      SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lEngine));
+      SetTestEnvironmentVariable('MAXCRON_ENGINE', lEngine);
       Start;
       lRestored := nil;
       try
@@ -471,7 +471,7 @@ begin
       end;
     end;
   finally
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
@@ -479,17 +479,18 @@ procedure TTestRestartCatchUp.GeneratedPlainRestore;
 const
   cEngines: array[0..2] of string = ('scan', 'heap', 'shadow');
 var
-  lEngine, lOldEngine: string;
+  lEngine: string;
+  lSavedEngine: TTestEnvSnapshot;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
     for lEngine in cEngines do
     begin
-      SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lEngine));
+      SetTestEnvironmentVariable('MAXCRON_ENGINE', lEngine);
       PlainRestore(lEngine);
     end;
   finally
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
@@ -693,16 +694,17 @@ var
   lA, lB: TList<Int64>;
   lCallback: TmaxCronNotifyProc;
   lVariant, i: Integer;
-  lEngine, lOldEngine: string;
+  lEngine: string;
+  lSavedEngine: TTestEnvSnapshot;
   lGap: Int64;
 begin
   lA := TList<Int64>.Create;
   lB := TList<Int64>.Create;
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
     for lEngine in cEngines do for lVariant := 0 to 10 do for lPolicy := mpSkip to mpCatchUpAll do
     begin
-      SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lEngine));
+      SetTestEnvironmentVariable('MAXCRON_ENGINE', lEngine);
       Start;
       lRestored := nil;
       try
@@ -768,7 +770,7 @@ begin
     // The binder captures lCallback in the callback's shared capture frame.
     // Break that reference cycle before releasing the captured lists.
     lCallback := nil;
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
     lA.Free; lB.Free;
   end;
 end;
@@ -1135,7 +1137,7 @@ procedure TTestRestartCatchUp.IntervalProjectionPrefix(const aEngine: string);
 const
   cDelay: array[0..2] of Int64 = (0, 200000, 500000);
 var
-  lOldEngine: string;
+  lSavedEngine: TTestEnvSnapshot;
   lLater: IMaxCronEvent;
   lCapture: IMaxCronScheduleStore;
   lRestored: TmaxCron;
@@ -1145,9 +1147,9 @@ var
   lPass, lThrough, lNext, lCursor: Int64;
   lInject: Boolean;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
-  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', aEngine);
     for lMode := 0 to 1 do for lPolicy := mpSkip to mpCatchUpAll do
       for lLate := 0 to 1 do for lDelay := 0 to High(cDelay) do for lLimit := 1 to 3 do
     begin
@@ -1263,13 +1265,13 @@ begin
       Finish;
     end;
   finally
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
 procedure TTestRestartCatchUp.LegacyTwoRestarts(const aEngine: string);
 var
-  lOldEngine: string;
+  lSavedEngine: TTestEnvSnapshot;
   lOriginal, lRoundTrip: IMaxCronScheduleStore;
   lDirect, lMigrated: TmaxCron;
   lState: TMaxCronPersistedEvent;
@@ -1279,9 +1281,9 @@ var
   lKind, lFold, i, lOneCalls, lTwoCalls: Integer;
   lFirst, lDueWall: Int64;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
-  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', aEngine);
     for lKind := 0 to 2 do for lFold := 0 to 3 do for lPolicy := mpSkip to mpCatchUpAll do
     begin
       Start;
@@ -1343,7 +1345,7 @@ begin
       end;
     end;
   finally
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
@@ -1351,7 +1353,8 @@ procedure TTestRestartCatchUp.PositiveFiniteFold(const aEngine: string);
 const
   cZones: array[0..3] of string = ('LOCAL', 'UTC', 'UTC+05:30', 'Test/RestartFinite');
 var
-  lOldEngine, lPlan, lContext: string;
+  lPlan, lContext: string;
+  lSavedEngine: TTestEnvSnapshot;
   lState: TMaxCronPersistedEvent;
   lStates: TArray<TMaxCronPersistedEvent>;
   lRestored: TmaxCron;
@@ -1361,10 +1364,10 @@ var
   lRows, lCases, lIndex, lCalls, lExpectedCalls, lThisPass, i: Integer;
   lEligible, lLocal, lAllowed: Boolean;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
-  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
-  Start;
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', aEngine);
+    Start;
     SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('positive fold host', FakeZoneSource(0))));
     RegisterCronZoneForTests('Test/RestartFinite', FakeZoneSource(0));
     lFirst := ZoneMs(2026, 10, 25, 0, 30) * 1000;
@@ -1474,7 +1477,7 @@ begin
     System.WriteLn('POSITIVE_FINITE engine=',aEngine,' cases=',lCases,' full_rows=',lRows);
   finally
     Finish; ClearCronZonesForTests;
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
@@ -1482,7 +1485,8 @@ procedure TTestRestartCatchUp.PositiveIntervalOutcomes(const aEngine: string);
 const
   cIntervals: array[0..2] of Int64 = (1000, 100000, 5000000);
 var
-  lOldEngine, lContext: string;
+  lContext: string;
+  lSavedEngine: TTestEnvSnapshot;
   lState: TMaxCronPersistedEvent;
   lStates: TArray<TMaxCronPersistedEvent>;
   lRestored: TmaxCron;
@@ -1491,10 +1495,10 @@ var
   lSize, lMode, lPolicy, lOffset, lBounds, lCap, lStep, lCalls, lExpectedCalls, lTake, i, lCases: Integer;
   lEnabled: Boolean;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
-  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
-  Start;
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', aEngine);
+    Start;
     lCases := 0;
     for lSize := 0 to 2 do for lMode := 0 to 1 do for lPolicy := 1 to 3 do
       for lOffset := 0 to 5 do for lBounds := 0 to 5 do for lCap := 1 to 3 do
@@ -1604,7 +1608,7 @@ begin
     System.WriteLn('POSITIVE_INTERVAL engine=',aEngine,' cases=',lCases);
   finally
     Finish;
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
@@ -1790,7 +1794,7 @@ var
   lSaving, lArmed, lInitial, lCoherent: Boolean;
 begin
   lSeeds := 1;
-  if {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_LONG_TESTS') = '1' then lSeeds := 8;
+  if GetTestEnvironmentVariable('MAXCRON_LONG_TESTS') = '1' then lSeeds := 8;
   lCases := 0; lFallbacks := 0;
   for lSeed := 0 to lSeeds - 1 do for lPlace := 0 to 6 do
     for lSize := 0 to High(cJumps) do for lStallCase := 0 to 1 do
@@ -1978,7 +1982,7 @@ var
 
 begin
   lSeeds := 1;
-  if {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_LONG_TESTS') = '1' then lSeeds := 8;
+  if GetTestEnvironmentVariable('MAXCRON_LONG_TESTS') = '1' then lSeeds := 8;
   lCases := 0;
   for lSeed := 0 to lSeeds - 1 do for lPlace := 0 to 3 do
     for lDirection := 0 to High(cJumps) do for lDelayCase := 0 to 1 do for lKind := 0 to 2 do
@@ -2143,7 +2147,8 @@ procedure TTestRestartCatchUp.ClockJumpRestartProperty(const aEngine: string);
 const
   cIntervals: array[0..2] of Int64 = (1000, 100000, 5000000);
 var
-  lOldEngine, lContext: string;
+  lContext: string;
+  lSavedEngine: TTestEnvSnapshot;
   lEvents: array[0..3] of IMaxCronEvent;
   lLive, lReplay: array[0..3] of Integer;
   lLiveIds, lReplayIds: array[0..3] of TList<Int64>;
@@ -2180,14 +2185,14 @@ var
   end;
 
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
-  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
-  lSeeds := 12; lSteps := 8;
-  if {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_LONG_TESTS') = '1' then
-  begin
-    lSeeds := 256; lSteps := 32;
-  end;
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', aEngine);
+    lSeeds := 12; lSteps := 8;
+    if GetTestEnvironmentVariable('MAXCRON_LONG_TESTS') = '1' then
+    begin
+      lSeeds := 256; lSteps := 32;
+    end;
     for lSeed := 0 to lSeeds - 1 do
     begin
       lRandom := UInt64($50602026) + UInt64(lSeed);
@@ -2375,7 +2380,7 @@ begin
     CoherentSaveClockProperty(aEngine);
     System.WriteLn('CLOCK_JUMP engine=', aEngine, ' seeds=', lSeeds, ' steps=', lSteps, ' open_windows=5');
   finally
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 

@@ -35,11 +35,16 @@ type
 
 function CreateCronTickSource(const aPreferred: TCronWaitResolution): ICronTickSource;
 function CronMonotonicNowUs: Int64;
+{$IFDEF MSWINDOWS}
 function CronPreciseLocalNowUs: Int64;
+{$ENDIF}
 function CronPreciseUtcNowUs: Int64;
 function CronMaxAsyncCall(const aProc: TThreadProcedure; const aTaskName: string): IInterface;
 procedure CronDebugOutput(const aText: string);
 function CronGetEnvironmentVariable(const aName: string): string;
+{$IFNDEF MSWINDOWS}
+function CronTryGetEnvironmentVariable(const aName: string; out aValue: string): Boolean;
+{$ENDIF}
 
 implementation
 
@@ -47,16 +52,17 @@ uses
   {$IFDEF FPC}
   // Windows before SyncObjs: Windows.TCriticalSection would hide the class.
   {$IFDEF MSWINDOWS} MMSystem, Windows, {$ENDIF}
+  {$IFDEF LINUX} Linux, UnixType, {$ENDIF}
   Math, SyncObjs, System.Diagnostics, System.Threading,
   {$ELSE}
   System.Diagnostics, System.Math, System.SyncObjs,
   {$IFDEF MSWINDOWS} Winapi.MMSystem, Winapi.Windows, {$ENDIF}
+  {$IFDEF POSIX} Posix.Time, {$ENDIF}
   maxAsync,
   {$ENDIF}
-  {$IFNDEF MSWINDOWS} Posix.Time, {$ENDIF}
   maxCron.Internal.Text;
 
-{$IFDEF FPC}
+{$IF defined(FPC) and defined(MSWINDOWS)}
 function CreateWaitableTimerExW(aAttributes: Pointer; aName: PWideChar; aFlags, aAccess: DWORD): THandle;
   stdcall; external 'kernel32.dll' name 'CreateWaitableTimerExW';
 {$ENDIF}
@@ -140,13 +146,14 @@ begin
 var
   lTime: timespec;
 begin
-  if clock_gettime(CLOCK_REALTIME, lTime) <> 0 then RaiseLastOSError;
+  if clock_gettime(CLOCK_REALTIME, @lTime) <> 0 then
+    RaiseLastOSError;
   Result := Int64(lTime.tv_sec) * 1000000 + lTime.tv_nsec div 1000 + Int64(25569) * 86400000000;
 {$ENDIF}
 end;
 
-function CronPreciseLocalNowUs: Int64;
 {$IFDEF MSWINDOWS}
+function CronPreciseLocalNowUs: Int64;
 var
   lUtc, lLocal: TFileTime;
   lValue: UInt64;
@@ -159,11 +166,8 @@ begin
     RaiseLastOSError;
   lValue := (UInt64(lLocal.dwHighDateTime) shl 32) or lLocal.dwLowDateTime;
   Result := Int64(lValue div 10) - Int64(109205) * 86400000000;
-{$ELSE}
-begin
-  Result := Round(Now * 86400000000.0);
-{$ENDIF}
 end;
+{$ENDIF}
 
 constructor TCronWaiter.Create(const aPreferred: TCronWaitResolution);
 {$IFDEF MSWINDOWS}
@@ -204,9 +208,9 @@ end;
 function TCronWaiter.Wait(const aDelayUs: Int64): Boolean;
 var
   lDelayUs: Int64;
+  {$IFDEF MSWINDOWS}
   lStartedUs: Int64;
   lPeriodActive: Boolean;
-  {$IFDEF MSWINDOWS}
   lDue: TLargeInteger;
   lHandles: array[0..1] of THandle;
   lResult: Cardinal;
@@ -433,9 +437,32 @@ begin
   {$ENDIF}
 end;
 
+{$IFNDEF MSWINDOWS}
+const
+  cCronLibC = {$IFDEF FPC}'c'{$ELSE}'libc.so.6'{$ENDIF};
+
+function CronLibcGetenv(aName: PAnsiChar): PAnsiChar; cdecl;
+  external cCronLibC name 'getenv';
+
+function CronTryGetEnvironmentVariable(const aName: string; out aValue: string): Boolean;
+var
+  lValue: PAnsiChar;
+begin
+  lValue := CronLibcGetenv(PAnsiChar(UTF8String(aName)));
+  Result := lValue <> nil;
+  aValue := '';
+  if Result then
+    aValue := UTF8ToString(lValue);
+end;
+{$ENDIF}
+
 function CronGetEnvironmentVariable(const aName: string): string;
 begin
+  {$IFDEF MSWINDOWS}
   Result := {$IFDEF FPC}SysUtils{$ELSE}System.SysUtils{$ENDIF}.GetEnvironmentVariable(aName);
+  {$ELSE}
+  CronTryGetEnvironmentVariable(aName, Result);
+  {$ENDIF}
 end;
 
 initialization

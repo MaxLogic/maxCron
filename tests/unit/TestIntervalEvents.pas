@@ -1,6 +1,9 @@
 unit TestIntervalEvents;
 interface
-uses System.Classes, System.SyncObjs, System.SysUtils, System.Threading, Winapi.Windows, DUnitX.TestFramework, maxCron;
+uses
+  System.Classes, System.SyncObjs, System.SysUtils, System.Threading,
+  DUnitX.TestFramework,
+  maxCron, TestEnvironment;
 type
   [TestFixture]
   TTestIntervalEvents = class
@@ -33,6 +36,19 @@ type
     function TryLoad(out aEvents: TArray<TMaxCronPersistedEvent>): Boolean;
   end;
 implementation
+
+uses
+  {$IFDEF MSWINDOWS} Winapi.Windows, {$ENDIF}
+  maxCron.Internal.Platform;
+
+function TestTickCount64: UInt64;
+begin
+  {$IFDEF MSWINDOWS}
+  Result := GetTickCount64;
+  {$ELSE}
+  Result := UInt64(CronMonotonicNowUs div 1000);
+  {$ENDIF}
+end;
 procedure TIntervalMemoryStore.Save(const aEvents: TArray<TMaxCronPersistedEvent>);
 begin fStates := Copy(aEvents); end;
 function TIntervalMemoryStore.TryLoad(out aEvents: TArray<TMaxCronPersistedEvent>): Boolean;
@@ -481,16 +497,19 @@ end;
 procedure TTestIntervalEvents.PlanSwitchEngines;
 const cEngines: array[0..1] of string = ('heap','shadow');
 var
-  lPrevious,lEngine: string;
+  lEngine: string;
+  lSavedEngine: TTestEnvSnapshot;
 begin
-  lPrevious := GetEnvironmentVariable('MAXCRON_ENGINE');
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
     for lEngine in cEngines do
     begin
-      Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE',PChar(lEngine));
+      SetTestEnvironmentVariable('MAXCRON_ENGINE', lEngine);
       ViewsLimitsAndPlanSwitch;
     end;
-  finally Winapi.Windows.SetEnvironmentVariable('MAXCRON_ENGINE',PChar(lPrevious)); end;
+  finally
+    RestoreTestEnvironmentVariable(lSavedEngine);
+  end;
 end;
 
 procedure TTestIntervalEvents.RestoreOverduePolicies;
@@ -821,8 +840,8 @@ begin
         Assert.IsTrue(lBExited.WaitFor(5000)=wrSignaled,lContext+' B end');
         Assert.IsTrue(lBTask<>nil,lContext+' B task');
         Assert.IsTrue(lBTask.Wait(5000),lContext+' B dispatch completion');
-        lUntil := GetTickCount64+5000;
-        while (lEvent.NextSchedule=0) and (GetTickCount64<lUntil) do TThread.Sleep(1);
+        lUntil := TestTickCount64+5000;
+        while (lEvent.NextSchedule=0) and (TestTickCount64<lUntil) do TThread.Sleep(1);
         lExpectedNext := CronDateTimeToMs(lEvent.NextSchedule);
         Assert.IsTrue(lExpectedNext<>0,lContext+' B completion stalled');
         lARelease.SetEvent;
@@ -851,12 +870,12 @@ begin
     end;
     lIndex := 2;
     if aOverlap=omSkipIfRunning then lIndex := 1;
-    lUntil := GetTickCount64+5000;
+    lUntil := TestTickCount64+5000;
     repeat
       CheckSynchronize(0);
       if (TInterlocked.CompareExchange(lCount,0,0)>=lIndex) and (lEvent.NextSchedule<>0) then Break;
       TThread.Sleep(1);
-    until GetTickCount64>=lUntil;
+    until TestTickCount64>=lUntil;
     Assert.AreEqual(lIndex,TInterlocked.CompareExchange(lCount,0,0),lContext+' no stall or double-arm');
     Assert.AreEqual(0,lBadAwaiting,lContext+' B entered with deadline');
     lDeadlineUs := TInterlocked.Read(lOwningEndUs)+lIntervalUs;
@@ -871,8 +890,8 @@ begin
     Assert.AreEqual(lIndex,TInterlocked.CompareExchange(lCount,0,0),lContext+' early start');
     lBRelease.SetEvent;
     TInterlocked.Increment(lMono); lCron.TickAtUs(cWall+TInterlocked.Read(lMono)-lOrigin);
-    lUntil := GetTickCount64+5000;
-    while (TInterlocked.CompareExchange(lCount,0,0)=lIndex) and (GetTickCount64<lUntil) do
+    lUntil := TestTickCount64+5000;
+    while (TInterlocked.CompareExchange(lCount,0,0)=lIndex) and (TestTickCount64<lUntil) do
     begin CheckSynchronize(0); TThread.Sleep(1); end;
     Assert.AreEqual(lIndex+1,TInterlocked.CompareExchange(lCount,0,0),lContext+' did not rearm exactly once');
     if aRoute>=2 then
@@ -905,12 +924,12 @@ procedure TTestIntervalEvents.CompletionOwnershipInvariant;
 var
   lRoute, lMutation, lOrder, lInterval: Integer;
   lOverlap: TmaxCronOverlapMode;
-  lOldPool: string;
+  lSavedPool: TTestEnvSnapshot;
 begin
   // Exhaustive bounded Cartesian generator. There is no random seed.
-  lOldPool := GetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL');
-  SetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL','1');
+  lSavedPool := SaveTestEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL');
   try
+    SetTestEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL', '1');
     for lRoute := 0 to 3 do
       for lOverlap := omAllowOverlap to omSerializeCoalesce do
         for lMutation := 0 to 2 do
@@ -918,7 +937,7 @@ begin
             for lInterval in [10,100] do
               CheckCompletionOwnership(lRoute,lMutation,lOrder,lInterval,lOverlap);
   finally
-    SetEnvironmentVariable('MAXCRON_THREAD_DISPATCH_POOL',PChar(lOldPool));
+    RestoreTestEnvironmentVariable(lSavedPool);
   end;
 end;
 

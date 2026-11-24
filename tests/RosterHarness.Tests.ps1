@@ -12,6 +12,14 @@ Describe 'Roster matrix cannot use encoding corruption or build failure as proof
         $LASTEXITCODE | Should -Be 0
     }
 
+    It 'rejects a stale exclusion in the synthetic Linux roster' {
+        $scratch = Join-Path $ScratchRoot 'stale-exclusion'
+        $lines = @(& python -X utf8=0 (Join-Path $Repository 'tests/roster_contract_regression.py') --repository $Repository --scratch $scratch --compiler $Compiler --dunitx $DUnitXSource --check-stale-linux-exclusion 2>&1)
+        $nativeExit = $LASTEXITCODE
+        $nativeExit | Should -Be 0 -Because ($lines -join "`n")
+        ($lines -join "`n") | Should -Match '(?m)^MATRIX_STALE_LINUX_EXCLUSION_REJECTED native_exit=1 identity=TestLocalZoneOs\.TTestLocalZoneOs\.Removed$'
+    }
+
     It 'fails the actual matrix after <Phase> exits 37' -ForEach @(@{ Phase='compiler' }, @{ Phase='generator' }, @{ Phase='parity' }) {
         [string[]]$injection = if ($Phase -eq 'compiler') { @('--inject-compiler-failure') } else { @('--inject-phase', $Phase) }
         $lines = @(& python -X utf8=0 (Join-Path $Repository 'tests/roster_contract_regression.py') --repository $Repository --scratch (Join-Path $ScratchRoot ('injected-'+$Phase)) --compiler $Compiler --dunitx $DUnitXSource --routes fpc-long-bat @injection 2>&1)

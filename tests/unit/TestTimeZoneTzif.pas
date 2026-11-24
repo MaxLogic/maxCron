@@ -76,14 +76,12 @@ implementation
 
 uses
   {$IFDEF FPC}
-  Windows,
   Classes, System.IOUtils, SysUtils, ZStream,
   maxCron, maxCron.Internal.TimeZone, maxCron.Internal.TZif, TestZoneFakes
   {$ELSE}
   System.Classes, System.IOUtils, System.SysUtils, System.ZLib,
-  Winapi.Windows,
   maxCron, maxCron.Internal.TimeZone, maxCron.Internal.TZif, TestZoneFakes
-  {$ENDIF};
+  {$ENDIF}, TestEnvironment;
 
 type
   TZoneRow = record
@@ -178,13 +176,15 @@ procedure TTestTimeZoneTzif.RejectedFooterSetter(const aName: string);
 var
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
-  lPrevious, lPath: string;
+  lPath: string;
+  lSavedZoneRoot: TTestEnvSnapshot;
   lRaised: Boolean;
 begin
-  lPrevious := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_TZDIR');
-  SetEnvironmentVariableW('MAXCRON_TZDIR', PChar(ZoneFixtureRoot));
-  lCron := TmaxCron.Create(ctPortable);
+  lSavedZoneRoot := SaveTestEnvironmentVariable('MAXCRON_TZDIR');
+  lCron := nil;
   try
+    SetTestEnvironmentVariable('MAXCRON_TZDIR', ZoneFixtureRoot);
+    lCron := TmaxCron.Create(ctPortable);
     lEvent := lCron.Add('footer rejection');
     lEvent.TimeZoneId := 'UTC+02:00';
     lPath := TPath.Combine(ZoneFixtureRoot, StringReplace(aName, '/', PathDelim, [rfReplaceAll]));
@@ -206,7 +206,7 @@ begin
   finally
     lEvent := nil;
     lCron.Free;
-    SetEnvironmentVariableW('MAXCRON_TZDIR', PChar(lPrevious));
+    RestoreTestEnvironmentVariable(lSavedZoneRoot);
   end;
 end;
 

@@ -4,9 +4,8 @@ interface
 
 uses
   System.Classes, System.DateUtils, System.Diagnostics, System.SyncObjs, System.SysUtils,
-  Winapi.Windows,
   DUnitX.TestFramework,
-  maxCron, maxCron.Internal.Platform;
+  maxCron, maxCron.Internal.Platform, maxCron.Internal.TimeZone, TestEnvironment;
 
 type
   [TestFixture]
@@ -30,7 +29,7 @@ var
   lDone: TEvent;
   lCount, lBad: Integer;
   lSamples: array[0..2] of Double;
-  lOldMode: string;
+  lSavedTimerMode: TTestEnvSnapshot;
   lTicks, lSpin, lExceptions: UInt64;
   lTemp: Double;
   i, j: Integer;
@@ -43,13 +42,15 @@ begin
     TThread.Sleep(1);
     Assert.IsTrue(lWatch.ElapsedMilliseconds < 2000, 'Could not select start phase');
   end;
-  lOldMode := GetEnvironmentVariable('MAXCRON_TIMER_RESOLUTION');
-  Winapi.Windows.SetEnvironmentVariable('MAXCRON_TIMER_RESOLUTION', PChar(aMode));
-  lCron := TmaxCron.Create(ctPortable);
-  lDone := TEvent.Create(nil, True, False, '');
-  lCount := 0;
-  lBad := 0;
+  lSavedTimerMode := SaveTestEnvironmentVariable('MAXCRON_TIMER_RESOLUTION');
+  lCron := nil;
+  lDone := nil;
   try
+    SetTestEnvironmentVariable('MAXCRON_TIMER_RESOLUTION', aMode);
+    lCron := TmaxCron.Create(ctPortable);
+    lDone := TEvent.Create(nil, True, False, '');
+    lCount := 0;
+    lBad := 0;
     lEvent := lCron.Add('alignment', '* * * * * * * 3',
       procedure(aSender: IMaxCronEvent)
       var
@@ -80,16 +81,20 @@ begin
     Assert.IsTrue(lTicks >= 3);
     Assert.AreEqual(UInt64(0), lSpin);
     Assert.AreEqual(UInt64(0), lExceptions);
+    {$IFDEF MSWINDOWS}
     if aMode = 'high' then
       Assert.AreEqual(trHighResolution, lCron.ActiveTimerResolution)
     else if aMode = 'period' then
       Assert.AreEqual(trTimerPeriod, lCron.ActiveTimerResolution)
     else
       Assert.AreEqual(trSystemDefault, lCron.ActiveTimerResolution);
+    {$ELSE}
+    Assert.AreEqual(trSystemDefault, lCron.ActiveTimerResolution);
+    {$ENDIF}
   finally
     lCron.Free;
     lDone.Free;
-    Winapi.Windows.SetEnvironmentVariable('MAXCRON_TIMER_RESOLUTION', PChar(lOldMode));
+    RestoreTestEnvironmentVariable(lSavedTimerMode);
   end;
 end;
 

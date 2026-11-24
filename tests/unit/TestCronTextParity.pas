@@ -31,8 +31,7 @@ type
 implementation
 
 uses
-  {$IFDEF FPC} Windows, {$ELSE} Winapi.Windows, {$ENDIF}
-  maxCron, maxCron.Internal.Text, maxCron.Plan;
+  maxCron, maxCron.Internal.Text, maxCron.Plan, TestEnvironment;
 
 procedure RequireRejected(const s: string);
 var
@@ -244,15 +243,13 @@ procedure TTestCronTextParity.AutoIntegerEnvironmentUsesDecimal;
 const
   cEnvName = 'MAXCRON_GLOBAL_MAX_CONCURRENT';
 var
-  lPrevious: string;
-  lHadPrevious: Boolean;
-  c: Char;
+  lSavedValue: TTestEnvSnapshot;
 
   procedure Check(const s: string; const aExpected: Integer);
   var
     lCron: TmaxCron;
   begin
-    Assert.IsTrue(SetEnvironmentVariableW(cEnvName, PChar(s)));
+    SetTestEnvironmentVariable(cEnvName, s);
     lCron := TmaxCron.Create(ctPortable);
     try
       Assert.AreEqual<Integer>(aExpected, lCron.GlobalMaxConcurrentCallbacks, '[' + s + ']');
@@ -262,10 +259,7 @@ var
   end;
 
 begin
-  SetLastError(0);
-  lHadPrevious := (GetEnvironmentVariableW(cEnvName, @c, 1) <> 0) or
-    (GetLastError <> ERROR_ENVVAR_NOT_FOUND);
-  lPrevious := {$IFDEF FPC}SysUtils{$ELSE}System.SysUtils{$ENDIF}.GetEnvironmentVariable(cEnvName);
+  lSavedValue := SaveTestEnvironmentVariable(cEnvName);
   try
     Check('019', 19);
     Check('19', 19);
@@ -275,10 +269,7 @@ begin
     Check(' 19 ', 19);
     Check('19' + #9, 19);
   finally
-    if lHadPrevious then
-      SetEnvironmentVariableW(cEnvName, PChar(lPrevious))
-    else
-      SetEnvironmentVariableW(cEnvName, nil);
+    RestoreTestEnvironmentVariable(lSavedValue);
   end;
 end;
 
@@ -308,17 +299,12 @@ procedure TTestCronTextParity.AutoIntegerEnvironmentLongDecimalPadding;
 const
   cEnvName = 'MAXCRON_GLOBAL_MAX_CONCURRENT';
 var
-  lPrevious: string;
-  lHadPrevious: Boolean;
+  lSavedValue: TTestEnvSnapshot;
   lCron: TmaxCron;
-  c: Char;
 begin
-  SetLastError(0);
-  lHadPrevious := (GetEnvironmentVariableW(cEnvName, @c, 1) <> 0) or
-    (GetLastError <> ERROR_ENVVAR_NOT_FOUND);
-  lPrevious := {$IFDEF FPC}SysUtils{$ELSE}System.SysUtils{$ENDIF}.GetEnvironmentVariable(cEnvName);
-  Assert.IsTrue(SetEnvironmentVariableW(cEnvName, PChar(StringOfChar('0', 256) + '19')));
+  lSavedValue := SaveTestEnvironmentVariable(cEnvName);
   try
+    SetTestEnvironmentVariable(cEnvName, StringOfChar('0', 256) + '19');
     lCron := TmaxCron.Create(ctPortable);
     try
       Assert.AreEqual<Integer>(19, lCron.GlobalMaxConcurrentCallbacks);
@@ -326,10 +312,7 @@ begin
       lCron.Free;
     end;
   finally
-    if lHadPrevious then
-      SetEnvironmentVariableW(cEnvName, PChar(lPrevious))
-    else
-      SetEnvironmentVariableW(cEnvName, nil);
+    RestoreTestEnvironmentVariable(lSavedValue);
   end;
 end;
 

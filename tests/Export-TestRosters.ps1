@@ -19,6 +19,7 @@ $destination = Join-Path $PSScriptRoot 'rosters'
 $initial = @{}
 Get-ChildItem -LiteralPath $PSScriptRoot -Recurse -File | Where-Object {
     $_.Extension -in '.pas', '.dpr', '.ps1', '.inc' -or
+    ($_.Extension -eq '.txt' -and $_.DirectoryName -eq (Join-Path $PSScriptRoot 'linux')) -or
     $_.FullName.StartsWith((Join-Path $PSScriptRoot 'data') + '\', [StringComparison]::OrdinalIgnoreCase)
 } | ForEach-Object {
     $initial[$_.FullName] = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -31,7 +32,8 @@ Get-ChildItem -LiteralPath $repository -File | Where-Object { $_.Name -like 'bui
 }
 
 function Write-TestRoster {
-    param([string]$File, [string[]]$Sources, [string[]]$Names)
+    param([string]$File, [string[]]$Sources, [string[]]$Names,
+        [string]$Header = '# Native test roster; regenerate explicitly with tests/Export-TestRosters.ps1.')
     if ($Names.Count -le 0 -or @($Names | Sort-Object -Unique).Count -ne $Names.Count) { throw ('Invalid discovery names: ' + $File) }
     $stamps = @($Sources | Sort-Object -Unique | ForEach-Object {
         $path = [IO.Path]::GetFullPath((Join-Path $repository $_))
@@ -39,7 +41,7 @@ function Write-TestRoster {
         if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $initial[$path]) { throw ('Test source changed during discovery: ' + $_) }
         '# SHA256 ' + $_ + ' ' + $initial[$path]
     })
-    [IO.File]::WriteAllLines($File, @('# Native test roster; regenerate explicitly with tests/Export-TestRosters.ps1.') + $stamps + @($Names | Sort-Object), [Text.UTF8Encoding]::new($true))
+    [IO.File]::WriteAllLines($File, @($Header) + $stamps + @($Names | Sort-Object), [Text.UTF8Encoding]::new($true))
     Write-Output ('ROSTER {0} {1}' -f ([IO.Path]::GetFileName($File)), $Names.Count)
 }
 
@@ -64,6 +66,14 @@ foreach ($entry in @(
 )) {
     $runnerPath = Join-Path $PSScriptRoot ($entry.Runner + '.dpr')
     $runner = [IO.File]::ReadAllText($runnerPath)
+    $useRtti = 'True'
+    if ($entry.Name -eq 'DelphiStress') {
+        $mode = [regex]::Matches($runner, '(?mi)^[ \t]*Runner\.UseRTTI[ \t]*:=[ \t]*(True|False);[ \t]*\r?$')
+        if ($mode.Count -ne 1 -or $mode[0].Groups[1].Value -ine 'False') {
+            throw ('DelphiStress must disable RTTI fixture discovery and register its fixtures explicitly: ' + $runnerPath)
+        }
+        $useRtti = 'False'
+    }
     $uses = [regex]::Match($runner, '(?s)\buses\s+.*?;').Value
     $uses = [regex]::Replace($uses, " in '([^']+)'", {
         param($match)
@@ -92,6 +102,7 @@ begin
   for lFixture in (lRunner.BuildFixtures as ITestFixtureList) do PrintFixture(lFixture);
 end.
 '@
+    $source = $source.Replace('lRunner.UseRTTI := True;', "lRunner.UseRTTI := $useRtti;")
     $out = Join-Path $OutputRoot $entry.Name
     [void][IO.Directory]::CreateDirectory($out)
     $path = Join-Path $out 'RosterDiscovery.dpr'
@@ -181,6 +192,53 @@ foreach ($cohort in $cohorts) {
     }
     $sources += @($initial.Keys | Where-Object { $_.EndsWith('.ps1') -or $_.EndsWith('.bat') -or $_.EndsWith('.sh') } | ForEach-Object { $_.Substring($repository.Length + 1).Replace('\', '/') })
     Write-TestRoster -File (Join-Path $destination ($cohort.Name + '.txt')) -Sources $sources -Names $names
+}
+
+# Derive Linux identities from the independently discovered Windows rosters.
+$linuxLists = @('tests/linux/LinuxExcluded.txt', 'tests/linux/LinuxOnly.txt')
+$excluded = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+$linuxOnly = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+foreach ($line in (Get-Content -Encoding UTF8 -LiteralPath (Join-Path $repository $linuxLists[0]))) {
+    if (-not $line -or $line.StartsWith('#')) { continue }
+    $identity, $reason = $line -split '\s+\|\s+', 2
+    if (-not $identity -or -not $reason -or -not $excluded.Add($identity)) {
+        throw ('Invalid Linux exclusion: ' + $line)
+    }
+}
+foreach ($identity in (Get-Content -Encoding UTF8 -LiteralPath (Join-Path $repository $linuxLists[1]))) {
+    if (-not $identity -or $identity.StartsWith('#')) { continue }
+    if ($excluded.Contains($identity) -or -not $linuxOnly.Add($identity)) {
+        throw ('Invalid Linux-only identity: ' + $identity)
+    }
+}
+$linuxEntries = @(
+    @{ Name = 'DelphiLinuxUnit'; Base = 'DelphiUnit'; AddLinuxOnly = $true },
+    @{ Name = 'DelphiLinuxLong'; Base = 'DelphiLong'; AddLinuxOnly = $true },
+    @{ Name = 'DelphiLinuxStress'; Base = 'DelphiStress'; AddLinuxOnly = $false },
+    @{ Name = 'FpcLinux'; Base = 'FpcDefault'; AddLinuxOnly = $true },
+    @{ Name = 'FpcLinuxLong'; Base = 'FpcLong'; AddLinuxOnly = $true }
+)
+$usedExclusions = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+foreach ($entry in $linuxEntries) {
+    $lines = @(Get-Content -Encoding UTF8 -LiteralPath (Join-Path $destination ($entry.Base + '.txt')))
+    $entry.Sources = $linuxLists + @($lines | Where-Object { $_.StartsWith('# SHA256 ') } | ForEach-Object { ($_ -split ' ')[2] })
+    $entry.Names = @(foreach ($identity in $lines) {
+        if (-not $identity -or $identity.StartsWith('#')) { continue }
+        if ($linuxOnly.Contains($identity)) { throw ('Linux-only identity appears in ' + $entry.Base + ': ' + $identity) }
+        if ($excluded.Contains($identity)) {
+            [void]$usedExclusions.Add($identity)
+        } else {
+            $identity
+        }
+    })
+    if ($entry.AddLinuxOnly) { $entry.Names += @($linuxOnly | ForEach-Object { $_ }) }
+}
+foreach ($identity in $excluded) {
+    if (-not $usedExclusions.Contains($identity)) { throw ('Stale Linux exclusion: ' + $identity) }
+}
+foreach ($entry in $linuxEntries) {
+    Write-TestRoster -File (Join-Path $destination ($entry.Name + '.txt')) -Sources $entry.Sources -Names $entry.Names `
+        -Header ('# Linux test roster derived by tests/Export-TestRosters.ps1 from ' + $entry.Base + '.')
 }
 } finally {
     Pop-Location

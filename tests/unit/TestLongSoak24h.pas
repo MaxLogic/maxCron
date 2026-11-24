@@ -4,16 +4,14 @@ interface
 
 uses
   System.Classes, System.DateUtils, System.Math, System.SyncObjs, System.SysUtils,
-  Winapi.Windows,
   DUnitX.TestFramework,
-  maxCron;
+  maxCron, TestEnvironment;
 
 type
   [TestFixture]
   TTestLongSoak24h = class
   private
-    procedure SetEnvVar(const aName, aValue: string; out aPreviousValue: string; out aHadPrevious: Boolean);
-    procedure RestoreEnvVar(const aName, aPreviousValue: string; const aHadPrevious: Boolean);
+    procedure SetEnvVar(const aName, aValue: string; out aSnapshot: TTestEnvSnapshot);
     function IsSupportedMode(const aMode: string): Boolean;
     function ParseModes(const aValue: string): TArray<string>;
   public
@@ -23,20 +21,10 @@ type
 
 implementation
 
-procedure TTestLongSoak24h.SetEnvVar(const aName, aValue: string; out aPreviousValue: string;
-  out aHadPrevious: Boolean);
+procedure TTestLongSoak24h.SetEnvVar(const aName, aValue: string; out aSnapshot: TTestEnvSnapshot);
 begin
-  aPreviousValue := GetEnvironmentVariable(aName);
-  aHadPrevious := aPreviousValue <> '';
-  Winapi.Windows.SetEnvironmentVariable(PChar(aName), PChar(aValue));
-end;
-
-procedure TTestLongSoak24h.RestoreEnvVar(const aName, aPreviousValue: string; const aHadPrevious: Boolean);
-begin
-  if aHadPrevious then
-    Winapi.Windows.SetEnvironmentVariable(PChar(aName), PChar(aPreviousValue))
-  else
-    Winapi.Windows.SetEnvironmentVariable(PChar(aName), nil);
+  aSnapshot := SaveTestEnvironmentVariable(aName);
+  SetTestEnvironmentVariable(aName, aValue);
 end;
 
 function TTestLongSoak24h.IsSupportedMode(const aMode: string): Boolean;
@@ -100,32 +88,19 @@ var
   lHours: Double;
   lModes: TArray<string>;
   lMode: string;
-  lPreviousEngineValue: string;
-  lPreviousEnterEventsValue: string;
-  lPreviousExitEventsValue: string;
-  lPreviousEnterDueDensityValue: string;
-  lPreviousExitDueDensityValue: string;
-  lPreviousEnterDirtyValue: string;
-  lPreviousExitDirtyValue: string;
-  lPreviousEnterHoldValue: string;
-  lPreviousExitHoldValue: string;
-  lPreviousTrialTicksValue: string;
-  lPreviousCooldownValue: string;
-  lPreviousPromoteRatioValue: string;
-  lPreviousDemoteRatioValue: string;
-  lHadEngineValue: Boolean;
-  lHadEnterEventsValue: Boolean;
-  lHadExitEventsValue: Boolean;
-  lHadEnterDueDensityValue: Boolean;
-  lHadExitDueDensityValue: Boolean;
-  lHadEnterDirtyValue: Boolean;
-  lHadExitDirtyValue: Boolean;
-  lHadEnterHoldValue: Boolean;
-  lHadExitHoldValue: Boolean;
-  lHadTrialTicksValue: Boolean;
-  lHadCooldownValue: Boolean;
-  lHadPromoteRatioValue: Boolean;
-  lHadDemoteRatioValue: Boolean;
+  lSavedEngine: TTestEnvSnapshot;
+  lSavedEnterEvents: TTestEnvSnapshot;
+  lSavedExitEvents: TTestEnvSnapshot;
+  lSavedEnterDueDensity: TTestEnvSnapshot;
+  lSavedExitDueDensity: TTestEnvSnapshot;
+  lSavedEnterDirty: TTestEnvSnapshot;
+  lSavedExitDirty: TTestEnvSnapshot;
+  lSavedEnterHold: TTestEnvSnapshot;
+  lSavedExitHold: TTestEnvSnapshot;
+  lSavedTrialTicks: TTestEnvSnapshot;
+  lSavedCooldown: TTestEnvSnapshot;
+  lSavedPromoteRatio: TTestEnvSnapshot;
+  lSavedDemoteRatio: TTestEnvSnapshot;
   lTotalTicks: Integer;
   lTicksPerMode: Integer;
   lTickAt: TDateTime;
@@ -142,7 +117,7 @@ var
   lCron: TmaxCron;
   lDiag: TMaxCronAutoDiagnostics;
 begin
-  lHoursText := Trim(GetEnvironmentVariable('MAXCRON_LONG_SOAK_HOURS'));
+  lHoursText := Trim(GetTestEnvironmentVariable('MAXCRON_LONG_SOAK_HOURS'));
   if lHoursText = '' then
     Exit;
 
@@ -150,7 +125,7 @@ begin
     Assert.Fail('MAXCRON_LONG_SOAK_HOURS must be numeric');
   Assert.IsTrue(lHours > 0, 'MAXCRON_LONG_SOAK_HOURS must be > 0');
 
-  lModesText := Trim(GetEnvironmentVariable('MAXCRON_LONG_SOAK_MODES'));
+  lModesText := Trim(GetTestEnvironmentVariable('MAXCRON_LONG_SOAK_MODES'));
   if lModesText = '' then
     lModesText := 'scan,heap,auto';
   lModes := ParseModes(lModesText);
@@ -166,22 +141,22 @@ begin
   for lModeIndex := 0 to Length(lModes) - 1 do
   begin
     lMode := lModes[lModeIndex];
-    SetEnvVar('MAXCRON_ENGINE', lMode, lPreviousEngineValue, lHadEngineValue);
     try
+      SetEnvVar('MAXCRON_ENGINE', lMode, lSavedEngine);
       if lMode = 'auto' then
       begin
-        SetEnvVar('MAXCRON_AUTO_ENTER_EVENTS', '128', lPreviousEnterEventsValue, lHadEnterEventsValue);
-        SetEnvVar('MAXCRON_AUTO_EXIT_EVENTS', '96', lPreviousExitEventsValue, lHadExitEventsValue);
-        SetEnvVar('MAXCRON_AUTO_ENTER_DUE_DENSITY', '0.20', lPreviousEnterDueDensityValue, lHadEnterDueDensityValue);
-        SetEnvVar('MAXCRON_AUTO_EXIT_DUE_DENSITY', '0.55', lPreviousExitDueDensityValue, lHadExitDueDensityValue);
-        SetEnvVar('MAXCRON_AUTO_ENTER_DIRTY', '0.10', lPreviousEnterDirtyValue, lHadEnterDirtyValue);
-        SetEnvVar('MAXCRON_AUTO_EXIT_DIRTY', '0.25', lPreviousExitDirtyValue, lHadExitDirtyValue);
-        SetEnvVar('MAXCRON_AUTO_ENTER_HOLD', '2', lPreviousEnterHoldValue, lHadEnterHoldValue);
-        SetEnvVar('MAXCRON_AUTO_EXIT_HOLD', '2', lPreviousExitHoldValue, lHadExitHoldValue);
-        SetEnvVar('MAXCRON_AUTO_TRIAL_TICKS', '8', lPreviousTrialTicksValue, lHadTrialTicksValue);
-        SetEnvVar('MAXCRON_AUTO_COOLDOWN', '4', lPreviousCooldownValue, lHadCooldownValue);
-        SetEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', '1.20', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
-        SetEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', '1.45', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
+        SetEnvVar('MAXCRON_AUTO_ENTER_EVENTS', '128', lSavedEnterEvents);
+        SetEnvVar('MAXCRON_AUTO_EXIT_EVENTS', '96', lSavedExitEvents);
+        SetEnvVar('MAXCRON_AUTO_ENTER_DUE_DENSITY', '0.20', lSavedEnterDueDensity);
+        SetEnvVar('MAXCRON_AUTO_EXIT_DUE_DENSITY', '0.55', lSavedExitDueDensity);
+        SetEnvVar('MAXCRON_AUTO_ENTER_DIRTY', '0.10', lSavedEnterDirty);
+        SetEnvVar('MAXCRON_AUTO_EXIT_DIRTY', '0.25', lSavedExitDirty);
+        SetEnvVar('MAXCRON_AUTO_ENTER_HOLD', '2', lSavedEnterHold);
+        SetEnvVar('MAXCRON_AUTO_EXIT_HOLD', '2', lSavedExitHold);
+        SetEnvVar('MAXCRON_AUTO_TRIAL_TICKS', '8', lSavedTrialTicks);
+        SetEnvVar('MAXCRON_AUTO_COOLDOWN', '4', lSavedCooldown);
+        SetEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', '1.20', lSavedPromoteRatio);
+        SetEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', '1.45', lSavedDemoteRatio);
       end;
 
       lCallbackCount := 0;
@@ -253,20 +228,20 @@ begin
     finally
       if lMode = 'auto' then
       begin
-        RestoreEnvVar('MAXCRON_AUTO_DEMOTE_RATIO', lPreviousDemoteRatioValue, lHadDemoteRatioValue);
-        RestoreEnvVar('MAXCRON_AUTO_PROMOTE_RATIO', lPreviousPromoteRatioValue, lHadPromoteRatioValue);
-        RestoreEnvVar('MAXCRON_AUTO_COOLDOWN', lPreviousCooldownValue, lHadCooldownValue);
-        RestoreEnvVar('MAXCRON_AUTO_TRIAL_TICKS', lPreviousTrialTicksValue, lHadTrialTicksValue);
-        RestoreEnvVar('MAXCRON_AUTO_EXIT_HOLD', lPreviousExitHoldValue, lHadExitHoldValue);
-        RestoreEnvVar('MAXCRON_AUTO_ENTER_HOLD', lPreviousEnterHoldValue, lHadEnterHoldValue);
-        RestoreEnvVar('MAXCRON_AUTO_EXIT_DIRTY', lPreviousExitDirtyValue, lHadExitDirtyValue);
-        RestoreEnvVar('MAXCRON_AUTO_ENTER_DIRTY', lPreviousEnterDirtyValue, lHadEnterDirtyValue);
-        RestoreEnvVar('MAXCRON_AUTO_EXIT_DUE_DENSITY', lPreviousExitDueDensityValue, lHadExitDueDensityValue);
-        RestoreEnvVar('MAXCRON_AUTO_ENTER_DUE_DENSITY', lPreviousEnterDueDensityValue, lHadEnterDueDensityValue);
-        RestoreEnvVar('MAXCRON_AUTO_EXIT_EVENTS', lPreviousExitEventsValue, lHadExitEventsValue);
-        RestoreEnvVar('MAXCRON_AUTO_ENTER_EVENTS', lPreviousEnterEventsValue, lHadEnterEventsValue);
+        RestoreTestEnvironmentVariable(lSavedDemoteRatio);
+        RestoreTestEnvironmentVariable(lSavedPromoteRatio);
+        RestoreTestEnvironmentVariable(lSavedCooldown);
+        RestoreTestEnvironmentVariable(lSavedTrialTicks);
+        RestoreTestEnvironmentVariable(lSavedExitHold);
+        RestoreTestEnvironmentVariable(lSavedEnterHold);
+        RestoreTestEnvironmentVariable(lSavedExitDirty);
+        RestoreTestEnvironmentVariable(lSavedEnterDirty);
+        RestoreTestEnvironmentVariable(lSavedExitDueDensity);
+        RestoreTestEnvironmentVariable(lSavedEnterDueDensity);
+        RestoreTestEnvironmentVariable(lSavedExitEvents);
+        RestoreTestEnvironmentVariable(lSavedEnterEvents);
       end;
-      RestoreEnvVar('MAXCRON_ENGINE', lPreviousEngineValue, lHadEngineValue);
+      RestoreTestEnvironmentVariable(lSavedEngine);
     end;
   end;
 end;

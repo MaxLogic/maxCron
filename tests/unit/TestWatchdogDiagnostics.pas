@@ -4,23 +4,15 @@ interface
 
 uses
   System.DateUtils, System.Generics.Collections, System.SyncObjs, System.SysUtils,
-  Winapi.Windows,
   DUnitX.TestFramework,
-  maxCron;
+  maxCron, TestEnvironment;
 
 type
   [TestFixture]
   TTestWatchdogDiagnostics = class
   private
-    type
-      TEnvBackup = record
-        Name: string;
-        PreviousValue: string;
-        HadPrevious: Boolean;
-      end;
-  private
-    procedure SetEnvVarWithBackup(const aName, aValue: string; const aBackups: TList<TEnvBackup>);
-    procedure RestoreEnvVars(const aBackups: TList<TEnvBackup>);
+    procedure SetEnvVarWithBackup(const aName, aValue: string; const aBackups: TList<TTestEnvSnapshot>);
+    procedure RestoreEnvVars(const aBackups: TList<TTestEnvSnapshot>);
   public
     [Test]
     procedure ThresholdBreaches_AreReported;
@@ -29,35 +21,23 @@ type
 implementation
 
 procedure TTestWatchdogDiagnostics.SetEnvVarWithBackup(const aName, aValue: string;
-  const aBackups: TList<TEnvBackup>);
-var
-  lBackup: TEnvBackup;
+  const aBackups: TList<TTestEnvSnapshot>);
 begin
-  lBackup.Name := aName;
-  lBackup.PreviousValue := GetEnvironmentVariable(aName);
-  lBackup.HadPrevious := lBackup.PreviousValue <> '';
-  aBackups.Add(lBackup);
-  Winapi.Windows.SetEnvironmentVariable(PChar(aName), PChar(aValue));
+  aBackups.Add(SaveTestEnvironmentVariable(aName));
+  SetTestEnvironmentVariable(aName, aValue);
 end;
 
-procedure TTestWatchdogDiagnostics.RestoreEnvVars(const aBackups: TList<TEnvBackup>);
+procedure TTestWatchdogDiagnostics.RestoreEnvVars(const aBackups: TList<TTestEnvSnapshot>);
 var
-  lBackup: TEnvBackup;
   lIndex: Integer;
 begin
   for lIndex := aBackups.Count - 1 downto 0 do
-  begin
-    lBackup := aBackups[lIndex];
-    if lBackup.HadPrevious then
-      Winapi.Windows.SetEnvironmentVariable(PChar(lBackup.Name), PChar(lBackup.PreviousValue))
-    else
-      Winapi.Windows.SetEnvironmentVariable(PChar(lBackup.Name), nil);
-  end;
+    RestoreTestEnvironmentVariable(aBackups[lIndex]);
 end;
 
 procedure TTestWatchdogDiagnostics.ThresholdBreaches_AreReported;
 var
-  lBackups: TList<TEnvBackup>;
+  lBackups: TList<TTestEnvSnapshot>;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
   lEntered: TEvent;
@@ -66,7 +46,7 @@ var
   lDiag: TMaxCronWatchdogDiagnostics;
   lTickAt: TDateTime;
 begin
-  lBackups := TList<TEnvBackup>.Create;
+  lBackups := TList<TTestEnvSnapshot>.Create;
   lCron := nil;
   lEntered := TEvent.Create(nil, True, False, '');
   lRelease := TEvent.Create(nil, True, False, '');

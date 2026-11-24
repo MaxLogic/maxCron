@@ -1625,7 +1625,7 @@ begin
         raise Exception.Create('Cron value out of range');
       raise Exception.Create('Invalid cron token');
     end;
-    if (lNum < 0) or (lNum > High(LongWord)) then
+    if (lNum < 0) or (lNum > Int64(High(Cardinal))) then
       raise Exception.Create('Cron value out of range');
     fExecutionLimit := LongWord(lNum);
   end;

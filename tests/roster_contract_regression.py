@@ -111,6 +111,7 @@ def main():
     parser.add_argument('--routes', nargs='*', choices=['unit','stress','vcl','default-bat','default-sh','stress-bat','stress-sh','long-bat','long-sh','fpc-bat','fpc-sh','fpc-long-bat','fpc-long-sh','smoke','smoke-heap'])
     parser.add_argument('--inject-compiler-failure', action='store_true')
     parser.add_argument('--controls-only', action='store_true')
+    parser.add_argument('--check-stale-linux-exclusion', action='store_true')
     parser.add_argument('--setup-only', action='store_true', help='Discover, validate controls and compile all distinct fixture variants without running negative cases')
     parser.add_argument('--contract-variant', choices=['enabled', 'disabled'], default='enabled', help='Disabled is a negative-case-only guard-removal mutation; setup and positive controls stay enabled')
     parser.add_argument('--inject-phase', choices=['generator','parity'])
@@ -204,6 +205,14 @@ end;
 {$ENDIF}
 end.
 """)
+    linux_lists = template / 'tests/linux'
+    excluded_path = linux_lists / 'LinuxExcluded.txt'
+    synthetic_exclusions = (
+        'TestLocalZoneOs.TTestLocalZoneOs.Shared | Synthetic Windows zone fixture\n'
+        'TestLocalZoneOs.TTestLocalZoneOs.MatchesRtlLocal | Synthetic Windows zone fixture\n'
+    )
+    write(excluded_path, synthetic_exclusions)
+    write(linux_lists / 'LinuxOnly.txt', 'TestSyntheticLinuxOnly.TTestSyntheticLinuxOnly.Plain\n')
     for target in ('maxCronTests', 'maxCronStressTests', 'maxCronVclTests'):
         path = template / 'tests' / (target + '.dpr')
         body = path.read_text(encoding='utf-8-sig')
@@ -253,9 +262,19 @@ end;
             for config in ('Release', 'Debug'):
                 (path.parent / 'matrix-dcu' / platform / config / path.stem).mkdir(parents=True, exist_ok=True)
     instrument_builds(template)
-    code, text, log = run('manifest-export', ['powershell.exe', '-NoProfile', '-NonInteractive', '-File', template / 'tests/Export-TestRosters.ps1', '-Compiler', args.compiler, '-DUnitXSource', args.dunitx, '-OutputRoot', scratch / 'discovery'], template)
+    export = ['powershell.exe', '-NoProfile', '-NonInteractive', '-File', template / 'tests/Export-TestRosters.ps1',
+              '-Compiler', args.compiler, '-DUnitXSource', args.dunitx, '-OutputRoot', scratch / 'discovery']
+    code, _, log = run('manifest-export', export, template)
     if code:
         raise RuntimeError('Native control discovery failed: ' + log)
+    if args.check_stale_linux_exclusion:
+        stale = 'TestLocalZoneOs.TTestLocalZoneOs.Removed'
+        write(excluded_path, synthetic_exclusions + stale + ' | Stale synthetic exclusion\n')
+        code, text, log = run('stale-linux-exclusion', export, template)
+        if code != 1 or 'Stale Linux exclusion: ' + stale not in text:
+            raise MatrixInfrastructureError('Exporter did not reject the stale synthetic Linux exclusion: ' + log)
+        print(f'MATRIX_STALE_LINUX_EXCLUSION_REJECTED native_exit={code} identity={stale}', flush=True)
+        return 0
 
     routes = args.routes or ['unit', 'stress', 'vcl', 'default-bat', 'default-sh', 'stress-bat', 'stress-sh', 'long-bat', 'long-sh', 'fpc-bat', 'fpc-sh', 'fpc-long-bat', 'fpc-long-sh', 'smoke', 'smoke-heap']
     variants = ['unknown-selector', 'partial-selector', 'renamed-fixture', 'removed-test', 'removed-import', 'extra-test']

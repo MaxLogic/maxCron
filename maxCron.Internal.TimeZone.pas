@@ -72,6 +72,9 @@ type
 // Re-reads the system zone on every call, including its exception behavior.
 function CronSystemTimeZone: ICronTimeZone;
 function CronSystemZoneRules: ICronZoneRules;
+{$IFNDEF MSWINDOWS}
+function CronPreciseLocalNowUs: Int64;
+{$ENDIF}
 // A bounded thread-local memo scoped to one scheduler pass. Nested passes own
 // separate scopes, and the original rule interfaces keep their identity.
 procedure CronBeginZonePeriodMemo;
@@ -91,7 +94,11 @@ function CreateCronTzifLocalTimeZoneForTests(const aInputs: TCronLocalInputsFunc
   const aRecheckUs: Int64): ICronTimeZone;
 function CronTzifLocalOriginForTests(const aZone: ICronTimeZone): string;
 function CreateCronProbeZoneForTests(const aZone: ICronTimeZone): ICronZoneRules;
-// Set before creating a scheduler; nil restores the RTL zone. Tests run serially.
+function CreateCronOsLocalTimeZoneForTests: ICronTimeZone;
+{$IFNDEF MSWINDOWS}
+procedure ForceCronLocalRecheckForTests;
+{$ENDIF}
+// Set before creating a scheduler; nil restores the production zone. Tests run serially.
 procedure SetCronSystemTimeZoneForTests(const aZone: ICronTimeZone);
 {$ENDIF}
 
@@ -147,7 +154,6 @@ type
     function UnexpectedChanges: Int64;
   end;
 {$IFDEF MAXCRON_TESTS}
-function CreateCronOsLocalTimeZoneForTests: ICronTimeZone;
 function CreateCronLocalWindowsSourceForTests: ICronZoneRuleSource;
 function CreateCronWindowsZoneSourceForTests(const aOracle: ICronWindowsZoneOracle): ICronZoneRuleSource;
 function CreateCronNamedWindowsSourceForTests(const aWindowsId: string): ICronZoneRuleSource;
@@ -254,13 +260,6 @@ type
 {$IFDEF MAXCRON_TESTS}
     function GetOrigin: string;
 {$ENDIF}
-  end;
-  TCronRtlLocalTimeZone = class(TInterfacedObject, ICronTimeZone)
-  public
-    function ToUniversalTime(const aLocal: TDateTime; const aForceDaylight: Boolean): TDateTime;
-    function ToLocalTime(const aUtc: TDateTime): TDateTime;
-    function IsAmbiguousTime(const aLocal: TDateTime): Boolean;
-    function IsInvalidTime(const aLocal: TDateTime): Boolean;
   end;
 
 threadvar
@@ -925,11 +924,6 @@ begin
 end;
 
 {$IFDEF MAXCRON_TESTS}
-function CreateCronOsLocalTimeZoneForTests: ICronTimeZone;
-begin
-  Result := TCronOsLocalTimeZone.Create;
-end;
-
 function CreateCronLocalWindowsSourceForTests: ICronZoneRuleSource;
 var
   lInfo: TCronWindowsDynamicInfo;
@@ -1285,26 +1279,57 @@ begin
   end;
 end;
 
-function TCronRtlLocalTimeZone.ToUniversalTime(const aLocal: TDateTime;
-  const aForceDaylight: Boolean): TDateTime;
+{$IFNDEF MSWINDOWS}
+const
+  cCronLocalRecheckUs = 1000000;
+  cCronLocaltimePath = '/etc/localtime';
+
+function CreateCronSystemTzifLocalTimeZone: ICronTimeZone;
 begin
-  Result := TTimeZone.Local.ToUniversalTime(aLocal, aForceDaylight);
+  Result := TCronTzifLocalTimeZone.Create(
+    function: TCronLocalInputs
+    begin
+      Result.TzSet := CronTryGetEnvironmentVariable('TZ', Result.Tz);
+      Result.ZoneRoot := CronZoneDataRoot;
+      Result.LocaltimePath := cCronLocaltimePath;
+    end, cCronLocalRecheckUs);
 end;
 
-function TCronRtlLocalTimeZone.ToLocalTime(const aUtc: TDateTime): TDateTime;
+function CronPreciseLocalNowUs: Int64;
+var
+  lUtc: Int64;
 begin
-  Result := TTimeZone.Local.ToLocalTime(aUtc);
+  lUtc := CronPreciseUtcNowUs;
+  Result := lUtc + CronSystemZoneRules.GetPeriod(CronFloorDiv(lUtc, 1000)).OffsetMs * 1000;
+end;
+{$ENDIF}
+
+{$IFDEF MAXCRON_TESTS}
+function CreateCronOsLocalTimeZoneForTests: ICronTimeZone;
+begin
+  {$IFDEF MSWINDOWS}
+  Result := TCronOsLocalTimeZone.Create;
+  {$ELSE}
+  Result := CreateCronSystemTzifLocalTimeZone;
+  {$ENDIF}
 end;
 
-function TCronRtlLocalTimeZone.IsAmbiguousTime(const aLocal: TDateTime): Boolean;
+{$IFNDEF MSWINDOWS}
+procedure ForceCronLocalRecheckForTests;
+var
+  lZone: TCronTzifLocalTimeZone;
 begin
-  Result := TTimeZone.Local.IsAmbiguousTime(aLocal);
+  lZone := gSystemTimeZone as TCronTzifLocalTimeZone;
+  gZoneLock.Acquire;
+  try
+    lZone.fCheckedUs := 0;
+    lZone.fHasChecked := False;
+  finally
+    gZoneLock.Release;
+  end;
 end;
-
-function TCronRtlLocalTimeZone.IsInvalidTime(const aLocal: TDateTime): Boolean;
-begin
-  Result := TTimeZone.Local.IsInvalidTime(aLocal);
-end;
+{$ENDIF}
+{$ENDIF}
 
 constructor TCronFixedZoneSource.Create(const aOffsetMs: Int64);
 begin
@@ -1854,10 +1879,11 @@ initialization
   {$IFDEF MSWINDOWS} InitializeWindowsZone; {$ENDIF}
   {$IFDEF MSWINDOWS}
   gSystemTimeZone := TCronOsLocalTimeZone.Create;
-  {$ELSE}
-  gSystemTimeZone := TCronRtlLocalTimeZone.Create;
   {$ENDIF}
   gZoneLock := TCriticalSection.Create;
+  {$IFNDEF MSWINDOWS}
+  gSystemTimeZone := CreateCronSystemTzifLocalTimeZone;
+  {$ENDIF}
   gZoneCache := TDictionary<string, ICronZoneRules>.Create;
 {$IFDEF MAXCRON_TESTS}
   gTestZones := TDictionary<string, ICronZoneRules>.Create;

@@ -58,14 +58,12 @@ implementation
 
 uses
   {$IFDEF FPC}
-  Windows,
   Classes, DateUtils, Generics.Collections, Math, SysUtils, System.IOUtils,
   {$ELSE}
   System.Classes, System.DateUtils, System.Generics.Collections, System.IOUtils, System.Math, System.SysUtils,
-  Winapi.Windows,
   {$ENDIF}
   AutoFree,
-  maxCron, maxCron.Internal.TZif, maxCron.Plan, TestZoneFakes;
+  maxCron, maxCron.Internal.TZif, maxCron.Plan, TestZoneFakes, TestEnvironment;
 
 type
   TOverlapMemoryStore = class(TInterfacedObject, IMaxCronScheduleStore)
@@ -688,17 +686,17 @@ procedure TTestLocalOverlap.Curated(const aEngine: string);
 var
   lCases: TArray<TOverlapScenario>;
   s: TOverlapScenario;
-  lOldEngine: string;
+  lSavedEngine: TTestEnvSnapshot;
   lFailures: Integer;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
-  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
-  RegisterCronZoneForTests('Test/Warsaw', FakeZoneSource(0));
-  RegisterCronZoneForTests('Test/LordHowe', FakeZoneSource(3));
-  RegisterCronZoneForTests('Test/TwoHour', FakeZoneSource(6));
-  RegisterCronZoneForTests('Test/NewYork', FakeZoneSource(1));
-  lFailures := 0;
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', aEngine);
+    RegisterCronZoneForTests('Test/Warsaw', FakeZoneSource(0));
+    RegisterCronZoneForTests('Test/LordHowe', FakeZoneSource(3));
+    RegisterCronZoneForTests('Test/TwoHour', FakeZoneSource(6));
+    RegisterCronZoneForTests('Test/NewYork', FakeZoneSource(1));
+    lFailures := 0;
     lCases := OverlapCuratedCases;
     for s in lCases do
       if not CheckOverlapScenario(s, True) then Inc(lFailures);
@@ -706,7 +704,7 @@ begin
     Assert.AreEqual(0, lFailures, 'curated UTC decisions: ' + aEngine);
   finally
     ClearCronZonesForTests;
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
@@ -731,23 +729,24 @@ var
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
   lRows: TStringList;
-  lRow, lOldEngine: string;
+  lRow: string;
+  lSavedEngine: TTestEnvSnapshot;
   lUtcUs, lWallUs, lExpectedUtc, lExpectedWall: Int64;
   lFires, lChecks, lFailures, lRowIndex, lEligible: Integer;
 begin
   GC(lRows, TStringList.Create, g);
   lRows.LoadFromFile(TPath.Combine(ExtractFileDir(ZoneFixtureRoot), 'F1LocalOverlapDeferredRows.jsonl'));
   Assert.AreEqual(1584, lRows.Count, 'exact Q4 deferred corpus');
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
-  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
-  SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('Q4 host', FakeZoneSource(0))));
-  SetMaxCronUtcClockHook(function: Int64 begin Result := lUtcUs; end);
-  lUtcUs := (ZoneMs(2026, 10, 25, 0) - 3 * 3600000) * 1000;
-  lWallUs := lUtcUs + 7200000000;
-  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
-  lChecks := 0;
-  lFailures := 0; lEligible := 0;
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', aEngine);
+    SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('Q4 host', FakeZoneSource(0))));
+    SetMaxCronUtcClockHook(function: Int64 begin Result := lUtcUs; end);
+    lUtcUs := (ZoneMs(2026, 10, 25, 0) - 3 * 3600000) * 1000;
+    lWallUs := lUtcUs + 7200000000;
+    SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+    lChecks := 0;
+    lFailures := 0; lEligible := 0;
     GC(lCron, TmaxCron.Create(ctPortable), g);
     lEvent := lCron.Add('Q4 deferred dispatch');
     lEvent.EventPlan := '30 2 * * *';
@@ -791,7 +790,7 @@ begin
     SetMaxCronUtcClockHook(nil);
     SetMaxCronWallClockHook(nil);
     SetCronSystemTimeZoneForTests(nil);
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
@@ -999,7 +998,7 @@ var
 begin
   lChecks := 0;
   lStep := 720;
-  if FullOverlapQualification or ({$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_FULL_ZONE_PROPERTIES') = '1') then lStep := 1;
+  if FullOverlapQualification or (GetTestEnvironmentVariable('MAXCRON_FULL_ZONE_PROPERTIES') = '1') then lStep := 1;
   for lIndex := 0 to 6 do
   begin
     lDirect := CreateCronZone('direct', FakeZoneSource(lIndex));
@@ -1049,7 +1048,7 @@ begin
   GC(lOracle, TProbePlanOracle.Create, g);
   GC(lOracle.fPlan, TCronSchedulePlan.Create, g);
   lStep := 4320;
-  if FullOverlapQualification or ({$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_FULL_ZONE_PROPERTIES') = '1') then lStep := 1;
+  if FullOverlapQualification or (GetTestEnvironmentVariable('MAXCRON_FULL_ZONE_PROPERTIES') = '1') then lStep := 1;
   GC(lCron, TmaxCron.Create(ctPortable), g);
   lDirectEvent := lCron.Add('probe direct consumer');
   lProbeEvent := lCron.Add('probe consumer');
@@ -1126,10 +1125,11 @@ var
   lInstances: TArray<Int64>;
   s: TOverlapScenario;
   lUtcMs: Int64;
-  lEngine, lOldEngine: string;
+  lEngine: string;
+  lSavedEngine: TTestEnvSnapshot;
   z, f, a: Integer;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   RegisterCronZoneForTests('Test/Warsaw', FakeZoneSource(0));
   RegisterCronZoneForTests('Test/NewYork', FakeZoneSource(1));
   SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('lifecycle host', FakeZoneSource(0))));
@@ -1138,7 +1138,7 @@ begin
   try
     for lEngine in ['scan','heap','shadow','auto'] do
     begin
-      SetEnvironmentVariableW('MAXCRON_ENGINE',PChar(lEngine));
+      SetTestEnvironmentVariable('MAXCRON_ENGINE', lEngine);
       for z := 0 to High(cZones) do for f := 0 to 3 do for a := 0 to 4 do
       begin
         lUtcMs := U(2026,10,24,23,0);
@@ -1169,7 +1169,7 @@ begin
   finally
     lEvent := nil; g.Clear;
     SetMaxCronWallClockHook(nil); SetMaxCronUtcClockHook(nil); SetCronSystemTimeZoneForTests(nil); ClearCronZonesForTests;
-    SetEnvironmentVariableW('MAXCRON_ENGINE',PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
@@ -1196,7 +1196,8 @@ var
   lReviewerKeys: TArray<string>;
   lReviewerKey, lRequiredKey, lSelectedKey: string;
   lRequiredCount: Integer;
-  lPlan, lContext, lFirstFailure, lOldEngine: string;
+  lPlan, lContext, lFirstFailure: string;
+  lSavedEngine: TTestEnvSnapshot;
 
   procedure Check(const aCondition: Boolean; const aField: string);
   begin
@@ -1209,17 +1210,17 @@ var
   end;
 
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
-  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
-  SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('restore host', FakeZoneSource(0))));
-  RegisterCronZoneForTests('Test/RestoreFinite', FakeZoneSource(0));
-  lFirst := U(2026, 10, 25, 0, 30);
-  lSecond := lFirst + 3600000;
-  lValidWall := lFirst + 7200000;
-  SetMaxCronUtcClockHook(function: Int64 begin Result := lNow * 1000; end);
-  lFailures := 0; lChecks := 0; lCases := 0; lFirstFailure := '';
-  lReviewerKeys := nil;
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', aEngine);
+    SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('restore host', FakeZoneSource(0))));
+    RegisterCronZoneForTests('Test/RestoreFinite', FakeZoneSource(0));
+    lFirst := U(2026, 10, 25, 0, 30);
+    lSecond := lFirst + 3600000;
+    lValidWall := lFirst + 7200000;
+    SetMaxCronUtcClockHook(function: Int64 begin Result := lNow * 1000; end);
+    lFailures := 0; lChecks := 0; lCases := 0; lFirstFailure := '';
+    lReviewerKeys := nil;
     for z := 0 to High(cZones) do for f := 0 to 3 do for m := 0 to 2 do
       for t := 0 to 2 do for b := 0 to 1 do for v := 0 to 7 do for h := 0 to 1 do
       begin
@@ -1348,7 +1349,7 @@ begin
       end;
   finally
     SetMaxCronUtcClockHook(nil); SetCronSystemTimeZoneForTests(nil); ClearCronZonesForTests;
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
   // Each engine invocation asserts its four fully qualified keys; the three
   // committed engine cases therefore assert all twelve reviewer scenarios.
@@ -1380,15 +1381,16 @@ var
   lWallUs, lMonoUs, lStart: Int64;
   lMode, lPolicy, lVariant, lFires, lExpected, lFailures, lCases: Integer;
   lEnabled: Boolean;
-  lPlan, lOldEngine, lFirstFailure: string;
+  lPlan, lFirstFailure: string;
+  lSavedEngine: TTestEnvSnapshot;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
-  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
-  lStart := U(2026, 7, 1, 12, 0) * 1000;
-  SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
-  SetMaxCronMonotonicClockHook(function: Int64 begin Result := lMonoUs; end);
-  lFailures := 0; lCases := 0; lFirstFailure := '';
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', aEngine);
+    lStart := U(2026, 7, 1, 12, 0) * 1000;
+    SetMaxCronWallClockHook(function: Int64 begin Result := lWallUs; end);
+    SetMaxCronMonotonicClockHook(function: Int64 begin Result := lMonoUs; end);
+    lFailures := 0; lCases := 0; lFirstFailure := '';
     for lMode := 0 to 1 do for lPolicy := 0 to 2 do for lVariant := 0 to 5 do
     begin
       Inc(lCases);
@@ -1440,7 +1442,7 @@ begin
     end;
   finally
     SetMaxCronWallClockHook(nil); SetMaxCronMonotonicClockHook(nil);
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
   System.WriteLn(Format('RESTORE_INTERVAL_MATRIX engine=%s cases=%d failures=%d first=%s',
     [aEngine, lCases, lFailures, lFirstFailure]));
@@ -1456,16 +1458,17 @@ var
   lStates: TArray<TMaxCronPersistedEvent>;
   lUtcMs: Int64;
   lFires: Integer;
-  lEngine, lOldEngine: string;
+  lEngine: string;
+  lSavedEngine: TTestEnvSnapshot;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('restore host', FakeZoneSource(0))));
   SetMaxCronUtcClockHook(function: Int64 begin Result := lUtcMs*1000; end);
   SetMaxCronWallClockHook(function: Int64 begin Result := CronSystemZoneRules.UtcToLocalMs(lUtcMs) * 1000; end);
   try
     for lEngine in ['scan','heap','shadow','auto'] do
     begin
-      SetEnvironmentVariableW('MAXCRON_ENGINE',PChar(lEngine));
+      SetTestEnvironmentVariable('MAXCRON_ENGINE', lEngine);
       lUtcMs := U(2026,10,24,23,59);
       lStore := TOverlapMemoryStore.Create;
       GC(lCron,TmaxCron.Create(ctPortable),g);
@@ -1492,7 +1495,7 @@ begin
   finally
     lEvent := nil; lStore := nil; g.Clear;
     SetMaxCronWallClockHook(nil); SetMaxCronUtcClockHook(nil); SetCronSystemTimeZoneForTests(nil);
-    SetEnvironmentVariableW('MAXCRON_ENGINE',PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
@@ -1609,15 +1612,16 @@ var
   lLocal, lUtc: IMaxCronEvent;
   lUtcMs: Int64;
   lLocalFires, lUtcFires: Integer;
-  lEngine, lOldEngine: string;
+  lEngine: string;
+  lSavedEngine: TTestEnvSnapshot;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   SetMaxCronUtcClockHook(function: Int64 begin Result := lUtcMs*1000; end);
   SetMaxCronWallClockHook(function: Int64 begin Result := CronSystemZoneRules.UtcToLocalMs(lUtcMs) * 1000; end);
   try
     for lEngine in ['scan','heap','shadow','auto'] do
     begin
-      SetEnvironmentVariableW('MAXCRON_ENGINE',PChar(lEngine));
+      SetTestEnvironmentVariable('MAXCRON_ENGINE', lEngine);
       SetCronSystemTimeZoneForTests(TZoneAsSystemZone.Create(CreateCronZone('old host',FakeZoneSource(0))));
       lUtcMs := U(2026,7,1,11,59); lLocalFires := 0; lUtcFires := 0;
       GC(lCron,TmaxCron.Create(ctPortable),g);
@@ -1636,7 +1640,7 @@ begin
   finally
     lLocal := nil; lUtc := nil; g.Clear;
     SetMaxCronWallClockHook(nil); SetMaxCronUtcClockHook(nil); SetCronSystemTimeZoneForTests(nil);
-    SetEnvironmentVariableW('MAXCRON_ENGINE',PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
@@ -1791,20 +1795,21 @@ const
 var
   lSource: ICronZoneRuleSource;
   lChange: TZoneChange;
-  lOldEngine, lPath, lError: string;
+  lPath, lError: string;
+  lSavedEngine: TTestEnvSnapshot;
   lCases, lFires, lBefore: Int64;
   h, st, r, d, lFirstHost, lLastHost: Integer;
 begin
-  lOldEngine := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_ENGINE');
-  SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(aEngine));
-  lCases := 0; lFires := 0;
-  lFirstHost := 0; lLastHost := 3;
-  if aTzifHosts then
-  begin
-    lFirstHost := 4; lLastHost := 6;
-  end;
-  RegisterCronZoneForTests('Test/NewYork', FakeZoneSource(1));
+  lSavedEngine := SaveTestEnvironmentVariable('MAXCRON_ENGINE');
   try
+    SetTestEnvironmentVariable('MAXCRON_ENGINE', aEngine);
+    lCases := 0; lFires := 0;
+    lFirstHost := 0; lLastHost := 3;
+    if aTzifHosts then
+    begin
+      lFirstHost := 4; lLastHost := 6;
+    end;
+    RegisterCronZoneForTests('Test/NewYork', FakeZoneSource(1));
     for h := lFirstHost to lLastHost do
     begin
       if h < 4 then
@@ -1839,7 +1844,7 @@ begin
   finally
     gMatrixHost := nil; gMatrixChanges := nil;
     ClearCronZonesForTests;
-    SetEnvironmentVariableW('MAXCRON_ENGINE', PChar(lOldEngine));
+    RestoreTestEnvironmentVariable(lSavedEngine);
   end;
 end;
 
