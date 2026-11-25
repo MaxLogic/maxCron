@@ -17,13 +17,13 @@ uses
   TestCronTextParity in '..\unit\TestCronTextParity.pas',
   TestCronUtilsCorpus in '..\unit\TestCronUtilsCorpus.pas',
   TestDeadlineQueue in '..\unit\TestDeadlineQueue.pas',
+  TestEnvironment in '../unit/TestEnvironment.pas',
   TestFpcShims in 'TestFpcShims.pas',
   TestHashJitter in '..\unit\TestHashJitter.pas',
   TestIntervalPlan in '..\unit\TestIntervalPlan.pas',
   {$IFDEF MSWINDOWS}
   TestLocalZoneOs in '..\unit\TestLocalZoneOs.pas',
   {$ELSE}
-  TestEnvironment in '../unit/TestEnvironment.pas',
   TestLocalZoneUnix in '../unit/TestLocalZoneUnix.pas',
   {$ENDIF}
   TestLocalOverlap in '..\unit\TestLocalOverlap.pas',

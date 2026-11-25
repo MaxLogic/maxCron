@@ -1069,12 +1069,11 @@ across 30-minute and two-hour changes.
 
 `NextSchedule`, `LastExecution` and persisted schedule values remain host-local
 display times. Repeated instances can therefore share one displayed value.
-LOCAL follows a host-zone change on the next scheduler pass; UTC, fixed-offset
-and named occurrences retain their UTC dues. Interval deadlines remain monotonic.
-
-On non-Windows Delphi, the system-zone adapter probes the RTL's offset rules;
-this requires offset changes to be at least 15 minutes apart. Windows uses its
-native conversion rules on both compilers.
+On Windows, LOCAL uses native conversion rules on both compilers and picks up
+a host-zone change on the next scheduler pass. On Linux, LOCAL picks up a
+host-zone change at the next recheck, within about 1 second, and uses cached
+TZif rules between rechecks. UTC, fixed-offset and named occurrences retain
+their UTC dues. Interval deadlines remain monotonic.
 
 ## Business calendar exclusions
 
@@ -1148,7 +1147,9 @@ certified default runs on x86_64 WSL had the following counts.
 The `delphi` lane builds on Windows from WSL and runs in Linux. Set
 `MAXCRON_ROSTER_OUT` to choose its Linux output root. `MAXCRON_BUILD_ROOT`,
 `MAXCRON_DCCLINUX64` and `MAXCRON_LINUX_SDK` are Windows paths for the build
-root, compiler and SDK.
+root, compiler and SDK. DUnitX's leak counter is inactive on Linux, so the
+`delphi` lane cannot detect memory leaks. The Windows Delphi gates and the
+FPC heaptrc entries provide leak coverage.
 
 Set `MAXCRON_FPC` to the Linux x86_64 FPC 3.3.1 driver, with `fpc.cfg` beside
 it. `MAXCRON_FPC_OUT` chooses the Linux output root for both FPC lanes.
@@ -1172,10 +1173,11 @@ rejected by `fpc-aarch64`. The certified long runs passed 531 Delphi tests and
 `MAXCRON_DEBUG_SAFETY=1` selects a Delphi Debug build or enables FPC runtime
 checks. The lanes pass through `MAXCRON_STRESS`.
 `MAXCRON_LINUX_TIMEOUT_SECONDS` overrides each runner's timeout directly.
-`MAXCRON_LINUX_PREBUILT` runs an existing lane layout without rebuilding.
-For a default `delphi` run, point it at the directory containing `unit` and
-`stress`. For `fpc`, use the directory containing `tests`, `smoke` and
-`smoke-heaptrc`. Use binaries and a source checkout from the same revision.
+`MAXCRON_LINUX_PREBUILT` trusts the supplied lane layout and runs it without
+rebuilding. Use it only with binaries produced by a gate run of the same commit,
+and verify their hashes before running. For a default `delphi` run, point it
+at the directory containing `unit` and `stress`. For `fpc`, use the directory
+containing `tests`, `smoke` and `smoke-heaptrc`.
 Tests that cannot run on Linux are listed in `tests/linux/LinuxExcluded.txt`.
 
 ### Windows gates
@@ -1363,7 +1365,7 @@ was cancelled after hours, so a completed full-run baseline is not yet available
 
 The maxCron syntax corpus is stored in `tests/data/cron-valid.txt`.
 
-The upstream-derived Unix five-field corpus also lives under `tests/data/`.
+Our upstream-derived cron corpus used by tests is stored in `tests/data/cron-utils-unix-5field.txt`.
 Negative corpus (expected to fail parse) is stored in `tests/data/cron-invalid.txt`.
 
 Optional runners:
