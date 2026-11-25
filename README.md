@@ -28,6 +28,7 @@ unit-qualified RTTI names now use `maxCron.Plan` (for example,
 | Windows x64 | FPC trunk 3.3.1 | High-resolution waits |
 | Linux x86_64 | Delphi 12 Linux64 | Millisecond waits |
 | Linux x86_64 | FPC trunk 3.3.1 | Millisecond waits |
+| Linux aarch64 (tested under qemu-user) | FPC trunk 3.3.1 | Millisecond waits |
 
 `ctVcl`, `maxCronHlpDlg`, the VCL test runner, the Windows zone provider
 and `MAXCRON_TIMER_RESOLUTION` are Windows-only. Other Delphi targets are untested.
@@ -39,7 +40,7 @@ binary on the Linux target, with `tzdata` installed for LOCAL and named zones.
 
 ## Free Pascal (FPC)
 
-Windows x64 and Linux x86_64 are supported with FPC trunk 3.3.1, built from
+Windows x64 and Linux x86_64/aarch64 are supported with FPC trunk 3.3.1, built from
 `https://gitlab.com/freepascal.org/fpc/source` main commit
 `ad23c1f3ddadfe9b82768d4f9f8fa5e5783c21ec` (2026-11-15). FPC 3.2.x lacks the
 anonymous-method support required here. `maxCron.inc` rejects older versions and
@@ -60,9 +61,9 @@ configuration and units from the same installation.
 "<fpc-root>\bin\x86_64-win64\fpc.exe" -n "@<fpc-root>\bin\x86_64-win64\fpc.cfg" "-FD<fpc-root>\bin\x86_64-win64" "-Fu<fpc-root>\units\x86_64-win64\*" "-Fu<maxCron folder>" "<your program>"
 ```
 
-On Linux, use the native x86_64 build of the same compiler revision. List
-`cthreads` first in the program's `uses` clause, followed by `cwstring` for Unicode conversions. Install `tzdata` for LOCAL
-and named zones.
+On Linux, use the same compiler revision with the units for your target.
+List `cthreads` first in the program's `uses` clause, followed by `cwstring`
+for Unicode conversions. Install `tzdata` for LOCAL and named zones.
 
 The units set `delphiunicode`, `anonymousfunctions` and `functionreferences`
 through `maxCron.inc`, with real constants kept at Double precision.
@@ -1114,7 +1115,20 @@ smokes. Set `MAXCRON_FPC` to the Linux x86_64 FPC 3.3.1 driver, with `fpc.cfg`
 beside it. `MAXCRON_FPC_OUT` sets the native Linux output root and uses the same
 default as the Delphi lane.
 
-Both lanes pass through `MAXCRON_STRESS`. The explicit Linux exclusions are
+On Linux x86_64, run `./build-and-run-tests-linux.sh fpc-aarch64` to
+cross-compile the default FPC suite and both smokes and run them with
+`qemu-aarch64`. Use the same FPC installation with `ppcrossa64` and aarch64
+RTL units installed. Put `qemu-aarch64` on `PATH` and install the
+`aarch64-linux-gnu-` binutils. The gate looks for the aarch64 GCC startup
+objects in the sysroot's `lib` directory first, then in the installed cross
+GCC directories. On Ubuntu 26.04 the startup objects come from
+`libgcc-15-dev-arm64-cross`.
+`MAXCRON_AARCH64_SYSROOT` selects the aarch64 glibc sysroot, defaulting to
+`/usr/aarch64-linux-gnu`. The aarch64 gate rejects `MAXCRON_LONG_TESTS=1` and
+gives emulated runners four times the normal timeout. A diagnostic timeout
+override applies directly.
+
+The Linux lanes pass through `MAXCRON_STRESS`. The explicit Linux exclusions are
 in `tests/linux/LinuxExcluded.txt`.
 
 The `build-and-run-tests.bat` and `build-and-run-tests-stress.bat` gates (and
@@ -1231,7 +1245,7 @@ paired Windows `.sh` and `.bat` entry points use the same gate and exit codes.
 | --- | ---: | --- | ---: | ---: |
 | Delphi default `build-and-run-tests.bat` / `.sh` | 0 | 3, including a native runner returning 1 or 2 | 5 | 124 |
 | Delphi Linux `build-and-run-tests-linux.sh delphi` | 0 | 1 for test failure; 2 for configuration; 3 for build or infrastructure | 5 | 124 |
-| FPC Linux `build-and-run-tests-linux.sh fpc` | 0 | 1 for test or heap failure; 2 for tool or output configuration; 3 for build or infrastructure | 5 | 124 |
+| FPC Linux `build-and-run-tests-linux.sh fpc` or `fpc-aarch64` | 0 | 1 for test or heap failure; 2 for tool or output configuration; 3 for build or infrastructure | 5 | 124 |
 | Delphi stress `build-and-run-tests-stress.bat` / `.sh` | 0 | 3, including a native runner returning 1 or 2 | 5 | 124 |
 | Delphi long `build-and-run-tests-long.bat` / `.sh` | 0 | 3, including build failure, native runner error 2, or invalid helper output | 5 | 124 |
 | FPC gate `build-and-run-tests-fpc.bat` / `.sh` | 0 | 1 for test/heap/result failure; 2 for tool/output configuration; 3 for build, generator or parity infrastructure failure | 5 | 124 |

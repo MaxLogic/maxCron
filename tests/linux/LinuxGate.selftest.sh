@@ -199,4 +199,80 @@ if [[ -e $tool_root ]]; then
 fi
 sed -i -e 's/i386/x86_64/' -e 's/exit 99/exit 0/' "$scratch/tool/fpc"
 check_fpc missing-build-output 3 '^LINUX GATE FAILED reason=build .*check-public/maxCronFpcCompileCheck.*native exit 0' "${fpc_tool[@]}"
+
+mkdir -- "$scratch/host-bin" "$scratch/sysroot" "$scratch/sysroot/lib"
+ln -s -- "$(command -v uname)" "$scratch/host-bin/uname"
+arm_root="$scratch/arm-runs"
+arm_env=(env -u MAXCRON_LONG_TESTS -u MAXCRON_FPC
+    MAXCRON_LINUX_PREBUILT="$scratch"
+    MAXCRON_FPC_OUT="$arm_root" MAXCRON_AARCH64_SYSROOT="$scratch/sysroot"
+    MAXCRON_LINUX_TIMEOUT_SECONDS=2)
+arm_gate=("$BASH" "$repo/build-and-run-tests-linux.sh" fpc-aarch64)
+check_fpc arm-no-qemu 2 '^LINUX GATE FAILED reason=configuration .*qemu-aarch64' \
+    "${arm_env[@]}" PATH="$scratch/host-bin" "${arm_gate[@]}"
+cat > "$scratch/host-bin/qemu-aarch64" <<'EOF'
+#!/bin/bash
+[[ $1 == -L && -f $2/lib/ld-linux-aarch64.so.1 ]] || exit 99
+shift 2
+printf 'qemu stub ran %s\n' "$1"
+exec "$@"
+EOF
+chmod +x -- "$scratch/host-bin/qemu-aarch64"
+check_fpc arm-no-loader 2 '^LINUX GATE FAILED reason=configuration .*ld-linux-aarch64\.so\.1' \
+    "${arm_env[@]}" PATH="$scratch/host-bin" "${arm_gate[@]}"
+if [[ -e $arm_root ]]; then
+    printf 'FAIL fpc-arm-host-check allocated an output directory\n' >&2
+    ((failures += 1))
+fi
+
+: > "$scratch/sysroot/lib/ld-linux-aarch64.so.1"
+make_stub "$scratch/tests/maxCronFpcTests" FpcLinux pass
+write_heap_summary "$scratch/tests/maxCronFpcTests" 0
+check_fpc arm-pass 0 '^LINUX GATE PASSED \(fpc-aarch64, [1-9][0-9]* tests\)$' \
+    "${arm_env[@]}" PATH="$scratch/host-bin:/usr/bin:/bin" "${arm_gate[@]}"
+if [[ $(grep -c '^qemu stub ran ' "$scratch/fpc-arm-pass.log") != 3 ]]; then
+    printf 'FAIL fpc-arm-pass did not invoke qemu for all three entries\n' >&2
+    ((failures += 1))
+fi
+
+check_arm_rejected() {
+    local scenario=$1 reason=$2 root="$scratch/$1-out"
+    shift 2
+    check_fpc "$scenario" 2 "$reason" "${arm_env[@]}" MAXCRON_FPC_OUT="$root" "$@" "${arm_gate[@]}"
+    if [[ -e $root ]]; then
+        printf 'FAIL fpc-%s allocated an output directory\n' "$scenario" >&2
+        ((failures += 1))
+    fi
+}
+
+# Simulate an absent cross GCC path without changing the installed toolchain.
+cat > "$scratch/host-bin/sort" <<'EOF'
+#!/bin/bash
+cat >/dev/null
+printf '%s\n' "${0%/*}/missing-gcc"
+EOF
+chmod +x -- "$scratch/host-bin/sort"
+sed -i 's/x86_64/aarch64/' "$scratch/tool/fpc"
+arm_build=(PATH="$scratch/host-bin:/usr/bin:/bin" MAXCRON_LINUX_PREBUILT= MAXCRON_FPC="$scratch/tool/fpc")
+missing_pair='^LINUX GATE FAILED reason=configuration .*crtbegin\.o.*crtend\.o'
+check_arm_rejected arm-no-gcc "$missing_pair" "${arm_build[@]}"
+mkdir -- "$scratch/host-bin/missing-gcc"
+: > "$scratch/host-bin/missing-gcc/crtend.o"
+: > "$scratch/sysroot/lib/crtbegin.o"
+check_arm_rejected arm-split-gcc "$missing_pair" "${arm_build[@]}"
+
+: > "$scratch/sysroot/lib/crtend.o"
+# The compiler stub returns success without a binary. Reaching this build
+# diagnostic proves that the sysroot pair passed configuration.
+check_fpc arm-sysroot-gcc 3 '^LINUX GATE FAILED reason=build .*check-public/maxCronFpcCompileCheck.*native exit 0' \
+    "${arm_env[@]}" MAXCRON_FPC_OUT="$scratch/arm-sysroot-gcc-out" "${arm_build[@]}" "${arm_gate[@]}"
+check_arm_rejected arm-long '^LINUX GATE FAILED reason=configuration .*MAXCRON_LONG_TESTS=1' \
+    PATH="$scratch/host-bin:/usr/bin:/bin" MAXCRON_LONG_TESTS=1
+
+for tool in dirname mkdir date mktemp cp chmod cat sed; do
+    ln -s -- "$(command -v "$tool")" "$scratch/host-bin/$tool"
+done
+chmod -x -- "$scratch/host-bin/qemu-aarch64"
+check_arm_rejected arm-nonexec-qemu '^LINUX GATE FAILED reason=configuration .*executable qemu-aarch64' \
+    PATH="$scratch/host-bin"
 ((failures == 0))

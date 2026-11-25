@@ -22,26 +22,43 @@ if [[ $# != 1 ]]; then
 fi
 lane=$1
 case "$lane" in
-    delphi|fpc) ;;
-    fpc-aarch64) configuration_error "The $lane Linux lane is not available yet." ;;
+    delphi|fpc|fpc-aarch64) ;;
     *) reject_roster arguments count "Unsupported Linux lane: $lane" ;;
 esac
 
-[[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] ||
-    configuration_error "The $lane gate requires an x86_64 Linux host."
+[[ $(uname -s) == Linux ]] || configuration_error "The $lane gate requires Linux."
+fpc_cpu=x86_64
+cross_flags=()
+emulator=()
+long=${MAXCRON_LONG_TESTS:-0}
+if [[ $lane == fpc-aarch64 ]]; then
+    [[ $long != 1 ]] ||
+        configuration_error 'The fpc-aarch64 gate runs the default suite. Unset MAXCRON_LONG_TESTS=1.'
+    qemu=$(type -P qemu-aarch64) && [[ -f $qemu && -x $qemu ]] ||
+        configuration_error 'The fpc-aarch64 gate requires an executable qemu-aarch64 on PATH.'
+    [[ $qemu == /* ]] || qemu="$PWD/$qemu"
+    sysroot=${MAXCRON_AARCH64_SYSROOT:-/usr/aarch64-linux-gnu}
+    [[ $sysroot == /* ]] || sysroot="$PWD/$sysroot"
+    [[ -f $sysroot/lib/ld-linux-aarch64.so.1 ]] ||
+        configuration_error "Missing aarch64 loader: $sysroot/lib/ld-linux-aarch64.so.1"
+    fpc_cpu=aarch64
+    emulator=("$qemu" -L "$sysroot")
+else
+    [[ $(uname -m) == x86_64 ]] ||
+        configuration_error "The $lane gate requires an x86_64 Linux host."
+fi
 [[ -n ${HOME:-} ]] || configuration_error 'HOME must be set.'
 root_setting=MAXCRON_ROSTER_OUT
-[[ $lane != fpc ]] || root_setting=MAXCRON_FPC_OUT
+[[ $lane == delphi ]] || root_setting=MAXCRON_FPC_OUT
 root=${!root_setting:-"$HOME/dev-artifacts/runs/maxCron"}
 [[ $root =~ ^/[A-Za-z0-9/._+-]*$ ]] ||
     configuration_error "$root_setting must be an absolute Linux path using only A-Z, a-z, 0-9, /, ., _, + or -."
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) ||
     configuration_error 'Cannot resolve the repository path.'
 prebuilt=${MAXCRON_LINUX_PREBUILT:-}
-long=${MAXCRON_LONG_TESTS:-0}
 runner_seconds=7200
 [[ $long != 1 ]] || runner_seconds=172800
-if [[ $lane == fpc ]]; then
+if [[ $lane != delphi ]]; then
     entries=(tests smoke smoke-heaptrc)
     manifests=(FpcLinux FpcSmoke FpcSmokeHeap)
     programs=(maxCronFpcTests maxCronFpcSmoke maxCronFpcSmoke)
@@ -61,6 +78,11 @@ else
     limits=("$runner_seconds" "$runner_seconds")
     gate_name=DelphiLinuxGate
 fi
+if [[ $lane == fpc-aarch64 ]]; then
+    for i in "${!limits[@]}"; do
+        limits[i]=$((4 * limits[i]))
+    done
+fi
 time_override=${MAXCRON_LINUX_TIMEOUT_SECONDS:-}
 [[ -z $time_override || $time_override =~ ^[1-9][0-9]*$ ]] ||
     configuration_error 'MAXCRON_LINUX_TIMEOUT_SECONDS must be a positive integer.'
@@ -69,7 +91,8 @@ fpc_flags=()
 child_path=/usr/bin:/bin
 check_fpc_tool() {
     local option=$1 expected=$2 actual
-    actual=$(env -i "PATH=$child_path" "HOME=$HOME" LANG=C.UTF-8 "$fpc" "${fpc_flags[@]}" "$option" 2>&1) ||
+    actual=$(env -i "PATH=$child_path" "HOME=$HOME" LANG=C.UTF-8 \
+        "$fpc" "${fpc_flags[@]}" "${cross_flags[@]}" "$option" 2>&1) ||
         configuration_error "FPC $option failed: $actual"
     [[ $actual == "$expected" ]] ||
         configuration_error "FPC $option must report $expected; got $actual."
@@ -94,10 +117,29 @@ else
         configuration_error 'MAXCRON_FPC must name an executable FPC driver with fpc.cfg beside it.'
     child_path="$fpc_bin:$child_path"
     fpc_flags=(-n "@$fpc_bin/fpc.cfg")
+    if [[ $lane == fpc-aarch64 ]]; then
+        startup_dir="$sysroot/lib"
+        if [[ ! -f $startup_dir/crtbegin.o || ! -f $startup_dir/crtend.o ]]; then
+            startup_dir=
+            while IFS= read -r gcc_dir; do
+                if [[ -f $gcc_dir/crtbegin.o && -f $gcc_dir/crtend.o ]]; then
+                    startup_dir=$gcc_dir
+                    break
+                fi
+            done < <(printf '%s\n' /usr/lib/gcc-cross/aarch64-linux-gnu/[0-9]* | sort -Vr)
+        fi
+        [[ -n $startup_dir ]] ||
+            configuration_error "Missing aarch64 GCC startup objects crtbegin.o and crtend.o as a pair in $sysroot/lib or a version directory under /usr/lib/gcc-cross/aarch64-linux-gnu."
+        startup_dir=$(realpath -e -- "$startup_dir") ||
+            configuration_error 'Cannot resolve the aarch64 GCC startup-object directory.'
+        # Search the complete pair first. Keep the sysroot library path for libc.
+        cross_flags=(-Paarch64 -Tlinux -XPaarch64-linux-gnu- "-XR$sysroot" -Xd
+            "-Fl$startup_dir" "-Fl$sysroot/lib")
+    fi
     check_fpc_tool -iV 3.3.1
     check_fpc_tool -iTO linux
-    check_fpc_tool -iTP x86_64
-    printf 'FPC 3.3.1 x86_64-linux at %s\n' "$fpc"
+    check_fpc_tool -iTP "$fpc_cpu"
+    printf 'FPC 3.3.1 %s-linux at %s\n' "$fpc_cpu" "$fpc"
 fi
 
 mkdir -p -- "$root" || fail_gate 3 output "Cannot create output root: $root"
@@ -127,7 +169,18 @@ build_fpc_program() {
         fail_gate 3 build "FPC must produce $name/$program (native exit $rc)."
 }
 
-if [[ -z $prebuilt && $lane == fpc ]]; then
+verify_aarch64_startup_objects() {
+    local map=$1 loads
+    loads=$(grep -E '^LOAD (.*/)?crt(begin|end)\.o$' "$map") ||
+        fail_gate 3 build "Missing aarch64 startup-object LOAD records in $map."
+    if [[ $loads != "LOAD $startup_dir/crtbegin.o"$'\n'"LOAD $startup_dir/crtend.o" ]]; then
+        printf '%s\n' "$loads" >&2
+        fail_gate 3 build "Expected both aarch64 startup objects from $startup_dir in $map."
+    fi
+    printf 'FPC AARCH64 STARTUP OBJECTS VERIFIED %s\n%s\n' "$startup_dir" "$loads"
+}
+
+if [[ -z $prebuilt && $lane != delphi ]]; then
     fpc_flags+=("-Fu$repo" "-Fu$repo/tests" "-Fi$repo")
     if [[ ${MAXCRON_DEBUG_SAFETY:-} == 1 ]]; then
         fpc_flags+=(-O- -gl -Cr -Co -Ct -Ci -Sa)
@@ -135,18 +188,24 @@ if [[ -z $prebuilt && $lane == fpc ]]; then
         fpc_flags+=(-O2 -gl)
     fi
     [[ $long != 1 ]] || fpc_flags+=(-dMAXCRON_LONG_TESTS)
-    build_fpc_program check-public maxCronFpcCompileCheck
-    build_fpc_program check-tests maxCronFpcCompileCheck -dMAXCRON_TESTS
+    if [[ $lane == fpc-aarch64 ]]; then
+        startup_map="$run/check-public/link.map"
+        build_fpc_program check-public maxCronFpcCompileCheck "${cross_flags[@]}" "-k-Map=$startup_map"
+        verify_aarch64_startup_objects "$startup_map"
+    else
+        build_fpc_program check-public maxCronFpcCompileCheck
+    fi
+    build_fpc_program check-tests maxCronFpcCompileCheck "${cross_flags[@]}" -dMAXCRON_TESTS
     build_fpc_program gen maxCronFpcRegistryGen -vm4104,4105
     registry="$run/gen/maxCronFpcRegistry.inc"
     (cd -- "$run/gen" && "${child_env[@]}" ./maxCronFpcRegistryGen "$repo" "$registry") > "$run/gen/run.log" 2>&1
     rc=$?
     cat -- "$run/gen/run.log" || fail_gate 3 log "Cannot read $run/gen/run.log"
     [[ $rc == 0 && -s $registry ]] || fail_gate 3 build "FPC registry generation failed (native exit $rc)."
-    build_fpc_program tests maxCronFpcTests -dMAXCRON_TESTS -gh -vm4104,4105 \
+    build_fpc_program tests maxCronFpcTests "${cross_flags[@]}" -dMAXCRON_TESTS -gh -vm4104,4105 \
         "-Fu$repo/tests/fpc" "-Fu$repo/tests/unit" "-Fi$run/gen"
-    build_fpc_program smoke maxCronFpcSmoke
-    build_fpc_program smoke-heaptrc maxCronFpcSmoke -gh -dMAXCRON_FPC_SMOKE_NOPOOL
+    build_fpc_program smoke maxCronFpcSmoke "${cross_flags[@]}"
+    build_fpc_program smoke-heaptrc maxCronFpcSmoke "${cross_flags[@]}" -gh -dMAXCRON_FPC_SMOKE_NOPOOL
 elif [[ -z $prebuilt ]]; then
     win_build=$(wslpath -w -a "$repo/tests/linux/Build-DelphiLinux64.ps1") ||
         fail_gate 3 build 'Cannot resolve the Windows build script path.'
@@ -172,7 +231,7 @@ elif [[ -z $prebuilt ]]; then
 fi
 
 for i in "${!entries[@]}"; do
-    if [[ -z $prebuilt && $lane == fpc ]]; then
+    if [[ -z $prebuilt && $lane != delphi ]]; then
         break
     fi
     work="$run/${entries[i]}"
@@ -269,7 +328,7 @@ for i in "${!entries[@]}"; do
             ;;
     esac
     (cd -- "$work" && "${run_env[@]}" timeout --kill-after=30 \
-        "${time_override:-${limits[i]}}" "./${programs[i]}") > "$log" 2>&1
+        "${time_override:-${limits[i]}}" "${emulator[@]}" "./${programs[i]}") > "$log" 2>&1
     rc=$?
     cat -- "$log" || fail_gate 3 log "Cannot read $log"
     # DUnitX emits ANSI CSI sequences even with redirected output.
