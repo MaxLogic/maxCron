@@ -50,6 +50,9 @@ type
 
 function ZoneMs(const aYear, aMonth, aDay, aHour: Word; const aMinute: Word = 0): Int64;
 function ZoneFixtureRoot: string;
+{$IFNDEF MSWINDOWS}
+function WarsawFixturePath: string;
+{$ENDIF}
 function FakeZoneSource(const aIndex: Integer): ICronZoneRuleSource;
 function FakeZoneChanges(const aIndex: Integer; out aInitial: Int64): TArray<TZoneChange>;
 function ReferenceMapping(const aInitial: Int64; const aChanges: TArray<TZoneChange>;
@@ -109,6 +112,16 @@ begin
   Result := {$IFDEF FPC}SysUtils.{$ENDIF}GetEnvironmentVariable('MAXCRON_TEST_TZDIR');
   if not DirectoryExists(Result) then raise Exception.Create('Test TZif fixtures not found');
 end;
+
+{$IFNDEF MSWINDOWS}
+function WarsawFixturePath: string;
+begin
+  Result := IncludeTrailingPathDelimiter(ZoneFixtureRoot) + 'Europe/Warsaw';
+  // Let the kernel follow symlinks before it resolves any parent components.
+  if Result[1] <> PathDelim then
+    Result := IncludeTrailingPathDelimiter(GetCurrentDir) + Result;
+end;
+{$ENDIF}
 
 constructor TFakeZoneSource.Create(const aInitial: Int64; const aChanges: array of TZoneChange);
 var

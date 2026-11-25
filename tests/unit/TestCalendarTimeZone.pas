@@ -54,32 +54,54 @@ type
 implementation
 
 uses
-  maxCron.Internal.TimeZone, TestZoneFakes;
+  maxCron.Internal.TimeZone,
+  {$IFNDEF MSWINDOWS}
+  TestEnvironment,
+  {$ENDIF}
+  TestZoneFakes;
 
 procedure TTestCalendarTimeZone.TransitionSelection_PreservesSchedulingMargin;
 var
   lTransition, lNow, lSelected: TDateTime;
+  {$IFNDEF MSWINDOWS}
+  lSavedTz: TTestEnvSnapshot;
+  {$ENDIF}
 begin
-  if TryFindInvalidLocalTime(EncodeDate(2027, 1, 1), lTransition) then
-  begin
-    lNow := IncMilliSecond(lTransition, -1);
-    Assert.IsTrue(TryFindInvalidLocalTime(lNow, lSelected));
-    Assert.IsTrue(lSelected >= IncHour(lNow), 'Transition needs at least one hour of scheduling margin');
-    lNow := EncodeDateTime(2027, 12, 31, 23, 59, 59, 999);
-    Assert.IsTrue(TryFindInvalidLocalTime(lNow, lSelected));
-    Assert.IsTrue(lSelected >= IncHour(lNow), 'Year rollover must preserve the scheduling margin');
-    Assert.IsTrue(YearOf(lSelected) >= 2028);
+  {$IFNDEF MSWINDOWS}
+  lSavedTz := SaveTestEnvironmentVariable('TZ');
+  try
+    SetTestEnvironmentVariable('TZ', ':' + WarsawFixturePath);
+    TestLibcTzset;
+    ForceCronLocalRecheckForTests;
+  {$ENDIF}
+    if TryFindInvalidLocalTime(EncodeDate(2027, 1, 1), lTransition) then
+    begin
+      lNow := IncMilliSecond(lTransition, -1);
+      Assert.IsTrue(TryFindInvalidLocalTime(lNow, lSelected));
+      Assert.IsTrue(lSelected >= IncHour(lNow), 'Transition needs at least one hour of scheduling margin');
+      lNow := EncodeDateTime(2027, 12, 31, 23, 59, 59, 999);
+      Assert.IsTrue(TryFindInvalidLocalTime(lNow, lSelected));
+      Assert.IsTrue(lSelected >= IncHour(lNow), 'Year rollover must preserve the scheduling margin');
+      Assert.IsTrue(YearOf(lSelected) >= 2028);
+    end;
+    if TryFindAmbiguousLocalTime(EncodeDate(2027, 1, 1), lTransition) then
+    begin
+      lNow := IncMilliSecond(lTransition, -1);
+      Assert.IsTrue(TryFindAmbiguousLocalTime(lNow, lSelected));
+      Assert.IsTrue(lSelected >= IncHour(lNow), 'Transition needs at least one hour of scheduling margin');
+      lNow := EncodeDateTime(2027, 12, 31, 23, 59, 59, 999);
+      Assert.IsTrue(TryFindAmbiguousLocalTime(lNow, lSelected));
+      Assert.IsTrue(lSelected >= IncHour(lNow), 'Year rollover must preserve the scheduling margin');
+      Assert.IsTrue(YearOf(lSelected) >= 2028);
+    end;
+  {$IFNDEF MSWINDOWS}
+  finally
+    RestoreTestEnvironmentVariable(lSavedTz);
+    TestLibcTzset;
+    ForceCronLocalRecheckForTests;
+    CronSystemZoneRules;
   end;
-  if TryFindAmbiguousLocalTime(EncodeDate(2027, 1, 1), lTransition) then
-  begin
-    lNow := IncMilliSecond(lTransition, -1);
-    Assert.IsTrue(TryFindAmbiguousLocalTime(lNow, lSelected));
-    Assert.IsTrue(lSelected >= IncHour(lNow), 'Transition needs at least one hour of scheduling margin');
-    lNow := EncodeDateTime(2027, 12, 31, 23, 59, 59, 999);
-    Assert.IsTrue(TryFindAmbiguousLocalTime(lNow, lSelected));
-    Assert.IsTrue(lSelected >= IncHour(lNow), 'Year rollover must preserve the scheduling margin');
-    Assert.IsTrue(YearOf(lSelected) >= 2028);
-  end;
+  {$ENDIF}
 end;
 
 
@@ -279,34 +301,52 @@ var
   lCron: TmaxCron;
   lSkipEvent: IMaxCronEvent;
   lShiftEvent: IMaxCronEvent;
+  {$IFNDEF MSWINDOWS}
+  lSavedTz: TTestEnvSnapshot;
+  {$ENDIF}
 begin
-  if not TryFindInvalidLocalTime(lInvalid) then
-    Exit;
-
-  lPlan := Format('%d %d %d %d * %d 0 1',
-    [MinuteOf(lInvalid), HourOf(lInvalid), DayOf(lInvalid), MonthOf(lInvalid), YearOf(lInvalid)]);
-
-  lCron := TmaxCron.Create(ctPortable);
+  {$IFNDEF MSWINDOWS}
+  lSavedTz := SaveTestEnvironmentVariable('TZ');
   try
-    lSkipEvent := lCron.Add('SpringSkip');
-    lSkipEvent.EventPlan := lPlan;
-    lSkipEvent.TimeZoneId := 'LOCAL';
-    lSkipEvent.DstSpringPolicy := TmaxCronDstSpringPolicy.dspSkip;
-    lSkipEvent.ValidFrom := IncSecond(lInvalid, -1);
-    lSkipEvent.Run;
-    Assert.IsFalse(lSkipEvent.Enabled);
+    SetTestEnvironmentVariable('TZ', ':' + WarsawFixturePath);
+    TestLibcTzset;
+    ForceCronLocalRecheckForTests;
+  {$ENDIF}
+    if not TryFindInvalidLocalTime(lInvalid) then
+      Exit;
 
-    lShiftEvent := lCron.Add('SpringShift');
-    lShiftEvent.EventPlan := lPlan;
-    lShiftEvent.TimeZoneId := 'LOCAL';
-    lShiftEvent.DstSpringPolicy := TmaxCronDstSpringPolicy.dspRunAtNextValidTime;
-    lShiftEvent.ValidFrom := IncSecond(lInvalid, -1);
-    lShiftEvent.Run;
-    Assert.IsTrue(lShiftEvent.Enabled);
-    Assert.IsTrue(lShiftEvent.NextSchedule > lInvalid);
+    lPlan := Format('%d %d %d %d * %d 0 1',
+      [MinuteOf(lInvalid), HourOf(lInvalid), DayOf(lInvalid), MonthOf(lInvalid), YearOf(lInvalid)]);
+
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      lSkipEvent := lCron.Add('SpringSkip');
+      lSkipEvent.EventPlan := lPlan;
+      lSkipEvent.TimeZoneId := 'LOCAL';
+      lSkipEvent.DstSpringPolicy := TmaxCronDstSpringPolicy.dspSkip;
+      lSkipEvent.ValidFrom := IncSecond(lInvalid, -1);
+      lSkipEvent.Run;
+      Assert.IsFalse(lSkipEvent.Enabled);
+
+      lShiftEvent := lCron.Add('SpringShift');
+      lShiftEvent.EventPlan := lPlan;
+      lShiftEvent.TimeZoneId := 'LOCAL';
+      lShiftEvent.DstSpringPolicy := TmaxCronDstSpringPolicy.dspRunAtNextValidTime;
+      lShiftEvent.ValidFrom := IncSecond(lInvalid, -1);
+      lShiftEvent.Run;
+      Assert.IsTrue(lShiftEvent.Enabled);
+      Assert.IsTrue(lShiftEvent.NextSchedule > lInvalid);
+    finally
+      lCron.Free;
+    end;
+  {$IFNDEF MSWINDOWS}
   finally
-    lCron.Free;
+    RestoreTestEnvironmentVariable(lSavedTz);
+    TestLibcTzset;
+    ForceCronLocalRecheckForTests;
+    CronSystemZoneRules;
   end;
+  {$ENDIF}
 end;
 
 procedure TTestCalendarTimeZone.DstFallPolicy_RunTwice_QueuesSecondOccurrence;

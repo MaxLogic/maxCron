@@ -16,6 +16,7 @@ type
     function BuildOneShotPlan(const aDateTime: TDateTime): string;
     function FindNextForPlan(const aPlan: string; const aBase: TDateTime;
       const aDayMatchMode: TmaxCronDayMatchMode): TDateTime;
+    function IsAmbiguousLocalTime(const aDateTime: TDateTime): Boolean;
     function TryFindAmbiguousLocalTime(out aDateTime: TDateTime): Boolean; overload;
     function TryFindAmbiguousLocalTime(const aNow: TDateTime; out aDateTime: TDateTime): Boolean; overload;
   public
@@ -91,12 +92,30 @@ type
 
 implementation
 
+{$IFNDEF MSWINDOWS}
+uses
+  maxCron.Internal.TimeZone, TestZoneFakes;
+{$ENDIF}
+
 procedure TTestRobustCoverage.TransitionSelection_PreservesSchedulingMargin;
 var
   lTransition, lNow, lSelected: TDateTime;
+  {$IFNDEF MSWINDOWS}
+  lSavedTz: TTestEnvSnapshot;
+  {$ENDIF}
 begin
+  {$IFDEF MSWINDOWS}
   if TryFindAmbiguousLocalTime(EncodeDate(2027, 1, 1), lTransition) then
   begin
+  {$ELSE}
+  lSavedTz := SaveTestEnvironmentVariable('TZ');
+  try
+    SetTestEnvironmentVariable('TZ', ':' + WarsawFixturePath);
+    TestLibcTzset;
+    ForceCronLocalRecheckForTests;
+    Assert.IsTrue(TryFindAmbiguousLocalTime(EncodeDate(2027, 1, 1), lTransition),
+      'Warsaw fixture must have a fall overlap');
+  {$ENDIF}
     lNow := IncMilliSecond(lTransition, -1);
     Assert.IsTrue(TryFindAmbiguousLocalTime(lNow, lSelected));
     Assert.IsTrue(lSelected >= IncHour(lNow), 'Transition needs at least one hour of scheduling margin');
@@ -104,6 +123,13 @@ begin
     Assert.IsTrue(TryFindAmbiguousLocalTime(lNow, lSelected));
     Assert.IsTrue(lSelected >= IncHour(lNow), 'Year rollover must preserve the scheduling margin');
     Assert.IsTrue(YearOf(lSelected) >= 2028);
+  {$IFNDEF MSWINDOWS}
+  finally
+    RestoreTestEnvironmentVariable(lSavedTz);
+    TestLibcTzset;
+    ForceCronLocalRecheckForTests;
+    CronSystemZoneRules;
+  {$ENDIF}
   end;
 end;
 
@@ -149,6 +175,26 @@ begin
   end;
 end;
 
+function TTestRobustCoverage.IsAmbiguousLocalTime(const aDateTime: TDateTime): Boolean;
+{$IFNDEF MSWINDOWS}
+const
+  cWarsawStandardOffset = 3600;
+  cWarsawDaylightOffset = 7200;
+var
+  lWallSeconds: Int64;
+{$ENDIF}
+begin
+  {$IFDEF MSWINDOWS}
+  Result := TTimeZone.Local.IsAmbiguousTime(aDateTime);
+  {$ELSE}
+  // Both Warsaw offsets must map a different UTC instant to this wall time.
+  lWallSeconds := DateTimeToUnix(aDateTime, True);
+  Result :=
+    (TestLibcLocaltimeOffsetSeconds(lWallSeconds - cWarsawStandardOffset) = cWarsawStandardOffset) and
+    (TestLibcLocaltimeOffsetSeconds(lWallSeconds - cWarsawDaylightOffset) = cWarsawDaylightOffset);
+  {$ENDIF}
+end;
+
 function TTestRobustCoverage.TryFindAmbiguousLocalTime(out aDateTime: TDateTime): Boolean;
 begin
   Result := TryFindAmbiguousLocalTime(Now, aDateTime);
@@ -166,7 +212,7 @@ begin
   lCursor := lStart;
   while lCursor < lLimit do
   begin
-    if TTimeZone.Local.IsAmbiguousTime(lCursor) then
+    if IsAmbiguousLocalTime(lCursor) then
     begin
       aDateTime := lCursor;
       Exit(True);
@@ -184,43 +230,63 @@ var
   lEventRunOnce: IMaxCronEvent;
   lEventPreferFirst: IMaxCronEvent;
   lEventPreferSecond: IMaxCronEvent;
+  {$IFNDEF MSWINDOWS}
+  lSavedTz: TTestEnvSnapshot;
+  {$ENDIF}
 begin
+  {$IFDEF MSWINDOWS}
   if not TryFindAmbiguousLocalTime(lAmbiguous) then
     Exit;
-
-  lPlan := BuildOneShotPlan(lAmbiguous);
-  lCron := TmaxCron.Create(ctPortable);
+  {$ELSE}
+  lSavedTz := SaveTestEnvironmentVariable('TZ');
   try
-    lEventRunOnce := lCron.Add('FallRunOnce');
-    lEventRunOnce.EventPlan := lPlan;
-    lEventRunOnce.TimeZoneId := 'LOCAL';
-    lEventRunOnce.DstFallPolicy := TmaxCronDstFallPolicy.dfpRunOnce;
-    lEventRunOnce.ValidFrom := IncSecond(lAmbiguous, -1);
-    lEventRunOnce.Run;
+    SetTestEnvironmentVariable('TZ', ':' + WarsawFixturePath);
+    TestLibcTzset;
+    ForceCronLocalRecheckForTests;
+    Assert.IsTrue(TryFindAmbiguousLocalTime(lAmbiguous), 'Warsaw fixture must have a fall overlap');
+  {$ENDIF}
 
-    lEventPreferFirst := lCron.Add('FallPreferFirst');
-    lEventPreferFirst.EventPlan := lPlan;
-    lEventPreferFirst.TimeZoneId := 'LOCAL';
-    lEventPreferFirst.DstFallPolicy := TmaxCronDstFallPolicy.dfpRunOncePreferFirstInstance;
-    lEventPreferFirst.ValidFrom := IncSecond(lAmbiguous, -1);
-    lEventPreferFirst.Run;
+    lPlan := BuildOneShotPlan(lAmbiguous);
+    lCron := TmaxCron.Create(ctPortable);
+    try
+      lEventRunOnce := lCron.Add('FallRunOnce');
+      lEventRunOnce.EventPlan := lPlan;
+      lEventRunOnce.TimeZoneId := 'LOCAL';
+      lEventRunOnce.DstFallPolicy := TmaxCronDstFallPolicy.dfpRunOnce;
+      lEventRunOnce.ValidFrom := IncSecond(lAmbiguous, -1);
+      lEventRunOnce.Run;
 
-    lEventPreferSecond := lCron.Add('FallPreferSecond');
-    lEventPreferSecond.EventPlan := lPlan;
-    lEventPreferSecond.TimeZoneId := 'LOCAL';
-    lEventPreferSecond.DstFallPolicy := TmaxCronDstFallPolicy.dfpRunOncePreferSecondInstance;
-    lEventPreferSecond.ValidFrom := IncSecond(lAmbiguous, -1);
-    lEventPreferSecond.Run;
+      lEventPreferFirst := lCron.Add('FallPreferFirst');
+      lEventPreferFirst.EventPlan := lPlan;
+      lEventPreferFirst.TimeZoneId := 'LOCAL';
+      lEventPreferFirst.DstFallPolicy := TmaxCronDstFallPolicy.dfpRunOncePreferFirstInstance;
+      lEventPreferFirst.ValidFrom := IncSecond(lAmbiguous, -1);
+      lEventPreferFirst.Run;
 
-    Assert.IsTrue(TTimeZone.Local.IsAmbiguousTime(lEventRunOnce.NextSchedule));
-    Assert.IsTrue(TTimeZone.Local.IsAmbiguousTime(lEventPreferFirst.NextSchedule));
-    Assert.IsTrue(TTimeZone.Local.IsAmbiguousTime(lEventPreferSecond.NextSchedule));
-    Assert.AreEqual(lAmbiguous, lEventRunOnce.NextSchedule, 0.0);
-    Assert.AreEqual(lAmbiguous, lEventPreferFirst.NextSchedule, 0.0);
-    Assert.AreEqual(lAmbiguous, lEventPreferSecond.NextSchedule, 0.0);
+      lEventPreferSecond := lCron.Add('FallPreferSecond');
+      lEventPreferSecond.EventPlan := lPlan;
+      lEventPreferSecond.TimeZoneId := 'LOCAL';
+      lEventPreferSecond.DstFallPolicy := TmaxCronDstFallPolicy.dfpRunOncePreferSecondInstance;
+      lEventPreferSecond.ValidFrom := IncSecond(lAmbiguous, -1);
+      lEventPreferSecond.Run;
+
+      Assert.IsTrue(IsAmbiguousLocalTime(lEventRunOnce.NextSchedule));
+      Assert.IsTrue(IsAmbiguousLocalTime(lEventPreferFirst.NextSchedule));
+      Assert.IsTrue(IsAmbiguousLocalTime(lEventPreferSecond.NextSchedule));
+      Assert.AreEqual(lAmbiguous, lEventRunOnce.NextSchedule, 0.0);
+      Assert.AreEqual(lAmbiguous, lEventPreferFirst.NextSchedule, 0.0);
+      Assert.AreEqual(lAmbiguous, lEventPreferSecond.NextSchedule, 0.0);
+    finally
+      lCron.Free;
+    end;
+  {$IFNDEF MSWINDOWS}
   finally
-    lCron.Free;
+    RestoreTestEnvironmentVariable(lSavedTz);
+    TestLibcTzset;
+    ForceCronLocalRecheckForTests;
+    CronSystemZoneRules;
   end;
+  {$ENDIF}
 end;
 
 procedure TTestRobustCoverage.TimeZoneId_ParsingAndNormalization;
