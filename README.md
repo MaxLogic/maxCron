@@ -1071,8 +1071,8 @@ across 30-minute and two-hour changes.
 display times. Repeated instances can therefore share one displayed value.
 On Windows, LOCAL uses native conversion rules on both compilers and picks up
 a host-zone change on the next scheduler pass. On Linux, LOCAL picks up a
-host-zone change at the next recheck, within about 1 second, and uses cached
-TZif rules between rechecks. UTC, fixed-offset and named occurrences retain
+host-zone change on the first use after the one-second recheck interval has
+elapsed, and uses cached TZif rules until then. UTC, fixed-offset and named occurrences retain
 their UTC dues. Interval deadlines remain monotonic.
 
 ## Business calendar exclusions
