@@ -536,6 +536,34 @@ the requested callbacks. Avoid DST transitions or clock changes during measureme
 This measures scheduler and dispatch latency together. Each run has `--fires`
 one-shot events rather than one recurring event.
 
+#### Linux x86_64 benchmark
+
+Build the Linux binary on Windows with
+`tests\linux\Build-DelphiLinux64.ps1 -Projects benchmarks\maxCronBenchmarks.dpr`
+and run the resulting ELF binary on Linux. For interval mode on Linux, pass
+`--seconds=60` to measure a 60-second window. Use `--fires=N` to request a fixed
+callback count.
+
+Delphi 12 Linux64 Release on WSL2 (Ubuntu 26.04), THREADRIPPER, 2026-11-24.
+Before timing, Windows reported 17% total CPU and WSL load averages of
+1.83, 2.05, and 2.82 across 64 logical CPUs. Other work was active on the host.
+
+| Measurement | Scan | Heap | Auto |
+| --- | ---: | ---: | ---: |
+| Cron lateness median / p95 / max (ms) | 0.973 / 1.489 / 1.567 | 0.995 / 1.489 / 1.602 | 1.049 / 1.513 / 1.623 |
+| 10 ms interval median lateness (ms) / missed | 0.737 / 0 | 0.745 / 0 | 0.744 / 0 |
+| 100 ms interval median lateness (ms) / missed | 0.756 / 0 | 0.756 / 0 | 0.787 / 0 |
+| 1 ms interval median lateness (ms) / missed | 0.499 / 23,885 | 0.502 / 23,410 | 0.497 / 22,815 |
+| Idle median CPU (ms per 30 s / % of one core) | 106.147 / 0.354% | 3.697 / 0.012% | 3.722 / 0.012% |
+
+Cron values pool three iterations of 60 callbacks per engine. Every callback
+arrived inside its due second. Interval values pool three 60-second runs per
+engine. The 1 ms results are informational, with 180,000 nominal slots per
+engine. Idle used 10,000 far-future events and five alternating fresh processes
+per engine, each with a 35-second warmup and a 30-second CPU window.
+
+#### Historical Win64 baseline
+
 Baseline on the maintainer's workstation, 2026-11-15, Delphi 12 Win64 Release, base `024b89b`.
 AMD Ryzen Threadripper PRO 3975WX, 32 cores / 64 logical CPUs, Windows 11.
 Three fresh runs per row, 30-second idle windows. CPU columns show median and

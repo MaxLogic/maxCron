@@ -6,7 +6,11 @@ program maxCronBenchmarks;
 uses
   System.Classes, System.DateUtils, System.Diagnostics, System.Generics.Collections, System.IOUtils, System.Math,
   System.StrUtils, System.SyncObjs, System.SysUtils,
+  {$IFDEF MSWINDOWS}
   Winapi.Windows,
+  {$ELSE}
+  Posix.Stdlib, Posix.Time,
+  {$ENDIF}
   AutoFree,
   maxCron.Internal.DeadlineQueue in '..\maxCron.Internal.DeadlineQueue.pas',
   maxCron.Internal.Platform in '..\maxCron.Internal.Platform.pas',
@@ -71,7 +75,11 @@ type
 
   TEnvBackup = record
     Name: string;
+    {$IFDEF MSWINDOWS}
     PreviousValue: string;
+    {$ELSE}
+    PreviousValue: RawByteString;
+    {$ENDIF}
     HadPrevious: Boolean;
   end;
 
@@ -88,6 +96,9 @@ type
     Seconds: Integer;
     Fires: Integer;
     IntervalMs: Integer;
+    {$IFNDEF MSWINDOWS}
+    IntervalDuration: Boolean;
+    {$ENDIF}
   end;
 
 const
@@ -95,29 +106,68 @@ const
   cDefaultWarmupIterations = 2;
   cIdleWarmupMs = 35000;
 
+{$IFNDEF MSWINDOWS}
+const
+  cLibC = 'libc.so.6';
+
+function BenchmarkSetenv(aName, aValue: PAnsiChar; aOverwrite: Integer): Integer; cdecl;
+  external cLibC name 'setenv';
+function BenchmarkUnsetenv(aName: PAnsiChar): Integer; cdecl;
+  external cLibC name 'unsetenv';
+{$ENDIF}
+
 procedure SetEnvVar(const aName, aValue: string; const aBackups: TList<TEnvBackup>);
 var
   lBackup: TEnvBackup;
+  {$IFNDEF MSWINDOWS}
+  lName: UTF8String;
+  lPrevious: PAnsiChar;
+  {$ENDIF}
 begin
   lBackup.Name := aName;
+  {$IFDEF MSWINDOWS}
   lBackup.PreviousValue := GetEnvironmentVariable(aName);
   lBackup.HadPrevious := lBackup.PreviousValue <> '';
   aBackups.Add(lBackup);
   Winapi.Windows.SetEnvironmentVariable(PChar(aName), PChar(aValue));
+  {$ELSE}
+  lName := UTF8String(aName);
+  lPrevious := getenv(PAnsiChar(lName));
+  lBackup.HadPrevious := lPrevious <> nil;
+  if lBackup.HadPrevious then
+    lBackup.PreviousValue := lPrevious;
+  aBackups.Add(lBackup);
+  if BenchmarkSetenv(PAnsiChar(lName), PAnsiChar(UTF8String(aValue)), 1) <> 0 then
+    RaiseLastOSError;
+  {$ENDIF}
 end;
 
 procedure RestoreEnvVars(const aBackups: TList<TEnvBackup>);
 var
   lIndex: Integer;
   lBackup: TEnvBackup;
+  {$IFNDEF MSWINDOWS}
+  lName: UTF8String;
+  lStatus: Integer;
+  {$ENDIF}
 begin
   for lIndex := aBackups.Count - 1 downto 0 do
   begin
     lBackup := aBackups[lIndex];
+    {$IFDEF MSWINDOWS}
     if lBackup.HadPrevious then
       Winapi.Windows.SetEnvironmentVariable(PChar(lBackup.Name), PChar(lBackup.PreviousValue))
     else
       Winapi.Windows.SetEnvironmentVariable(PChar(lBackup.Name), nil);
+    {$ELSE}
+    lName := UTF8String(lBackup.Name);
+    if lBackup.HadPrevious then
+      lStatus := BenchmarkSetenv(PAnsiChar(lName), PAnsiChar(lBackup.PreviousValue), 1)
+    else
+      lStatus := BenchmarkUnsetenv(PAnsiChar(lName));
+    if lStatus <> 0 then
+      RaiseLastOSError;
+    {$ENDIF}
   end;
 end;
 
@@ -154,6 +204,9 @@ procedure ParseOptions(var aOptions: TBenchmarkOptions);
 var
   lArg: string;
   lIndex: Integer;
+  {$IFNDEF MSWINDOWS}
+  lSecondsSpecified, lFiresSpecified: Boolean;
+  {$ENDIF}
 begin
   aOptions.Iterations := cDefaultIterations;
   aOptions.WarmupIterations := cDefaultWarmupIterations;
@@ -167,6 +220,10 @@ begin
   aOptions.Seconds := 60;
   aOptions.Fires := 60;
   aOptions.IntervalMs := 10;
+  {$IFNDEF MSWINDOWS}
+  lSecondsSpecified := False;
+  lFiresSpecified := False;
+  {$ENDIF}
 
   for lIndex := 1 to ParamCount do
   begin
@@ -176,12 +233,20 @@ begin
     else if StartsText('--events=', lArg) then
       aOptions.EventCount := ParseIntOption('events', Copy(lArg, 10, MaxInt), 1)
     else if StartsText('--seconds=', lArg) then
-      aOptions.Seconds := ParseIntOption('seconds', Copy(lArg, 11, MaxInt), 1)
-    else if StartsText('--interval-ms=', lArg) then
+    begin
+      aOptions.Seconds := ParseIntOption('seconds', Copy(lArg, 11, MaxInt), 1);
+      {$IFNDEF MSWINDOWS}
+      lSecondsSpecified := True;
+      {$ENDIF}
+    end else if StartsText('--interval-ms=', lArg) then
       aOptions.IntervalMs := ParseIntOption('interval-ms', Copy(lArg, 15, MaxInt), 1)
     else if StartsText('--fires=', lArg) then
-      aOptions.Fires := ParseIntOption('fires', Copy(lArg, 9, MaxInt), 1)
-    else if SameText(lArg, '--quiet') then
+    begin
+      aOptions.Fires := ParseIntOption('fires', Copy(lArg, 9, MaxInt), 1);
+      {$IFNDEF MSWINDOWS}
+      lFiresSpecified := True;
+      {$ENDIF}
+    end else if SameText(lArg, '--quiet') then
       aOptions.Quiet := True
     else if StartsText('--iterations=', lArg) then
       aOptions.Iterations := ParseIntOption('iterations', Copy(lArg, Length('--iterations=') + 1, MaxInt), 1)
@@ -208,6 +273,15 @@ begin
     raise Exception.Create('seconds and fires must be <= 86400');
   if (aOptions.Mode <> 'ticks') and (aOptions.CompareCsvPath <> '') then
     raise Exception.Create('--compare is supported only by ticks mode');
+  {$IFNDEF MSWINDOWS}
+  aOptions.IntervalDuration := (aOptions.Mode = 'interval') and lSecondsSpecified and not lFiresSpecified;
+  if aOptions.IntervalDuration then
+  begin
+    aOptions.Fires := (aOptions.Seconds * 1000) div aOptions.IntervalMs;
+    if aOptions.Fires = 0 then
+      raise Exception.Create('The interval must fit within the measurement duration');
+  end;
+  {$ENDIF}
 end;
 
 function BuildScenarios: TArray<TBenchmarkScenario>;
@@ -1124,6 +1198,7 @@ begin
 end;
 
 function ProcessCpuMs: Double;
+{$IFDEF MSWINDOWS}
 var
   lCreated, lExited, lKernel, lUser: TFileTime;
 begin
@@ -1131,6 +1206,14 @@ begin
     RaiseLastOSError;
   Result := ((UInt64(lKernel.dwHighDateTime) shl 32) + lKernel.dwLowDateTime +
     (UInt64(lUser.dwHighDateTime) shl 32) + lUser.dwLowDateTime) / 10000.0;
+{$ELSE}
+var
+  lTime: timespec;
+begin
+  if clock_gettime(CLOCK_PROCESS_CPUTIME_ID, @lTime) <> 0 then
+    RaiseLastOSError;
+  Result := lTime.tv_sec * 1000.0 + lTime.tv_nsec / 1000000.0;
+{$ENDIF}
 end;
 
 procedure RunRealtimeBenchmark(const aOptions: TBenchmarkOptions);
@@ -1315,6 +1398,9 @@ var
   lMissing: Int64;
   lStamp: string;
   lTicks,lSpin,lExceptions: UInt64;
+  {$IFNDEF MSWINDOWS}
+  lWait: TWaitResult;
+  {$ENDIF}
 begin
   lOptions := aOptions;
   if lOptions.CsvPath='' then
@@ -1335,6 +1421,15 @@ begin
       lRecorder.fStartUs := CronMonotonicNowUs;
       lCpuStart := ProcessCpuMs;
       lEvent.Run; lCron.StartTimerForTests(1000);
+      {$IFNDEF MSWINDOWS}
+      if lOptions.IntervalDuration then
+      begin
+        // Allow one interval for the last callback at the end of the window.
+        lWait := lRecorder.fDone.WaitFor(Cardinal(lOptions.Seconds * 1000 + lOptions.IntervalMs));
+        if not (lWait in [wrSignaled, wrTimeout]) then
+          raise Exception.Create('Interval benchmark wait failed');
+      end else
+      {$ENDIF}
       if lRecorder.fDone.WaitFor(Cardinal((Int64(lOptions.Fires)*lOptions.IntervalMs) div 1000+15)*1000)<>wrSignaled then
         raise Exception.Create('Interval benchmark did not receive all callbacks');
       lEvent.Stop;
@@ -1344,6 +1439,14 @@ begin
       lValues := lRecorder.fSamples.ToArray; SortInt64Array(lValues);
       lMissing := (lRecorder.fLastUs-lRecorder.fStartUs) div lRecorder.fIntervalUs-Length(lValues);
       if lMissing<0 then lMissing := 0;
+      {$IFNDEF MSWINDOWS}
+      if lOptions.IntervalDuration then
+      begin
+        if Length(lValues) = 0 then
+          raise Exception.Create('Interval benchmark received no callbacks');
+        lMissing := Max(lMissing, Int64(lOptions.Fires) - Length(lValues));
+      end;
+      {$ENDIF}
       lCron.GetTimerDiagnosticsForTests(lTicks,lSpin,lExceptions);
       if (lSpin<>0) or (lExceptions<>0) then raise Exception.Create('Interval timer spin or exception');
       lLines.Add(Format('%d,%d,%d,%s,%s,%s,%s,%d,%s,%s,%s',[i,lOptions.IntervalMs,Length(lValues),
