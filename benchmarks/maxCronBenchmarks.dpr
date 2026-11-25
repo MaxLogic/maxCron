@@ -96,9 +96,7 @@ type
     Seconds: Integer;
     Fires: Integer;
     IntervalMs: Integer;
-    {$IFNDEF MSWINDOWS}
     IntervalDuration: Boolean;
-    {$ENDIF}
   end;
 
 const
@@ -220,6 +218,7 @@ begin
   aOptions.Seconds := 60;
   aOptions.Fires := 60;
   aOptions.IntervalMs := 10;
+  aOptions.IntervalDuration := False;
   {$IFNDEF MSWINDOWS}
   lSecondsSpecified := False;
   lFiresSpecified := False;
@@ -263,12 +262,12 @@ begin
     else if SameText(lArg, '--help') or SameText(lArg, '-h') or SameText(lArg, '/?') then
       raise Exception.Create(
         'Usage: maxCronBenchmarks.exe [--iterations=N] [--warmup=N] [--out-dir=PATH] [--csv=FILE] [--md=FILE] ' +
-        '[--compare=FILE] [--quiet] [--mode=ticks|idle|latency|interval] [--interval-ms=N] [--events=N] [--seconds=N] [--fires=N]')
+        '[--compare=FILE] [--quiet] [--mode=ticks|idle|latency|interval|selftest] [--interval-ms=N] [--events=N] [--seconds=N] [--fires=N]')
     else
       raise Exception.CreateFmt('Unknown option: %s', [lArg]);
   end;
-  if not MatchText(aOptions.Mode, ['ticks', 'idle', 'latency', 'interval']) then
-    raise Exception.Create('mode must be ticks, idle, latency or interval');
+  if not MatchText(aOptions.Mode, ['ticks', 'idle', 'latency', 'interval', 'selftest']) then
+    raise Exception.Create('mode must be ticks, idle, latency, interval or selftest');
   if (aOptions.Seconds > 86400) or (aOptions.Fires > 86400) then
     raise Exception.Create('seconds and fires must be <= 86400');
   if (aOptions.Mode <> 'ticks') and (aOptions.CompareCsvPath <> '') then
@@ -276,11 +275,7 @@ begin
   {$IFNDEF MSWINDOWS}
   aOptions.IntervalDuration := (aOptions.Mode = 'interval') and lSecondsSpecified and not lFiresSpecified;
   if aOptions.IntervalDuration then
-  begin
     aOptions.Fires := (aOptions.Seconds * 1000) div aOptions.IntervalMs;
-    if aOptions.Fires = 0 then
-      raise Exception.Create('The interval must fit within the measurement duration');
-  end;
   {$ENDIF}
 end;
 
@@ -1339,127 +1334,545 @@ begin
 end;
 
 type
+  TIntervalSample = record
+    CallbackUs, DueUs: Int64;
+  end;
+
+  TIntervalAnalysis = record
+    Missed, Duplicates: Int64;
+    MedianUs, P95Us, P99Us: Double;
+    MaxUs, LastCallbackUs: Int64;
+    DueSlots: TArray<Int64>;
+    HasMedianBound, Passed: Boolean;
+  end;
+
+TIntervalMedianBound = record
+    PeriodMs, MedianUs: Integer;
+  end;
+
+const
+  cIntervalMedianBounds: array[0..1] of TIntervalMedianBound = (
+    (PeriodMs: 10; MedianUs: 1500),
+    (PeriodMs: 100; MedianUs: 1500)
+  );
+
+function AnalyzeIntervalSamples(const aSamples: TArray<TIntervalSample>;
+  const aStartUs, aPeriodUs, aNominalSlots: Int64): TIntervalAnalysis;
+var
+  lCoveredSlots: THashSet<Int64>;
+  lBound: TIntervalMedianBound;
+  lMedianLimitUs, lDeltaUs, lSlot, lRemainderUs: Int64;
+  lValues: TArray<Int64>;
+  i: Integer;
+begin
+  Result := Default(TIntervalAnalysis);
+  Result.Missed := aNominalSlots;
+  lMedianLimitUs := 0;
+  for lBound in cIntervalMedianBounds do
+    if Int64(lBound.PeriodMs) * 1000 = aPeriodUs then
+    begin
+      Result.HasMedianBound := True;
+      lMedianLimitUs := lBound.MedianUs;
+      Break;
+    end;
+  // There is no median to qualify when no callbacks arrived.
+  if Length(aSamples) = 0 then
+    Exit;
+
+  SetLength(Result.DueSlots, Length(aSamples));
+  SetLength(lValues, Length(aSamples));
+  lCoveredSlots := THashSet<Int64>.Create;
+  try
+    for i := 0 to High(aSamples) do
+    begin
+      lDeltaUs := aSamples[i].DueUs - aStartUs;
+      lSlot := lDeltaUs div aPeriodUs;
+      lRemainderUs := lDeltaUs mod aPeriodUs;
+      // Start at the preceding slot, then round to the nearest. Ties go forward.
+      if lRemainderUs < 0 then
+      begin
+        Dec(lSlot);
+        Inc(lRemainderUs, aPeriodUs);
+      end;
+      if lRemainderUs >= aPeriodUs - lRemainderUs then
+        Inc(lSlot);
+      Result.DueSlots[i] := lSlot;
+      if (lSlot >= 1) and (lSlot <= aNominalSlots) then
+        lCoveredSlots.Add(lSlot);
+
+      lValues[i] := aSamples[i].CallbackUs - aSamples[i].DueUs;
+      if (i = 0) or (aSamples[i].CallbackUs > Result.LastCallbackUs) then
+        Result.LastCallbackUs := aSamples[i].CallbackUs;
+    end;
+    Result.Missed := aNominalSlots - lCoveredSlots.Count;
+    Result.Duplicates := Length(aSamples) - lCoveredSlots.Count;
+  finally
+    lCoveredSlots.Free;
+  end;
+
+  SortInt64Array(lValues);
+  Result.MedianUs := CalculateMedianFromSorted(lValues);
+  Result.P95Us := CalculateNearestRankPercentile(lValues, 95.0);
+  Result.P99Us := CalculateNearestRankPercentile(lValues, 99.0);
+  Result.MaxUs := lValues[High(lValues)];
+  Result.Passed := Result.HasMedianBound and (Result.Missed = 0) and (Result.Duplicates = 0) and
+    (Result.MedianUs <= lMedianLimitUs);
+end;
+
+function ReferenceIntervalAnalysis(const aSamples: TArray<TIntervalSample>;
+  const aStartUs, aPeriodUs, aNominalSlots: Int64): TIntervalAnalysis;
+var
+  lSeen: TArray<Boolean>;
+  lLateness: TArray<Int64>;
+  lBound: TIntervalMedianBound;
+  lMedianLimitUs, lValue: Int64;
+  lCount, i, j: Integer;
+begin
+  Result := Default(TIntervalAnalysis);
+  Result.Missed := aNominalSlots;
+  lMedianLimitUs := 0;
+  for lBound in cIntervalMedianBounds do
+    if Int64(lBound.PeriodMs) * 1000 = aPeriodUs then
+    begin
+      Result.HasMedianBound := True;
+      lMedianLimitUs := lBound.MedianUs;
+    end;
+
+  lCount := Length(aSamples);
+  SetLength(lSeen, aNominalSlots);
+  SetLength(lLateness, lCount);
+  SetLength(Result.DueSlots, lCount);
+  for i := 0 to lCount - 1 do
+  begin
+    lValue := Floor((aSamples[i].DueUs - aStartUs) / aPeriodUs + 0.5);
+    Result.DueSlots[i] := lValue;
+    if (lValue < 1) or (lValue > aNominalSlots) then
+      Inc(Result.Duplicates)
+    else if lSeen[lValue - 1] then
+      Inc(Result.Duplicates)
+    else begin
+      lSeen[lValue - 1] := True;
+      Dec(Result.Missed);
+    end;
+    if (i = 0) or (aSamples[i].CallbackUs > Result.LastCallbackUs) then
+      Result.LastCallbackUs := aSamples[i].CallbackUs;
+
+    // Insertion sort keeps the reference independent of the report's statistics helpers.
+    lValue := aSamples[i].CallbackUs - aSamples[i].DueUs;
+    j := i;
+    while j > 0 do
+    begin
+      if lLateness[j - 1] <= lValue then
+        Break;
+      lLateness[j] := lLateness[j - 1];
+      Dec(j);
+    end;
+    lLateness[j] := lValue;
+  end;
+
+  if lCount = 0 then
+    Exit;
+  Result.MedianUs := (lLateness[(lCount - 1) div 2] + lLateness[lCount div 2]) / 2;
+  Result.P95Us := lLateness[(95 * lCount - 1) div 100];
+  Result.P99Us := lLateness[(99 * lCount - 1) div 100];
+  Result.MaxUs := lLateness[lCount - 1];
+  Result.Passed := Result.HasMedianBound and (Result.Missed = 0) and (Result.Duplicates = 0) and
+    (Result.MedianUs <= lMedianLimitUs);
+end;
+
+procedure RunIntervalSelfTest;
+const
+  cStartUs = 1000000;
+  cPeriodUs = 10000;
+  cCasesPerSeed = 4096;
+  cSeeds: array[0..2] of Cardinal = ($00000001, $13579BDF, $C0FFEE01);
+var
+  lSamples: TArray<TIntervalSample>;
+  lNamedCount, lFailures, lPropertyFailures, lTrial, lSeedFailures, i: Integer;
+  lSeed, lRandomState: Cardinal;
+  lStartUs, lPeriodUs, lSlots: Int64;
+
+  procedure SetSample(const aIndex: Integer; const aDueOffsetUs, aArrivalOffsetUs: Int64);
+  begin
+    lSamples[aIndex].DueUs := lStartUs + aDueOffsetUs;
+    lSamples[aIndex].CallbackUs := lStartUs + aArrivalOffsetUs;
+  end;
+
+  procedure CheckCase(const aName: string; const aSlots, aMissed, aDuplicates: Int64;
+    const aMedianUs, aMaxUs: Double; const aHasMedianBound, aPassed: Boolean);
+  var
+    lActual: TIntervalAnalysis;
+  begin
+    Inc(lNamedCount);
+    try
+      lActual := AnalyzeIntervalSamples(lSamples, lStartUs, lPeriodUs, aSlots);
+      Writeln(Format('%s: fires=%d missed=%d duplicates=%d median_us=%s max_us=%d bounded=%s passed=%s',
+        [aName, Length(lSamples), lActual.Missed, lActual.Duplicates,
+        ToInvariantFloat(lActual.MedianUs), lActual.MaxUs, BoolToStr(lActual.HasMedianBound, True),
+        BoolToStr(lActual.Passed, True)]));
+      if (lActual.Missed = aMissed) and (lActual.Duplicates = aDuplicates) and
+        (lActual.MedianUs = aMedianUs) and (lActual.MaxUs = aMaxUs) and
+        (lActual.HasMedianBound = aHasMedianBound) and (lActual.Passed = aPassed) then
+        Exit;
+    except
+      on E: Exception do
+        Writeln(aName + ': ' + E.Message);
+    end;
+    Inc(lFailures);
+    Writeln(aName + ': FAIL');
+  end;
+
+  function Draw(const aLimit: Cardinal): Integer;
+  begin
+    lRandomState := lRandomState xor (lRandomState shl 13);
+    lRandomState := lRandomState xor (lRandomState shr 17);
+    lRandomState := lRandomState xor (lRandomState shl 5);
+    Result := lRandomState mod aLimit;
+  end;
+
+  procedure Generate(const aTrial: Integer);
+  const
+    cPeriodsUs: array[0..3] of Integer = (10000, 100000, 1000, 10001);
+  var
+    lScenario, lCount, lIndex, lDueSlot, lRepeatedSlot: Integer;
+    lDueOffsetUs, lArrivalOffsetUs, lLateUs: Int64;
+  begin
+    lScenario := aTrial mod 9;
+    lStartUs := 1000000000000 + Draw(1000000);
+    lPeriodUs := cPeriodsUs[Draw(Length(cPeriodsUs))];
+    lSlots := 2 + Draw(24);
+    lCount := lSlots;
+    case lScenario of
+      3, 4:
+        begin
+          lPeriodUs := cPeriodsUs[Draw(2)];
+          lSlots := 2 * (1 + Draw(12));
+          lCount := lSlots;
+        end;
+      5:
+        begin
+          lSlots := 0;
+          lCount := Draw(4);
+        end;
+      6:
+        begin
+          lSlots := 1;
+          lCount := Draw(4);
+        end;
+      8:
+        lCount := Draw(2 * lSlots + 1);
+    end;
+    SetLength(lSamples, lCount);
+    lRepeatedSlot := 1 + Draw(lSlots + 1);
+    for lIndex := 0 to lCount - 1 do
+    begin
+      lDueSlot := lIndex + 1;
+      lDueOffsetUs := lDueSlot * lPeriodUs;
+      lLateUs := Draw(3003) - 1501;
+      case lScenario of
+        0: // Due ticks and arrivals around half-period and delivery boundaries.
+          lDueOffsetUs := lDueOffsetUs + lPeriodUs div 2 + Draw(3) - 1;
+        1: // A stall followed by a catch-up burst at the end of the run.
+          lLateUs := (lSlots - lDueSlot) * lPeriodUs + Draw(901);
+        2: // Duplicate a due slot while spreading arrivals across the nominal windows.
+          if lIndex < 2 then
+            lDueOffsetUs := lRepeatedSlot * lPeriodUs;
+        3, 4: // The average of the even middle pair is exactly 1500 or 1501 us.
+          begin
+            lLateUs := 1500 + lScenario - 3;
+            if Odd(lIndex) then
+              Inc(lLateUs)
+            else
+              Dec(lLateUs);
+          end;
+        5, 6, 8: // Missing, repeated and out-of-range due slots, including negative offsets.
+          lDueOffsetUs := (Draw(lSlots + 5) - 2) * lPeriodUs + Draw(3) - 1;
+      end;
+      lArrivalOffsetUs := lDueOffsetUs + lLateUs;
+      if lScenario = 0 then
+        lArrivalOffsetUs := lDueSlot * lPeriodUs + Draw(3) - 1
+      else if lScenario = 2 then
+        lArrivalOffsetUs := lDueSlot * lPeriodUs + Draw(901);
+      SetSample(lIndex, lDueOffsetUs, lArrivalOffsetUs);
+    end;
+  end;
+
+  procedure CompareWithReference(const aTrial: Integer; const aReportMismatch: Boolean);
+  var
+    lActual, lExpected: TIntervalAnalysis;
+    lIndex: Integer;
+    lSample: TIntervalSample;
+
+    procedure Check(const aMatches: Boolean; const aField: string);
+    begin
+      if not aMatches then
+        raise Exception.Create('interval result differs in ' + aField);
+    end;
+
+  begin
+    try
+      lExpected := ReferenceIntervalAnalysis(lSamples, lStartUs, lPeriodUs, lSlots);
+      lActual := AnalyzeIntervalSamples(lSamples, lStartUs, lPeriodUs, lSlots);
+      Check(lActual.Missed = lExpected.Missed, 'Missed');
+      Check(lActual.Duplicates = lExpected.Duplicates, 'Duplicates');
+      Check(lActual.MedianUs = lExpected.MedianUs, 'MedianUs');
+      Check(lActual.P95Us = lExpected.P95Us, 'P95Us');
+      Check(lActual.P99Us = lExpected.P99Us, 'P99Us');
+      Check(lActual.MaxUs = lExpected.MaxUs, 'MaxUs');
+      Check(lActual.LastCallbackUs = lExpected.LastCallbackUs, 'LastCallbackUs');
+      Check(lActual.HasMedianBound = lExpected.HasMedianBound, 'HasMedianBound');
+      Check(lActual.Passed = lExpected.Passed, 'Passed');
+      Check(Length(lActual.DueSlots) = Length(lExpected.DueSlots), 'DueSlots length');
+      for lIndex := 0 to High(lExpected.DueSlots) do
+        Check(lActual.DueSlots[lIndex] = lExpected.DueSlots[lIndex], 'DueSlots');
+    except
+      on E: Exception do
+      begin
+        Inc(lSeedFailures);
+        if aReportMismatch then
+        begin
+          Writeln(Format('seed=%s trial=%d start_us=%d period_us=%d nominal=%d: %s',
+            [IntToHex(lSeed, 8), aTrial, lStartUs, lPeriodUs, lSlots, E.Message]));
+          for lSample in lSamples do
+            Writeln(Format('  due_offset_us=%d arrival_offset_us=%d',
+              [lSample.DueUs - lStartUs, lSample.CallbackUs - lStartUs]));
+        end;
+      end;
+    end;
+  end;
+
+begin
+  lNamedCount := 0;
+  lFailures := 0;
+  lPropertyFailures := 0;
+  lStartUs := cStartUs;
+  lPeriodUs := cPeriodUs;
+
+  SetLength(lSamples, 6000);
+  for i := 0 to High(lSamples) do
+    if i < 3600 then
+      SetSample(i, (i + 1) * cPeriodUs, (i + 1) * cPeriodUs + 10500)
+    else
+      SetSample(i, (i + 1) * cPeriodUs, (i + 1) * cPeriodUs + 600);
+  CheckCase('backlog', 6000, 0, 0, 10500, 10500, True, False);
+
+  SetLength(lSamples, 2);
+  SetSample(0, 10000, 10500);
+  SetSample(1, 20000, 20750);
+  CheckCase('clean', 2, 0, 0, 625, 750, True, True);
+
+  SetSample(1, 20000, 20000);
+  CheckCase('boundary', 2, 0, 0, 250, 500, True, True);
+
+  lSamples := nil;
+  CheckCase('zero callbacks', 3, 3, 0, 0, 0, True, False);
+  CheckCase('interval exceeds window', 0, 0, 0, 0, 0, True, False);
+
+  SetLength(lSamples, 3);
+  SetSample(0, 10000, 10500);
+  SetSample(1, 10000, 20500);
+  SetSample(2, 30000, 30500);
+  CheckCase('duplicate due and empty middle', 3, 1, 1, 500, 10500, True, False);
+
+  for i := 0 to High(lSamples) do
+    SetSample(i, (i + 1) * cPeriodUs, (i + 1) * cPeriodUs + 1501);
+  CheckCase('median above bound', 3, 0, 0, 1501, 1501, True, False);
+
+  for i := 0 to High(lSamples) do
+    SetSample(i, (i + 1) * cPeriodUs, (i + 1) * cPeriodUs + 1500);
+  CheckCase('median equal to bound', 3, 0, 0, 1500, 1500, True, True);
+
+  SetLength(lSamples, 4);
+  SetSample(0, 14999, 15000);
+  SetSample(1, 25000, 25000);
+  SetSample(2, 34999, 35000);
+  SetSample(3, 44999, 45000);
+  CheckCase('due half-boundary tie', 4, 1, 1, 1, 1, True, False);
+
+  lPeriodUs := 1000;
+  SetLength(lSamples, 1);
+  SetSample(0, 1000, 1050);
+  CheckCase('unbounded interval', 1, 0, 0, 50, 50, False, False);
+
+  for lSeed in cSeeds do
+  begin
+    lRandomState := lSeed;
+    lSeedFailures := 0;
+    for lTrial := 0 to cCasesPerSeed - 1 do
+    begin
+      Generate(lTrial);
+      CompareWithReference(lTrial, lSeedFailures = 0);
+    end;
+    Inc(lPropertyFailures, lSeedFailures);
+    Writeln(Format('Interval property seed %s: %d/%d passed',
+      [IntToHex(lSeed, 8), cCasesPerSeed - lSeedFailures, cCasesPerSeed]));
+  end;
+
+  Writeln(Format('Interval self-test: %d/%d named, %d/%d generated passed',
+    [lNamedCount - lFailures, lNamedCount, Length(cSeeds) * cCasesPerSeed - lPropertyFailures,
+    Length(cSeeds) * cCasesPerSeed]));
+  if (lFailures <> 0) or (lPropertyFailures <> 0) then
+    raise Exception.Create('Interval self-test failed');
+end;
+
+type
   TIntervalRecorder = class
   public
     fLock: TCriticalSection;
     fDone: TEvent;
-    fSamples: TList<Int64>;
-    fRaw: TStringList;
-    fStartUs, fIntervalUs, fLastUs: Int64;
+    fSamples: TList<TIntervalSample>;
+    fStartUs, fWindowUs: Int64;
     fTarget: Integer;
-    constructor Create(const aTarget, aIntervalMs: Integer);
+    fMissingDue: Boolean;
+    constructor Create(const aTarget: Integer; const aWindowUs: Int64);
     destructor Destroy; override;
     procedure Capture(aSender: IMaxCronEvent);
   end;
 
-constructor TIntervalRecorder.Create(const aTarget, aIntervalMs: Integer);
+constructor TIntervalRecorder.Create(const aTarget: Integer; const aWindowUs: Int64);
 begin
   inherited Create;
   fLock := TCriticalSection.Create;
-  fDone := TEvent.Create(nil,True,False,'');
-  fSamples := TList<Int64>.Create;
-  fRaw := TStringList.Create;
-  fRaw.Add('iteration,callback_mono_us,elapsed_us,lateness_us');
-  fIntervalUs := Int64(aIntervalMs)*1000; fTarget := aTarget;
+  fDone := TEvent.Create(nil, True, False, '');
+  fSamples := TList<TIntervalSample>.Create;
+  fTarget := aTarget;
+  fWindowUs := aWindowUs;
 end;
 
 destructor TIntervalRecorder.Destroy;
 begin
-  fRaw.Free; fSamples.Free; fDone.Free; fLock.Free;
+  fSamples.Free;
+  fDone.Free;
+  fLock.Free;
   inherited;
 end;
 
 procedure TIntervalRecorder.Capture(aSender: IMaxCronEvent);
 var
-  lNowUs,lElapsedUs: Int64;
+  lSample: TIntervalSample;
+  lUnusedUtcUs: Int64;
+  lHasDue: Boolean;
 begin
-  lNowUs := CronMonotonicNowUs;
+  lSample.CallbackUs := CronMonotonicNowUs;
+  lHasDue := CurrentMaxCronOccurrenceForTests(lUnusedUtcUs, lSample.DueUs);
   fLock.Acquire;
   try
-    if fSamples.Count>=fTarget then Exit;
-    lElapsedUs := lNowUs-fStartUs;
-    fSamples.Add(lElapsedUs mod fIntervalUs);
-    if lNowUs>fLastUs then fLastUs := lNowUs;
-    fRaw.Add(Format('%d,%d,%d,%d',[fSamples.Count,lNowUs,lElapsedUs,lElapsedUs mod fIntervalUs]));
-    if fSamples.Count=fTarget then fDone.SetEvent;
-  finally fLock.Release; end;
+    if fWindowUs > 0 then
+    begin
+      if lSample.CallbackUs - fStartUs >= fWindowUs then
+        Exit;
+    end else if fSamples.Count >= fTarget then
+      Exit;
+    fMissingDue := fMissingDue or not lHasDue;
+    fSamples.Add(lSample);
+    if (fWindowUs = 0) and (fSamples.Count = fTarget) then
+      fDone.SetEvent;
+  finally
+    fLock.Release;
+  end;
 end;
 
-procedure RunIntervalBenchmark(const aOptions: TBenchmarkOptions);
+function RunIntervalBenchmark(const aOptions: TBenchmarkOptions): Boolean;
 var
-  g,lIterationGarbo: TGarbos;
+  g, lIterationGarbo: TGarbos;
   lOptions: TBenchmarkOptions;
-  lLines: TStringList;
+  lLines, lRaw: TStringList;
   lCron: TmaxCron;
   lEvent: IMaxCronEvent;
   lRecorder: TIntervalRecorder;
-  lValues: TArray<Int64>;
-  lCpuStart,lCpuMs,lElapsedMs: Double;
-  lMissing: Int64;
-  lStamp: string;
-  lTicks,lSpin,lExceptions: UInt64;
-  {$IFNDEF MSWINDOWS}
-  lWait: TWaitResult;
-  {$ENDIF}
+  lAnalysis: TIntervalAnalysis;
+  lSamples: TArray<TIntervalSample>;
+  lSample: TIntervalSample;
+  lCpuStart, lCpuMs, lElapsedMs: Double;
+  lPeriodUs, lWindowUs, lEndUs: Int64;
+  lStamp, lPassed: string;
+  lTicks, lSpin, lExceptions: UInt64;
+  lIteration, i: Integer;
 begin
+  Result := True;
   lOptions := aOptions;
-  if lOptions.CsvPath='' then
-    lOptions.CsvPath := TPath.Combine(lOptions.OutDir,'maxcron-interval-'+FormatDateTime('yyyymmdd-hhnnss',Now)+'.csv');
-  if lOptions.MdPath='' then lOptions.MdPath := ChangeFileExt(lOptions.CsvPath,'.md');
-  EnsureOutputPaths(lOptions,lStamp);
-  GC(lLines,TStringList.Create,g);
-  lLines.Add('iteration,interval_ms,fires,median_ms,p95_ms,p99_ms,max_ms,missed,elapsed_ms,cpu_ms,cpu_one_core_pct');
-  for var i := 1 to lOptions.Iterations do
+  if lOptions.CsvPath = '' then
+    lOptions.CsvPath := TPath.Combine(lOptions.OutDir, 'maxcron-interval-' +
+      FormatDateTime('yyyymmdd-hhnnss', Now) + '.csv');
+  if lOptions.MdPath = '' then
+    lOptions.MdPath := ChangeFileExt(lOptions.CsvPath, '.md');
+  EnsureOutputPaths(lOptions, lStamp);
+  GC(lLines, TStringList.Create, g);
+  GC(lRaw, TStringList.Create, g);
+  lLines.Add('iteration,interval_ms,fires,median_ms,p95_ms,p99_ms,max_ms,missed,elapsed_ms,cpu_ms,cpu_one_core_pct,duplicates,passed');
+  lPeriodUs := Int64(lOptions.IntervalMs) * 1000;
+  lWindowUs := 0;
+  if lOptions.IntervalDuration then
   begin
-    GC(lRecorder,TIntervalRecorder.Create(lOptions.Fires,lOptions.IntervalMs),lIterationGarbo);
-    GC(lCron,TmaxCron.Create(ctPortable),lIterationGarbo);
+    // Observe the entire delivery window of the last nominal slot.
+    if lOptions.Fires > 0 then
+      lWindowUs := (Int64(lOptions.Fires) + 1) * lPeriodUs
+    else
+      lWindowUs := Int64(lOptions.Seconds) * 1000000;
+  end;
+
+  for lIteration := 1 to lOptions.Iterations do
+  begin
+    GC(lRecorder, TIntervalRecorder.Create(lOptions.Fires, lWindowUs), lIterationGarbo);
+    GC(lCron, TmaxCron.Create(ctPortable), lIterationGarbo);
     try
       lCron.DefaultInvokeMode := imTTask;
-      lEvent := lCron.AddInterval('interval benchmark',Cardinal(lOptions.IntervalMs),lRecorder.Capture);
+      lEvent := lCron.AddInterval('interval benchmark', Cardinal(lOptions.IntervalMs), lRecorder.Capture);
       // Keep task-pool initialization outside the measurement, as in latency mode.
       TThread.Sleep(2000);
-      lRecorder.fStartUs := CronMonotonicNowUs;
       lCpuStart := ProcessCpuMs;
-      lEvent.Run; lCron.StartTimerForTests(1000);
-      {$IFNDEF MSWINDOWS}
+      lRecorder.fStartUs := CronMonotonicNowUs;
+      lEndUs := lRecorder.fStartUs + lWindowUs;
+      lEvent.Run;
+      lCron.StartTimerForTests(1000);
       if lOptions.IntervalDuration then
       begin
-        // Allow one interval for the last callback at the end of the window.
-        lWait := lRecorder.fDone.WaitFor(Cardinal(lOptions.Seconds * 1000 + lOptions.IntervalMs));
-        if not (lWait in [wrSignaled, wrTimeout]) then
-          raise Exception.Create('Interval benchmark wait failed');
-      end else
-      {$ENDIF}
-      if lRecorder.fDone.WaitFor(Cardinal((Int64(lOptions.Fires)*lOptions.IntervalMs) div 1000+15)*1000)<>wrSignaled then
+        TThread.Sleep(Cardinal((Max(0, lEndUs - CronMonotonicNowUs) + 999) div 1000));
+      end else if lRecorder.fDone.WaitFor(Cardinal((Int64(lOptions.Fires) *
+        lOptions.IntervalMs) div 1000 + 15) * 1000) <> wrSignaled then
         raise Exception.Create('Interval benchmark did not receive all callbacks');
       lEvent.Stop;
-      if not lCron.Shutdown(10000) then raise Exception.Create('Interval benchmark shutdown timed out');
-      lCpuMs := ProcessCpuMs-lCpuStart;
-      lElapsedMs := (lRecorder.fLastUs-lRecorder.fStartUs)/1000.0;
-      lValues := lRecorder.fSamples.ToArray; SortInt64Array(lValues);
-      lMissing := (lRecorder.fLastUs-lRecorder.fStartUs) div lRecorder.fIntervalUs-Length(lValues);
-      if lMissing<0 then lMissing := 0;
-      {$IFNDEF MSWINDOWS}
-      if lOptions.IntervalDuration then
+      if not lCron.Shutdown(10000) then
+        raise Exception.Create('Interval benchmark shutdown timed out');
+      lCpuMs := ProcessCpuMs - lCpuStart;
+      if lRecorder.fMissingDue then
+        raise Exception.Create('Interval callback has no scheduled due time');
+      lSamples := lRecorder.fSamples.ToArray;
+      lAnalysis := AnalyzeIntervalSamples(lSamples, lRecorder.fStartUs, lPeriodUs, lOptions.Fires);
+      if not lOptions.IntervalDuration then
+        lEndUs := lAnalysis.LastCallbackUs;
+      lElapsedMs := (lEndUs - lRecorder.fStartUs) / 1000.0;
+
+      lCron.GetTimerDiagnosticsForTests(lTicks, lSpin, lExceptions);
+      if (lSpin <> 0) or (lExceptions <> 0) then
+        raise Exception.Create('Interval timer spin or exception');
+      lPassed := '';
+      if lAnalysis.HasMedianBound then
+        lPassed := LowerCase(BoolToStr(lAnalysis.Passed, True));
+      lLines.Add(Format('%d,%d,%d,%s,%s,%s,%s,%d,%s,%s,%s,%d,%s',
+        [lIteration, lOptions.IntervalMs, Length(lSamples),
+        ToInvariantFloat(lAnalysis.MedianUs / 1000.0),
+        ToInvariantFloat(lAnalysis.P95Us / 1000.0),
+        ToInvariantFloat(lAnalysis.P99Us / 1000.0),
+        ToInvariantFloat(lAnalysis.MaxUs / 1000.0), lAnalysis.Missed,
+        ToInvariantFloat(lElapsedMs), ToInvariantFloat(lCpuMs), ToInvariantFloat(lCpuMs / lElapsedMs * 100),
+        lAnalysis.Duplicates, lPassed]));
+      lRaw.Clear;
+      lRaw.Add('iteration,callback_mono_us,elapsed_us,lateness_us,due_slot,due_mono_us');
+      for i := 0 to High(lSamples) do
       begin
-        if Length(lValues) = 0 then
-          raise Exception.Create('Interval benchmark received no callbacks');
-        lMissing := Max(lMissing, Int64(lOptions.Fires) - Length(lValues));
+        lSample := lSamples[i];
+        lRaw.Add(Format('%d,%d,%d,%d,%d,%d', [i + 1, lSample.CallbackUs,
+          lSample.CallbackUs - lRecorder.fStartUs, lSample.CallbackUs - lSample.DueUs,
+          lAnalysis.DueSlots[i], lSample.DueUs]));
       end;
-      {$ENDIF}
-      lCron.GetTimerDiagnosticsForTests(lTicks,lSpin,lExceptions);
-      if (lSpin<>0) or (lExceptions<>0) then raise Exception.Create('Interval timer spin or exception');
-      lLines.Add(Format('%d,%d,%d,%s,%s,%s,%s,%d,%s,%s,%s',[i,lOptions.IntervalMs,Length(lValues),
-        ToInvariantFloat(CalculateMedianFromSorted(lValues)/1000.0),
-        ToInvariantFloat(CalculateNearestRankPercentile(lValues,95.0)/1000.0),
-        ToInvariantFloat(CalculateNearestRankPercentile(lValues,99.0)/1000.0),
-        ToInvariantFloat(lValues[High(lValues)]/1000.0),lMissing,
-        ToInvariantFloat(lElapsedMs),ToInvariantFloat(lCpuMs),ToInvariantFloat(lCpuMs/lElapsedMs*100)]));
-      lRecorder.fRaw.SaveToFile(ChangeFileExt(lOptions.CsvPath,'')+'-fires-'+IntToStr(i)+'.csv',TEncoding.UTF8);
-      Writeln(lLines[lLines.Count-1]);
-      lLines.SaveToFile(lOptions.CsvPath,TEncoding.UTF8);
+      lRaw.SaveToFile(ChangeFileExt(lOptions.CsvPath, '') + '-fires-' + IntToStr(lIteration) + '.csv', TEncoding.UTF8);
+      Writeln(lLines[lLines.Count - 1]);
+      lLines.SaveToFile(lOptions.CsvPath, TEncoding.UTF8);
+      Result := Result and (Length(lSamples) > 0) and (not lAnalysis.HasMedianBound or lAnalysis.Passed);
     finally
-      lEvent := nil; lIterationGarbo.Clear;
+      lEvent := nil;
+      lIterationGarbo.Clear;
     end;
   end;
 end;
@@ -1468,14 +1881,18 @@ var
   lOptions: TBenchmarkOptions;
 begin
   try
+    ExitCode := 0;
     ParseOptions(lOptions);
     if lOptions.Mode = 'interval' then
-      RunIntervalBenchmark(lOptions)
+    begin
+      if not RunIntervalBenchmark(lOptions) then
+        ExitCode := 1;
+    end else if lOptions.Mode = 'selftest' then
+      RunIntervalSelfTest
     else if lOptions.Mode = 'ticks' then
       RunBenchmarks(lOptions)
     else
       RunRealtimeBenchmark(lOptions);
-    ExitCode := 0;
   except
     on E: Exception do
     begin

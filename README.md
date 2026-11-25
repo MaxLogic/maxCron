@@ -545,6 +545,16 @@ and run the resulting ELF binary on Linux. For interval mode on Linux, pass
 `--seconds=60` to measure a 60-second window. Use `--fires=N` to request a fixed
 callback count.
 
+Interval lateness is the signed difference between callback arrival and the
+scheduler's recorded due time. Each due time is rounded to the nearest slot
+from the run start, with half-period ties rounded forward. Missing nominal
+slots count as misses. Extra callbacks for a covered slot and callbacks due
+outside the nominal slots count as duplicates. The `cIntervalMedianBounds`
+table sets a 1.5 ms inclusive median bound for 10 ms and 100 ms intervals.
+A bounded row passes with zero misses, zero duplicates, and a median within
+the bound. Periods without a bound, including 1 ms, leave `passed` blank.
+An empty duration run still writes its CSV row and exits with code 1.
+
 Delphi 12 Linux64 Release on WSL2 (Ubuntu 26.04), THREADRIPPER, 2026-11-24.
 Before timing, Windows reported 17% total CPU and WSL load averages of
 1.83, 2.05, and 2.82 across 64 logical CPUs. Other work was active on the host.
@@ -552,16 +562,29 @@ Before timing, Windows reported 17% total CPU and WSL load averages of
 | Measurement | Scan | Heap | Auto |
 | --- | ---: | ---: | ---: |
 | Cron lateness median / p95 / max (ms) | 0.973 / 1.489 / 1.567 | 0.995 / 1.489 / 1.602 | 1.049 / 1.513 / 1.623 |
-| 10 ms interval median lateness (ms) / missed | 0.737 / 0 | 0.745 / 0 | 0.744 / 0 |
-| 100 ms interval median lateness (ms) / missed | 0.756 / 0 | 0.756 / 0 | 0.787 / 0 |
 | 1 ms interval median lateness (ms) / missed | 0.499 / 23,885 | 0.502 / 23,410 | 0.497 / 22,815 |
 | Idle median CPU (ms per 30 s / % of one core) | 106.147 / 0.354% | 3.697 / 0.012% | 3.722 / 0.012% |
 
 Cron values pool three iterations of 60 callbacks per engine. Every callback
-arrived inside its due second. Interval values pool three 60-second runs per
-engine. The 1 ms results are informational, with 180,000 nominal slots per
-engine. Idle used 10,000 far-future events and five alternating fresh processes
-per engine, each with a 35-second warmup and a 30-second CPU window.
+arrived inside its due second. The historical 1 ms figures use arrival slots
+to estimate lateness. They are informational and pool three 60-second runs
+with 180,000 nominal slots per engine. Idle used 10,000 far-future events and
+five alternating fresh processes per engine, each with a 35-second warmup and
+a 30-second CPU window.
+
+The 10 ms and 100 ms intervals were re-measured on the same host on 2026-11-25
+with Delphi 12 Linux64 Release on WSL2. Windows CPU was 12-15% before launch.
+WSL 1-, 5-, and 15-minute load averages moved from 2.21, 3.68, and 3.55 before
+the first run to 1.60, 2.09, and 2.70 after the last run, across 64 logical CPUs.
+Another lane ran `qemu-aarch64` at nice 15 during the measurement.
+
+| Due-time lateness, median / p95 / max (ms) | Scan | Heap | Auto |
+| --- | ---: | ---: | ---: |
+| 10 ms interval | 0.728 / 1.186 / 5.061 | 0.699 / 1.152 / 1.985 | 0.705 / 1.149 / 3.109 |
+| 100 ms interval | 0.728 / 1.179 / 2.217 | 0.7515 / 1.207 / 2.094 | 0.747 / 1.192 / 2.321 |
+
+Each cell pools three 60-second runs per engine. Every iteration had zero
+misses and duplicates and passed its 1.5 ms median bound.
 
 #### Historical Win64 baseline
 
@@ -1800,5 +1823,6 @@ waits. The interval benchmark observed missed occurrences under load at 1 ms;
 10 ms and 100 ms runs had no missed occurrences on the measured host.
 
 Consumers listing units explicitly must include `maxCron.Internal.DeadlineQueue.pas`.
-The interval benchmark accepts `--mode=interval --interval-ms=10 --fires=500` and
-reports lateness, missed fires, and process CPU; use Release builds for measurements.
+Run `--mode=interval --interval-ms=10 --fires=500` with a Release build to measure
+interval lateness and process CPU. See the [Linux x86_64 benchmark](#linux-x86_64-benchmark)
+for due-slot accounting and pass criteria.
