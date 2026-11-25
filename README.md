@@ -22,21 +22,24 @@ unit-qualified RTTI names now use `maxCron.Plan` (for example,
 
 ## Platforms
 
-| Platform | Compiler | Timers |
-| --- | --- | --- |
-| Windows x64/x86 | Delphi 12 | High-resolution waits |
-| Windows x64 | FPC trunk 3.3.1 | High-resolution waits |
-| Linux x86_64 | Delphi 12 Linux64 | Millisecond waits |
-| Linux x86_64 | FPC trunk 3.3.1 | Millisecond waits |
-| Linux aarch64 (tested under qemu-user) | FPC trunk 3.3.1 | Millisecond waits |
+| Platform | Compiler | Timers | Status |
+| --- | --- | --- | --- |
+| Windows x64/x86 | Delphi 12 | High-resolution waits | Supported |
+| Windows x64 | FPC trunk 3.3.1 | High-resolution waits | Supported |
+| Linux x86_64 | Delphi 12 Linux64 | Millisecond waits | Supported |
+| Linux x86_64 | FPC trunk 3.3.1 | Millisecond waits | Supported |
+| Linux aarch64 | FPC trunk 3.3.1 | Millisecond waits | Supported, tested under qemu-user |
 
 `ctVcl`, `maxCronHlpDlg`, the VCL test runner, the Windows zone provider
 and `MAXCRON_TIMER_RESOLUTION` are Windows-only. Other Delphi targets are untested.
 
 ### Linux setup
 
-Install the Linux64 SDK in Delphi 12 and cross-compile on Windows. Run the
-binary on the Linux target, with `tzdata` installed for LOCAL and named zones.
+- Delphi 12 needs the Linux64 SDK on Windows. Cross-compile there and run the
+  binary on the Linux target.
+- FPC programs must list `cthreads` first in the program's `uses` clause,
+  followed by `cwstring` for Unicode conversions.
+- Install `tzdata` on the Linux target for LOCAL and named zones.
 
 ## Free Pascal (FPC)
 
@@ -61,9 +64,8 @@ configuration and units from the same installation.
 "<fpc-root>\bin\x86_64-win64\fpc.exe" -n "@<fpc-root>\bin\x86_64-win64\fpc.cfg" "-FD<fpc-root>\bin\x86_64-win64" "-Fu<fpc-root>\units\x86_64-win64\*" "-Fu<maxCron folder>" "<your program>"
 ```
 
-On Linux, use the same compiler revision with the units for your target.
-List `cthreads` first in the program's `uses` clause, followed by `cwstring`
-for Unicode conversions. Install `tzdata` for LOCAL and named zones.
+On Linux, use the same compiler revision with the units for your target and
+follow [Linux setup](#linux-setup).
 
 The units set `delphiunicode`, `anonymousfunctions` and `functionreferences`
 through `maxCron.inc`, with real constants kept at Double precision.
@@ -1005,20 +1007,28 @@ is bundled for application use. The reader supports signed and extended POSIX
 footer rule times when both rule-local transitions stay at least 2 local days from the year boundaries and both DST and standard parts last at least 28 days throughout a 400-year Gregorian cycle. Fixed-offset and RFC all-year-DST footers are also supported; unsupported footer rules fail when setting the zone and preserve its previous value.
 Leap-second (`right/`) files are rejected.
 
-On Linux, LOCAL follows `/etc/localtime` when `TZ` is unset. For a set
-`TZ`, maxCron removes one leading colon. An empty value then selects UTC.
-A slash-rooted value selects that TZif file. A zone name selects a file under
-`MAXCRON_TZDIR`, `TZDIR` or `/usr/share/zoneinfo`, in that order. If the
-file cannot be used, maxCron tries the value as a POSIX TZ rule and falls back
-to UTC. Missing or invalid `/etc/localtime` also falls back to UTC.
-Changes to `TZ` and the selected file are picked up on the next use after
-the one-second recheck interval. LOCAL uses the same gap and overlap rules
-as named zones.
+On Linux, LOCAL resolves the host zone in this order.
 
-maxCron uses UTC for an unsupported POSIX rule, including a DST abbreviation
-without transition rules when there is no corresponding file. glibc may use
-`posixrules` in that case. maxCron does not look up relative paths rejected
-by its zone-name syntax, such as `../x`.
+1. If `TZ` is unset, read `/etc/localtime`, following symlinks. A missing,
+   unreadable or invalid file selects UTC.
+2. If `TZ` is set, strip one leading colon. An empty result selects UTC.
+3. For a value beginning with `/`, try that absolute path as a TZif file.
+   Otherwise, for a valid zone name, try its exact, case-sensitive path under
+   the first nonempty setting among `MAXCRON_TZDIR` and `TZDIR`, defaulting to
+   `/usr/share/zoneinfo`.
+4. If no usable TZif file was found for the set value, try it as a POSIX TZ
+   rule. If that fails, use UTC.
+
+The next use after the one-second recheck interval looks at the current
+settings and compares the selected file's bytes. This detects in-place file
+updates and changes to the `/etc/localtime` symlink. LOCAL uses the same gap
+and overlap rules as named zones.
+
+glibc may use `posixrules` for a value such as `EST5EDT` when no matching
+zone file exists. maxCron falls back to UTC for a DST rule without transition
+rules and for a TZif footer or POSIX rule rejected by its validator when no
+usable rule remains. The file lookup accepts only valid zone names for
+relative values, excluding paths such as `../x`.
 
 The built-in name table is derived from Unicode CLDR 49 data, copyright
 2001-2026 Unicode, Inc., under the Unicode License v3. The full notice is retained
@@ -1124,35 +1134,51 @@ When we change `DayMatchMode` on an enabled event, or change scheduler `DefaultD
 
 DUnitX tests live under `tests/` (runner: `tests/maxCronTests.dpr`).
 
-In x86_64 WSL, run `./build-and-run-tests-linux.sh delphi` to build with
-Delphi 12 on Windows and run the unit and stress suites in Linux.
-`MAXCRON_LONG_TESTS=1` selects the long unit suite and
-`MAXCRON_DEBUG_SAFETY=1` selects Debug. Set `MAXCRON_ROSTER_OUT` to an
-absolute Linux output path, or use the default `~/dev-artifacts/runs/maxCron`.
-`MAXCRON_BUILD_ROOT`, `MAXCRON_DCCLINUX64` and `MAXCRON_LINUX_SDK` are
-Windows paths for the build root, compiler and SDK. `MAXCRON_LINUX_PREBUILT`
-points to an existing Linux lane layout to run without rebuilding.
-`MAXCRON_LINUX_TIMEOUT_SECONDS` overrides runner timeouts for diagnostics.
-Run `./build-and-run-tests-linux.sh fpc` to build and run the FPC suite and both
-smokes. Set `MAXCRON_FPC` to the Linux x86_64 FPC 3.3.1 driver, with `fpc.cfg`
-beside it. `MAXCRON_FPC_OUT` sets the native Linux output root and uses the same
-default as the Delphi lane.
+### Linux gate
 
-On Linux x86_64, run `./build-and-run-tests-linux.sh fpc-aarch64` to
-cross-compile the default FPC suite and both smokes and run them with
-`qemu-aarch64`. Use the same FPC installation with `ppcrossa64` and aarch64
-RTL units installed. Put `qemu-aarch64` on `PATH` and install the
-`aarch64-linux-gnu-` binutils. The gate looks for the aarch64 GCC startup
-objects in the sysroot's `lib` directory first, then in the installed cross
-GCC directories. On Ubuntu 26.04 the startup objects come from
-`libgcc-15-dev-arm64-cross`.
-`MAXCRON_AARCH64_SYSROOT` selects the aarch64 glibc sysroot, defaulting to
-`/usr/aarch64-linux-gnu`. The aarch64 gate rejects `MAXCRON_LONG_TESTS=1` and
-gives emulated runners four times the normal timeout. A diagnostic timeout
-override applies directly.
+Run `./build-and-run-tests-linux.sh <lane>` from the repository root. The
+certified default runs on x86_64 WSL had the following counts.
 
-The Linux lanes pass through `MAXCRON_STRESS`. The explicit Linux exclusions are
-in `tests/linux/LinuxExcluded.txt`.
+| Lane | What it runs | Tests passed |
+| --- | --- | ---: |
+| `delphi` | Delphi Linux64 unit and stress suites | 563 |
+| `fpc` | Native FPC x86_64 suite and both smokes | 445 |
+| `fpc-aarch64` | FPC aarch64 suite and both smokes under qemu-user | 445 |
+
+The `delphi` lane builds on Windows from WSL and runs in Linux. Set
+`MAXCRON_ROSTER_OUT` to choose its Linux output root. `MAXCRON_BUILD_ROOT`,
+`MAXCRON_DCCLINUX64` and `MAXCRON_LINUX_SDK` are Windows paths for the build
+root, compiler and SDK.
+
+Set `MAXCRON_FPC` to the Linux x86_64 FPC 3.3.1 driver, with `fpc.cfg` beside
+it. `MAXCRON_FPC_OUT` chooses the Linux output root for both FPC lanes.
+Both `MAXCRON_ROSTER_OUT` and `MAXCRON_FPC_OUT` require absolute Linux paths.
+The gate exits with code 2 for a relative output root. The default is
+`~/dev-artifacts/runs/maxCron`.
+
+The `fpc-aarch64` lane also needs `ppcrossa64` and aarch64 RTL units from the
+same FPC installation, `qemu-aarch64` on `PATH` and `aarch64-linux-gnu-`
+binutils. `MAXCRON_AARCH64_SYSROOT` defaults to `/usr/aarch64-linux-gnu`.
+The gate looks for both GCC startup objects in the sysroot's `lib` directory
+first, then in installed cross GCC directories. On Ubuntu 26.04 they come
+from `libgcc-15-dev-arm64-cross`. Emulated runners get four times the normal
+timeout.
+
+`MAXCRON_LONG_TESTS=1` selects the long suite for `delphi` and `fpc` and is
+rejected by `fpc-aarch64`. The certified long runs passed 531 Delphi tests and
+445 FPC tests. Each ran the full 2000-2040 glibc LOCAL comparison with
+467,273,250 checks and zero mismatches.
+
+`MAXCRON_DEBUG_SAFETY=1` selects a Delphi Debug build or enables FPC runtime
+checks. The lanes pass through `MAXCRON_STRESS`.
+`MAXCRON_LINUX_TIMEOUT_SECONDS` overrides each runner's timeout directly.
+`MAXCRON_LINUX_PREBUILT` runs an existing lane layout without rebuilding.
+For a default `delphi` run, point it at the directory containing `unit` and
+`stress`. For `fpc`, use the directory containing `tests`, `smoke` and
+`smoke-heaptrc`. Use binaries and a source checkout from the same revision.
+Tests that cannot run on Linux are listed in `tests/linux/LinuxExcluded.txt`.
+
+### Windows gates
 
 The `build-and-run-tests.bat` and `build-and-run-tests-stress.bat` gates (and
 their WSL `.sh` wrappers) require Delphi 12 (23.0) and DelphiAIKit. They build
@@ -1267,8 +1293,7 @@ paired Windows `.sh` and `.bat` entry points use the same gate and exit codes.
 | Entry point | Success | Ordinary test or infrastructure failure | Roster violation | Timeout |
 | --- | ---: | --- | ---: | ---: |
 | Delphi default `build-and-run-tests.bat` / `.sh` | 0 | 3, including a native runner returning 1 or 2 | 5 | 124 |
-| Delphi Linux `build-and-run-tests-linux.sh delphi` | 0 | 1 for test failure; 2 for configuration; 3 for build or infrastructure | 5 | 124 |
-| FPC Linux `build-and-run-tests-linux.sh fpc` or `fpc-aarch64` | 0 | 1 for test or heap failure; 2 for tool or output configuration; 3 for build or infrastructure | 5 | 124 |
+| Linux `build-and-run-tests-linux.sh` (`delphi`, `fpc`, `fpc-aarch64`) | 0 | 1 for test or heap failure, 2 for configuration, 3 for build or infrastructure | 5 | 124 |
 | Delphi stress `build-and-run-tests-stress.bat` / `.sh` | 0 | 3, including a native runner returning 1 or 2 | 5 | 124 |
 | Delphi long `build-and-run-tests-long.bat` / `.sh` | 0 | 3, including build failure, native runner error 2, or invalid helper output | 5 | 124 |
 | FPC gate `build-and-run-tests-fpc.bat` / `.sh` | 0 | 1 for test/heap/result failure; 2 for tool/output configuration; 3 for build, generator or parity infrastructure failure | 5 | 124 |
@@ -1338,7 +1363,7 @@ was cancelled after hours, so a completed full-run baseline is not yet available
 
 The maxCron syntax corpus is stored in `tests/data/cron-valid.txt`.
 
-Our upstream-derived cron corpus used by tests is stored in `tests/data/cron-utils-unix-5field.txt`.
+The upstream-derived Unix five-field corpus also lives under `tests/data/`.
 Negative corpus (expected to fail parse) is stored in `tests/data/cron-invalid.txt`.
 
 Optional runners:

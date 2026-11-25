@@ -16,9 +16,14 @@ All notable user-visible changes to this project will be documented in this file
 
 ### Added
 - Linux x86_64 support with Delphi 12 Linux64, TZif-backed LOCAL and a Linux test gate.
-- Linux x86_64 support with FPC trunk 3.3.1 and a native Linux test gate. Programs must list `cthreads` first.
-- Delphi Linux64 benchmark runner. On WSL2, cron median lateness was 0.97–1.05 ms. Idle median CPU per 30 s was 106 ms for scan and about 3.7 ms for heap and auto.
-- Linux aarch64 support with FPC trunk 3.3.1. The default Linux gate cross-compiles and runs under qemu-user.
+- Linux x86_64 support with FPC trunk 3.3.1. Programs must list `cthreads` first.
+- Delphi Linux64 benchmarks for cron lateness, interval accuracy and idle CPU.
+  Interval benchmarks measure lateness from each callback's scheduled due time
+  and count misses and duplicates by due slot. The 10 ms and 100 ms runs met the
+  1.5 ms median bound with zero missed or doubled slots. An empty duration run
+  writes its CSV row and exits with code 1. The README records the WSL2 timings.
+- Linux aarch64 support with FPC trunk 3.3.1. The `fpc-aarch64` lane cross-compiles
+  the default tests and runs them under qemu-user.
 - Restart catch-up with a UTC `TMaxCronPersistedEvent.CompletedThrough` checkpoint and a `RestoreScheduleState` binder overload that attaches callbacks before restored events start. Delivery is at least once; handlers must be idempotent.
 - Production test wrappers enforce per-phase deadlines, terminate timed-out child trees, and return non-roster timeout status 124.
 - Test entry points reserve exit 5 for typed roster violations and report native phase completion codes; compiler, generator and runner failures cannot count as roster rejection.
@@ -63,19 +68,6 @@ All notable user-visible changes to this project will be documented in this file
 - Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
 
 ### Fixed
-- Fixed interval benchmarks to measure lateness from each callback's scheduled
-  due time, count misses and duplicates by due slot, and enforce the inclusive
-  1.5 ms median bound for 10 ms and 100 ms rows. An empty duration run writes its CSV
-  row and exits with code 1.
-  WSL2 re-measurement on THREADRIPPER on 2026-11-25 used three 60-second runs
-  per engine and period. Due-time lateness median / p95 / max (ms) was
-  0.728 / 1.186 / 5.061 (scan), 0.699 / 1.152 / 1.985 (heap), and
-  0.705 / 1.149 / 3.109 (auto) at 10 ms, and 0.728 / 1.179 / 2.217 (scan),
-  0.7515 / 1.207 / 2.094 (heap), and 0.747 / 1.192 / 2.321 (auto) at 100 ms.
-  All runs passed with zero misses and duplicates. Windows CPU was 12-15%
-  before launch. WSL load averages were 2.21, 3.68, and 3.55 at the start and
-  1.60, 2.09, and 2.70 at the end, across 64 logical CPUs. Another lane ran
-  `qemu-aarch64` at nice 15 during the measurement.
 - Interval save serialization uses the shared clock sample for legacy and checkpointed deadlines, with no per-event clock reads; cached execution history and public getters retain their existing behavior.
 - Restart saves share one validated clock pair across all events. Corrections between UTC1 and UTC2 preserve pending work; later corrections are outside that guarantee and can miss interval occurrences after restart. Eight rejected samples use the absent-checkpoint fallback.
 - Saved restart checkpoints reproject unfinished interval deadlines and open tickets through the save-wide clock pair. Interval and cron bounds follow their restore predecessor rules; nonpositive bounds use the saved-deadline fallback.
