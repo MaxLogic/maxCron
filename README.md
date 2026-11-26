@@ -80,10 +80,14 @@ The all-mode smoke therefore runs without heap tracing. The deterministic suite
 and the `imMainThread`/`imThread` smoke run with heap tracing and require zero
 unfreed blocks. This test split does not fix the RTL exit race.
 
-FPC's `TTimeZone.Local` misclassifies DST gaps/overlaps and some UTC conversions.
-LOCAL on Windows uses the Windows conversion rules through maxCron's zone engine
-on both Delphi and FPC. FPC exception messages are AnsiString, so
-characters unavailable in the Windows code page can be replaced in messages.
+In the tested FPC trunk (`ad23c1f3`), `TTimeZone.Local` on Windows misclassifies
+DST gaps and overlaps and some UTC conversions (FPC issue #42105, fixed
+upstream in `474f4bbf` on 2026-11-22). maxCron's `LOCAL` is independent of
+`TTimeZone.Local` and uses Windows conversion rules on Windows and maxCron's
+TZif resolver on Linux.
+
+FPC exception messages are AnsiString, so characters unavailable in the Windows
+code page can be replaced in messages.
 
 The tested compiler can report an internal `EListError` for a non-capturing
 anonymous procedure literal passed directly to an overloaded `Add` call. A
