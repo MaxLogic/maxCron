@@ -4,6 +4,7 @@ All notable user-visible changes to this project will be documented in this file
 
 ## [Unreleased]
 
+- Tested with FPC trunk `47b02384`.
 - FPC test tooling requires `MAXCRON_FPC`. Set `MAXCRON_BUILD_ROOT` to retain gate outputs in a shared parent directory.
 - Added Windows 8+ OS time zone resolution for IANA names through a built-in
   Unicode CLDR 49 name and alias table. No data files are needed on Windows;

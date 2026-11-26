@@ -45,7 +45,7 @@ and `MAXCRON_TIMER_RESOLUTION` are Windows-only. Other Delphi targets are untest
 
 Windows x64 and Linux x86_64/aarch64 are supported with FPC trunk 3.3.1, built from
 `https://gitlab.com/freepascal.org/fpc/source` main commit
-`ad23c1f3ddadfe9b82768d4f9f8fa5e5783c21ec` (2026-11-15). FPC 3.2.x lacks the
+`47b0238476dd4eb2d8f7ff4158626fd8cc379ebc` (2026-11-26). FPC 3.2.x lacks the
 anonymous-method support required here. `maxCron.inc` rejects older versions and
 targets outside Windows x64 and Linux x86_64/aarch64.
 
@@ -80,11 +80,9 @@ The all-mode smoke therefore runs without heap tracing. The deterministic suite
 and the `imMainThread`/`imThread` smoke run with heap tracing and require zero
 unfreed blocks. This test split does not fix the RTL exit race.
 
-In the tested FPC trunk (`ad23c1f3`), `TTimeZone.Local` on Windows misclassifies
-DST gaps and overlaps and some UTC conversions (FPC issue #42105, fixed
-upstream in `474f4bbf` on 2026-11-22). maxCron's `LOCAL` is independent of
-`TTimeZone.Local` and uses Windows conversion rules on Windows and maxCron's
-TZif resolver on Linux.
+The tested FPC trunk includes the fix for FPC issue #42105 (`474f4bbf`,
+2026-11-22). maxCron's `LOCAL` is independent of `TTimeZone.Local` and uses
+Windows conversion rules on Windows and maxCron's TZif resolver on Linux.
 
 FPC exception messages are AnsiString, so characters unavailable in the Windows
 code page can be replaced in messages.
