@@ -4,71 +4,38 @@ All notable user-visible changes to this project will be documented in this file
 
 ## [Unreleased]
 
-- Tested with FPC trunk `47b02384`.
-- FPC test tooling requires `MAXCRON_FPC`. Set `MAXCRON_BUILD_ROOT` to retain gate outputs in a shared parent directory.
-- Added Windows 8+ OS time zone resolution for IANA names through a built-in
-  Unicode CLDR 49 name and alias table. No data files are needed on Windows;
-  `MAXCRON_TZDIR` continues to select TZif data. FPC named zones and LOCAL share
-  the Windows rule source. Keep `maxCron.Internal.TimeZoneNames.inc` beside the units.
-- Fixed LOCAL on FPC and named Windows zones to follow Windows' own conversion,
-  including New Year boundaries and years before a zone's first rule change.
-  Windows offsets are sampled at whole seconds and cached by UTC year; outside
-  1602-9998 the nearest edge offset continues unchanged.
-
 ### Added
-- Linux x86_64 support with Delphi 12 Linux64, TZif-backed LOCAL and a Linux test gate.
-- Linux x86_64 support with FPC trunk 3.3.1. Programs must list `cthreads` first.
-- Delphi Linux64 benchmarks for cron lateness, interval accuracy and idle CPU.
-  Interval benchmarks measure lateness from each callback's scheduled due time
-  and count misses and duplicates by due slot. The 10 ms and 100 ms runs met the
-  1.5 ms median bound with zero missed or doubled slots. An empty duration run
-  writes its CSV row and exits with code 1. The README records the WSL2 timings.
-- Linux aarch64 support with FPC trunk 3.3.1. The `fpc-aarch64` lane cross-compiles
-  the default tests and runs them under qemu-user.
+- Linux support: Delphi 12 Linux64 and FPC trunk 3.3.1 on x86_64, and FPC trunk 3.3.1 on aarch64. LOCAL comes from TZif data (`TZ`, then `/etc/localtime`). FPC programs must list `cthreads` first.
+- FPC trunk 3.3.1 support on Windows x64, with Unicode-safe text handling and LOCAL from Windows rules. Tested with FPC trunk `47b02384`.
+- `TimeZoneId` accepts IANA names such as `GMT`, `Europe/Warsaw`, `America/New_York` and `Australia/Sydney`. On Windows 8 and later they resolve through the OS time zone database and a built-in Unicode CLDR 49 name and alias table, so no data files are needed. `MAXCRON_TZDIR` selects TZif data on any platform; other platforms also use `TZDIR` or `/usr/share/zoneinfo`. Named zones apply spring/fall policies, preserve aliases and reject leap-second files. Dense schedules across 30-minute and two-hour shifts use bounded period-range searches.
+- Monotonic interval events with `AddInterval`, `@every` plans, fixed-rate and fixed-delay modes, read-only interval metadata, wake-on-change, and persistence through the existing schedule store. Overlap, retry, execution-limit, and global-cap policies apply.
+- Previous-occurrence and range queries on `TCronSchedulePlan`: `FindPreviousScheduleDate`, `GetPreviousOccurrences`, `GetOccurrencesBetween`, `CountBetween` and `HasOccurrenceBetween` over `[start, end)` with a result limit (`cCronQueryDefaultLimit`, 10,000). Queries use the plan's wall-clock time and ignore the execution limit.
 - Restart catch-up with a UTC `TMaxCronPersistedEvent.CompletedThrough` checkpoint and a `RestoreScheduleState` binder overload that attaches callbacks before restored events start. Delivery is at least once; handlers must be idempotent.
-- Production test wrappers enforce per-phase deadlines, terminate timed-out child trees, and return non-roster timeout status 124.
-- Test entry points reserve exit 5 for typed roster violations and report native phase completion codes; compiler, generator and runner failures cannot count as roster rejection.
-- Separate long test qualification for exhaustive UTC/DST search, dispatch and restore matrices on Delphi and FPC; default gates keep deterministic regression samples. Every default, long and FPC smoke runner checks its complete independent roster and rejects stale manifests, including FPC-only tests.
-- FPC trunk 3.3.1 Windows x64 support, Unicode-safe text compatibility, Windows-rule LOCAL and a separate FPC test gate.
-- The FPC gate isolates each invocation in a fresh validated output directory, handles conditional and tokenized test attributes, and checks shared test names against Delphi discovery. Containment covers misconfiguration and pre-existing aliases; concurrent malicious directory replacement is outside its threat model.
-- The FPC batch launcher delegates to PowerShell with fixed arguments. Compiler/output settings remain literal environment values. Output paths accept only ASCII letters, digits, space and `\ : . _ - +`; unsupported characters fail with exit 2 before output creation. Child processes use the per-run working directory and an allowlisted environment, with gate-owned heaptrc logs and an explicit read-only test-data root. WSL invokes the same gate directly.
-- `TimeZoneId` now also accepts IANA names such as `GMT` and `Europe/Warsaw`.
-- Added internal integer-millisecond zone rules and a TZif reader for IANA names
-  such as `Europe/Warsaw`, `America/New_York` and `Australia/Sydney`. Set
-  `MAXCRON_TZDIR` to select TZif data on Windows; other platforms also use
-  `TZDIR` or `/usr/share/zoneinfo`.
-  Named zones apply spring/fall policies, preserve aliases and reject leap-second
-  files. Dense schedules across 30-minute and two-hour shifts use bounded period-range
-  searches.
-- Added wrapped ranges with continuous steps in seconds, minutes, hours and months, including month names.
-- Added month-end offsets `L-n`, `LW-n` and `L-nW` (0..30), with descriptions and matching next, previous and range queries.
-- Added monotonic interval events with `AddInterval`, `@every` plans, fixed-rate and fixed-delay modes, read-only interval metadata, wake-on-change, and persistence through the existing schedule store. Existing overlap, retry, execution-limit, and global-cap policies apply.
-- Added interval accuracy and CPU benchmarking with `--mode=interval --interval-ms=N`.
-- Added previous-occurrence and range queries to `TCronSchedulePlan`: `FindPreviousScheduleDate`, `GetPreviousOccurrences`, `GetOccurrencesBetween`, `CountBetween` and `HasOccurrenceBetween` over `[start, end)` with a result limit (`cCronQueryDefaultLimit`, 10,000). Queries use the plan's wall-clock time and ignore the execution limit. Fuzz-oracle coverage now checks previous and range results, and DOM/DOW modifier plans in both directions, against brute force.
-- Added standalone benchmark modes for real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Documented a repeated Win64 baseline for timer changes.
+- Wrapped ranges with continuous steps in seconds, minutes, hours and months, including month names.
+- Month-end offsets `L-n`, `LW-n` and `L-nW` (0..30), with descriptions and matching next, previous and range queries.
+- Benchmark modes for interval accuracy and CPU (`--mode=interval --interval-ms=N`), real-time idle process CPU with configurable far-future event counts and engines, and per-second firing latency with immutable per-occurrence due times and raw due/callback timestamps. Interval runs measure lateness from each callback's scheduled due time and count misses and duplicates by due slot; the 10 ms and 100 ms Linux runs met the 1.5 ms median bound with no missed or doubled slots. An empty duration run writes its CSV row and exits with code 1. The benchmarks also run as Delphi Linux64 binaries; `DEVELOPMENT.md` records the Win64 and WSL2 results.
 
 ### Changed
+- Consumer projects must add `maxCron.Plan.pas`, `maxCron.Internal.DeadlineQueue.pas`, `maxCron.Internal.Platform.pas`, `maxCron.Internal.Text.pas`, `maxCron.Internal.TimeZone.pas` and `maxCron.Internal.TZif.pas`, or add their folder to the search path, and keep `maxCron.inc` and `maxCron.Internal.TimeZoneNames.inc` beside them. Calculation code moved to the RTL-only `maxCron.Plan`; `uses maxCron` keeps working. Unit-qualified RTTI names of moved types now use `maxCron.Plan`; short names are unchanged.
 - Numbers in cron expressions, execution limits, excluded dates and integer environment variables accept decimal digits only. Hex forms like `$A` and signed forms like `+10` are rejected.
 - Month and weekday names are accepted only as complete field values or range endpoints, including the weekday before `#` or the `L` suffix. Steps and weekday ordinals require numbers.
-- Stores that persist `CompletedThrough` replay work that was unfinished at save time. Missing checkpoints retain the existing restore behavior. Persisted `Enabled` keeps automatically exhausted events eligible while tickets remain unsettled; explicit stops remain disabled. Persisted execution counts cover the settled prefix so replay still respects execution limits.
+- Day-of-week ranges `0-7` (including `SUN-7`) now span every day in `cdMaxCron` and `cdStandard`, instead of Sunday only. Stepped forms count from Sunday: `0-7/2` selects Sun,Tue,Thu,Sat and `0-7/3` selects Sun,Wed,Sat. Steps of 7 or more still select Sunday only. Quartz numbering is unchanged (`1` = Sun, `7` = Sat).
+- Stepped wrapped day-of-week ranges now count continuously across Sunday in every dialect. For example, `4-2/2` selects Thu,Sat,Mon instead of Thu,Sat,Sun,Tue; `1-7/4` selects Mon,Fri without adding Sun (`cdMaxCron`/`cdStandard`). Quartz `5-3/2` and `2-1/4` use the same rule. Unstepped wraps are unchanged.
+- Cron events now include an occurrence exactly at `ValidFrom` when it is after the search base. Both validity bounds are inclusive, as for interval events.
 - LOCAL `dspRunAtNextValidTime` now shifts a missing occurrence to the transition instant, matching named zones. For example, 02:30:30 shifts to 03:00:00 instead of 03:00:30.
 - LOCAL on Windows uses the Windows conversion rules on both Delphi and FPC, and picks up a host-zone change on the next scheduler pass.
 - `NextSchedule` and `LastExecution` of cron events are the exact `TDateTime` of their millisecond (equal to `EncodeDateTime`); previously some values differed in the last bits.
-- Cron events now include an occurrence exactly at `ValidFrom` when it is after the search base. Both validity bounds are inclusive, as for interval events.
-- Day-of-week ranges `0-7` (including `SUN-7`) now span every day in `cdMaxCron` and `cdStandard`, instead of Sunday only. Stepped forms count from Sunday: `0-7/2` selects Sun,Tue,Thu,Sat and `0-7/3` selects Sun,Wed,Sat. Steps of 7 or more still select Sunday only. Quartz numbering is unchanged (`1` = Sun, `7` = Sat).
-- Stepped wrapped day-of-week ranges now count continuously across Sunday in every dialect. For example, `4-2/2` selects Thu,Sat,Mon instead of Thu,Sat,Sun,Tue; `1-7/4` selects Mon,Fri without adding Sun (`cdMaxCron`/`cdStandard`). Quartz `5-3/2` and `2-1/4` use the same rule. Unstepped wraps are unchanged.
-- Consumer projects must also include `maxCron.Internal.Text.pas` and `maxCron.Internal.DeadlineQueue.pas`.
-- Invalid or unknown `TimeZoneId` values report the rejected value and cause,
-  preserving the event's previous zone. Add `maxCron.Internal.TZif.pas` to consumer
-  projects. `LOCAL`, `UTC` and fixed-offset values keep their meaning; their DST fixes are listed below.
+- Stores that persist `CompletedThrough` replay work that was unfinished at save time. Missing checkpoints retain the existing restore behavior. Persisted `Enabled` keeps automatically exhausted events eligible while tickets remain unsettled; explicit stops remain disabled. Persisted execution counts cover the settled prefix so replay still respects execution limits.
+- Invalid or unknown `TimeZoneId` values report the rejected value and cause, preserving the event's previous zone. `LOCAL`, `UTC` and fixed-offset values keep their meaning.
 - Plans containing a newly recognised day-of-month form and an invalid later field now report the later field's error.
 - Recognized `L-n`, `LW-n` and `L-nW` forms with out-of-range or overflowing offsets now report `Cron value out of range` instead of `Invalid cron token`.
-- Align cron passes to second boundaries with a deadline timing thread and precise Windows wall clock; add timer-resolution selection and coalesced VCL delivery.
-- Split calculation code into the RTL-only `maxCron.Plan.pas` and isolated timer, async, debug, environment and timezone calls behind internal seams, preserving scheduler behavior and the `uses maxCron` API. Add `maxCron.Plan.pas`, `maxCron.Internal.Platform.pas` and `maxCron.Internal.TimeZone.pas` to consumer projects (or add their folder to the search path), keeping `maxCron.inc` beside them. Unit-qualified RTTI names of moved types now use `maxCron.Plan`; short names are unchanged.
+- Cron passes align to second boundaries on a deadline timing thread with a precise Windows wall clock; added timer-resolution selection and coalesced VCL delivery.
 - Updated the demo startup schedules to use explicit current `cdMaxCron` semantics for second-level showcase events, so the sample no longer implies that 6-field default-dialect plans are seconds-based. (T-103)
 - Rewrote the external help dialog cron guide to match the current parser behavior, including dialect split, Quartz seconds-first guidance, current Day-of-Week numbering, and the full `ExecutionLimit` range. (T-104)
+- Reorganized the README around using the library, with a console quick start and corrected examples. Build, test and benchmark documentation moved to `DEVELOPMENT.md`.
 
 ### Fixed
+- LOCAL on FPC and named Windows zones follow Windows' own conversion, including New Year boundaries and years before a zone's first rule change. Windows offsets are sampled at whole seconds and cached by UTC year; outside 1602-9998 the nearest edge offset continues unchanged.
 - Interval save serialization uses the shared clock sample for legacy and checkpointed deadlines, with no per-event clock reads; cached execution history and public getters retain their existing behavior.
 - Restart saves share one validated clock pair across all events. Corrections between UTC1 and UTC2 preserve pending work; later corrections are outside that guarantee and can miss interval occurrences after restart. Eight rejected samples use the absent-checkpoint fallback.
 - Saved restart checkpoints reproject unfinished interval deadlines and open tickets through the save-wide clock pair. Interval and cron bounds follow their restore predecessor rules; nonpositive bounds use the saved-deadline fallback.
@@ -91,9 +58,18 @@ All notable user-visible changes to this project will be documented in this file
 - Fixed WeekdaysOnly previously excluding Monday and Sunday instead of Saturday and Sunday.
 - Fixed blackout boundaries so the start is inclusive and the end is exclusive, including overnight windows and fractional-millisecond inputs.
 - Use one nearest-millisecond, ties-to-even conversion for next, previous and range queries, including validity comparisons; this fixes platform-dependent results near half-millisecond inputs without changing the validity-window rules. `CronDateTimeToMs` now rounds the exact stored value with integer arithmetic, so inputs within a rounding error of a half millisecond no longer round the wrong way.
-- Fixed `mpSkip` boundaries with integer microsecond decisions: occurrences less than one second late fire, including sub-millisecond neighbours of the one-second boundary; occurrences exactly one second late are skipped. Run/reset and late-pass searches no longer skip the next occurrence in the final half-millisecond before it.
-- Fixed `mpSkip` discarding on-time cron occurrences: occurrences less than one second late now fire; those one second or more late are skipped.
+- Fixed `mpSkip` discarding on-time cron occurrences. Decisions use integer microseconds: occurrences less than one second late fire, including sub-millisecond neighbours of the one-second boundary, and occurrences one second or more late are skipped. Run/reset and late-pass searches no longer skip the next occurrence in the final half-millisecond before it.
 - Fixed `FindNextScheduleDate` returning backward or wrong-day occurrences near midnight by deriving the date and clock from one millisecond-normalized timestamp, including arithmetic bases and clock-field rollovers.
+
+### Tests and tooling
+- Linux test gate `build-and-run-tests-linux.sh` with `delphi`, `fpc` and `fpc-aarch64` lanes; the aarch64 lane cross-compiles the default tests and runs them under qemu-user.
+- Separate FPC test gate. Each invocation uses a fresh validated output directory, handles conditional and tokenized test attributes, and checks shared test names against Delphi discovery. Containment covers misconfiguration and pre-existing aliases; concurrent malicious directory replacement is outside its threat model.
+- FPC test tooling requires `MAXCRON_FPC`. Set `MAXCRON_BUILD_ROOT` to retain gate outputs in a shared parent directory.
+- The FPC batch launcher delegates to PowerShell with fixed arguments. Compiler/output settings remain literal environment values. Output paths accept only ASCII letters, digits, space and `\ : . _ - +`; unsupported characters fail with exit 2 before output creation. Child processes use the per-run working directory and an allowlisted environment, with gate-owned heaptrc logs and an explicit read-only test-data root. WSL invokes the same gate directly.
+- Separate long test qualification for exhaustive UTC/DST search, dispatch and restore matrices on Delphi and FPC; default gates keep deterministic regression samples. Every default, long and FPC smoke runner checks its complete independent roster and rejects stale manifests, including FPC-only tests.
+- Production test wrappers enforce per-phase deadlines, terminate timed-out child trees, and return non-roster timeout status 124.
+- Test entry points reserve exit 5 for typed roster violations and report native phase completion codes; compiler, generator and runner failures cannot count as roster rejection.
+- Fuzz-oracle coverage checks previous and range results, and DOM/DOW modifier plans in both directions, against brute force.
 - Corrected the pooled-dispatch regression test to verify worker reuse instead of assuming a fixed maximum pool size.
 - Fixed DST policy tests to search the next two years for future transitions with at least one hour of scheduling margin, including transition-minute and year-boundary checks, instead of using elapsed transitions from the current year.
 - Migrated test gates to DelphiAIKit and corrected WSL exit propagation so missing tools, build errors, and test failures return nonzero.

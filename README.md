@@ -1,190 +1,21 @@
 # maxCron
-Flexible, lightweight CRON compliant scheduler written in Delphi.
+
+An in-process cron scheduler for Delphi 12 and Free Pascal. You register named
+events with a cron expression or a fixed interval, and maxCron calls your
+callback on time, on the main thread or a worker thread. It runs on Windows and
+Linux; see [Platforms](#platforms) for the tested compilers and targets.
 
 Homepage: https://maxlogic.eu/portfolio/maxcron-scheduler-for-delphi/
 
+## Features
 
-
-## Installation
-
-Add `maxCron.pas`, `maxCron.Plan.pas`, `maxCron.Internal.Platform.pas` and
-`maxCron.Internal.TimeZone.pas`, `maxCron.Internal.TZif.pas`,
-`maxCron.Internal.Text.pas` and `maxCron.Internal.DeadlineQueue.pas` to your project,
-or add their folder to the unit
-search path. Keep `maxCron.inc` and `maxCron.Internal.TimeZoneNames.inc` beside these units. The Delphi scheduler requires
-the MaxLogicFoundation submodule; the FPC build uses only the RTL. Existing code can continue to use `uses maxCron`.
-Calculation-only consumers can use `maxCron.Plan`, which depends only on the RTL.
-
-Moved calculation types retain their type identity and short RTTI names. Their
-unit-qualified RTTI names now use `maxCron.Plan` (for example,
-`TCronSchedulePlan.UnitName`); update reflection that looks up the old qualified names.
-
-
-## Platforms
-
-| Platform | Compiler | Timers | Status |
-| --- | --- | --- | --- |
-| Windows x64/x86 | Delphi 12 | High-resolution waits | Supported |
-| Windows x64 | FPC trunk 3.3.1 | High-resolution waits | Supported |
-| Linux x86_64 | Delphi 12 Linux64 | Millisecond waits | Supported |
-| Linux x86_64 | FPC trunk 3.3.1 | Millisecond waits | Supported |
-| Linux aarch64 | FPC trunk 3.3.1 | Millisecond waits | Supported, tested under qemu-user |
-
-`ctVcl`, `maxCronHlpDlg`, the VCL test runner, the Windows zone provider
-and `MAXCRON_TIMER_RESOLUTION` are Windows-only. Other Delphi targets are untested.
-
-### Linux setup
-
-- Delphi 12 needs the Linux64 SDK on Windows. Cross-compile there and run the
-  binary on the Linux target.
-- FPC programs must list `cthreads` first in the program's `uses` clause,
-  followed by `cwstring` for Unicode conversions.
-- Install `tzdata` on the Linux target for LOCAL and named zones.
-
-## Free Pascal (FPC)
-
-Windows x64 and Linux x86_64/aarch64 are supported with FPC trunk 3.3.1, built from
-`https://gitlab.com/freepascal.org/fpc/source` main commit
-`47b0238476dd4eb2d8f7ff4158626fd8cc379ebc` (2026-11-26). FPC 3.2.x lacks the
-anonymous-method support required here. `maxCron.inc` rejects older versions and
-targets outside Windows x64 and Linux x86_64/aarch64.
-
-On Windows, build from source with the official FPC 3.2.2 x86_64-win64
-bootstrap and its `make`. Replace `<bootstrap-compiler>` and `<fpc-root>` with
-your compiler and installation paths.
-
-```bat
-make clean all install "PP=<bootstrap-compiler>" "INSTALL_PREFIX=<fpc-root>" OS_TARGET=win64 CPU_TARGET=x86_64
-```
-
-The compiler is `<fpc-root>\bin\x86_64-win64\fpc.exe`. Invoke it with the
-configuration and units from the same installation.
-
-```bat
-"<fpc-root>\bin\x86_64-win64\fpc.exe" -n "@<fpc-root>\bin\x86_64-win64\fpc.cfg" "-FD<fpc-root>\bin\x86_64-win64" "-Fu<fpc-root>\units\x86_64-win64\*" "-Fu<maxCron folder>" "<your program>"
-```
-
-On Linux, use the same compiler revision with the units for your target and
-follow [Linux setup](#linux-setup).
-
-The units set `delphiunicode`, `anonymousfunctions` and `functionreferences`
-through `maxCron.inc`, with real constants kept at Double precision.
-Add the same library units listed under Installation,
-including `maxCron.Internal.Text.pas`. MaxLogicFoundation is not needed on FPC.
-Plan text stays Unicode.
-
-On FPC, `imMaxAsync` runs on the RTL `System.Threading` pool, as does `imTTask`.
-The tested FPC build has an RTL pool shutdown race that can double-free a worker
-at process exit under `heaptrc`; a program using only `TTask.Run` reproduces it.
-The all-mode smoke therefore runs without heap tracing. The deterministic suite
-and the `imMainThread`/`imThread` smoke run with heap tracing and require zero
-unfreed blocks. This test split does not fix the RTL exit race.
-
-The tested FPC trunk includes the fix for FPC issue #42105 (`474f4bbf`,
-2026-11-22). maxCron's `LOCAL` is independent of `TTimeZone.Local` and uses
-Windows conversion rules on Windows and maxCron's TZif resolver on Linux.
-
-FPC exception messages are AnsiString, so characters unavailable in the Windows
-code page can be replaced in messages.
-
-The tested compiler can report an internal `EListError` for a non-capturing
-anonymous procedure literal passed directly to an overloaded `Add` call. A
-literal capturing only `Self` can bind to the method-pointer overload. Use a
-typed `TmaxCronNotifyProc` local variable before calling `Add`:
-
-```pascal
-lCallback := procedure(aSender: IMaxCronEvent) begin HandleSchedule(aSender); end;
-lEvent := lCron.Add('job', '* * * * *', lCallback);
-```
-
-Run `build-and-run-tests-fpc.bat` from Windows, or
-`./build-and-run-tests-fpc.sh` from WSL (Bash, `wslpath`, and Python 3 for command-line
-test arguments). The batch file is a fixed PowerShell 5.1 launcher; the WSL wrapper
-invokes the same PowerShell gate directly. Neither passes settings through cmd.
-The gate verifies the compiler version and target before building.
-Set `MAXCRON_FPC` to the absolute Windows path to `fpc.exe` for the gate,
-roster export and Python roster regressions. The scripts use `fpc.cfg` and
-compiler tools beside that executable. For `<fpc-root>\bin\x86_64-win64\fpc.exe`,
-they search `<fpc-root>\units\x86_64-win64\*` for units. A missing setting or
-executable is a configuration error.
-
-Set `MAXCRON_BUILD_ROOT` to a Windows directory for persistent gate outputs.
-The FPC gate uses `<build-root>\fpc` or `%TEMP%\maxCron-fpc` if the build root
-is unset. `MAXCRON_FPC_OUT` takes precedence over both. Each invocation creates a new
-`run-<GUID>` directory under that root, fails if the name already exists, checks
-its final Windows path identity and writes all build/test outputs below it.
-Pre-existing output children are never reused. The printed `FPC OUTPUT` line
-identifies the run directory. No WSL bridge launcher files are created.
-
-Settings are literal environment strings. Values are never expanded or evaluated.
-Supported output path characters are ASCII letters, digits, space and
-`\ : . _ - +` only. Every other character, including non-ASCII characters and
-shell metacharacters, is rejected with exit 2 before any output directory is
-created. Colons outside the drive prefix and components ending in a space or dot
-are also rejected. Normal `.` and `..` components are resolved before validation.
-The batch launcher accepts no command-line arguments. WSL arguments are encoded
-as a JSON array in `MAXCRON_FPC_ARGS` and passed directly to the native runner as
-an argument array. The current runner rejects all test filters; run the full suite.
-
-Every child process runs in the new run directory with an explicit environment:
-`SystemRoot`, `windir`, run-local `TEMP`/`TMP`, and a `PATH` limited to the
-toolchain and Windows system directories. The gate defines `MAXCRON_TEST_ROOT`
-to the validated absolute repository directory for read-only fixture lookup.
-Shared tests keep their existing lookup when this variable is unset.
-The gate always sets `HEAPTRC` to a
-log file inside the run directory, ignoring inherited settings. Mandatory heap
-checks read those files. `child-processes.jsonl` records each direct launch.
-
-Threat model: protects against misconfiguration and pre-existing links/aliases
-(junction, symlink, SUBST, case/trailing forms) at the root, any ancestor and any
-child; it does not defend against a concurrent malicious process replacing
-directories during the run. Existing directory ancestors must resolve to a
-Windows volume identity; inaccessible or unsupported destinations fail closed.
-`MAXCRON_DEBUG_SAFETY=1` enables range, overflow, stack and I/O checks.
-For WSL, supply Windows paths for `MAXCRON_FPC`, `MAXCRON_BUILD_ROOT` and
-`MAXCRON_FPC_OUT`. The wrapper transfers them to Windows using `WSLENV`.
-When invoking WSL from Windows, append those names to `WSLENV` so the values
-reach WSL. Use `WSLENV` without the `/p` flag for Windows path values.
-
-The FPC runner reuses the calculation, corpus, fuzz/oracle, interval-plan,
-deadline queue, TZif/zone, text, time-boundary and deterministic scheduler tests.
-Registration is generated from their DUnitX attributes. Timing, stress,
-invoke-mode, lifecycle, VCL and soak suites remain Delphi tests; the FPC smoke
-checks add/run/fire/shutdown in all four invoke modes. The gate exits 0 only
-after all builds, tests, smokes and required heap checks pass. Its exit codes
-are 1 for test/heap failure, 2 for tool/output configuration, 3 for build/helper
-infrastructure failure, 5 for a roster violation, and 124 for a phase timeout.
-The complete wrapper and native-phase propagation tables are in the testing
-section below.
-
-The registry generator follows nested `IFDEF`/`IFNDEF`/`ELSE`/`ENDIF` branches for
-the fixed FPC Windows x64 test environment and accepts inline fixture attributes.
-Unsupported conditions or fixture/test declarations fail with exit 3. The gate
-also compares generated test names per shared fixture with the real Delphi DUnitX
-discovery snapshot in `tests/fpc/DelphiSharedTests.txt`. Its source hashes make a
-shared-fixture edit fail until the snapshot is refreshed; equal counts with
-different names also fail. The only exclusions are the three FPC shim tests and
-the Delphi-only `MatchesRtlLocal` test.
-
-After editing a shared fixture, regenerate that snapshot with
-`tests/fpc/Export-DelphiTestNames.ps1 -Compiler <dcc64.exe> -DUnitXSource <DUnitX-source-directory> -OutputRoot <external-build-directory>`
-under PowerShell. This compiles a discovery tool using the installed Delphi
-compiler and records actual DUnitX names with their source hashes. Review the
-snapshot diff alongside the test changes. Focused generator, alias and parity
-regressions are in `tests/fpc/FpcGate.Tests.ps1` (Pester 5); pass `Generator` and an
-owned external `ScratchRoot` using `New-PesterContainer -Data`. The generated
-alias-layout and literal-path invariants and Delphi attribute-layout discovery comparison are in
-`tests/fpc/gate_invariants.py` (Windows Python 3.12+, `--help`). Keep its fixtures under
-an owned external output root and clean them with the bounded link-fixture helper.
-
-## Main features:
-
-- Compatible with most of what CRON is offering
+- Unix cron syntax, extended with optional year, seconds and execution-limit fields
+- Monotonic interval events (`AddInterval`, `@every 100ms`)
 - Multiple cron dialects (standard 5-field, maxCron 5-8 field, Quartz seconds-first)
 - Quartz-style DOM/DOW modifiers and cron macros
 - Per-event overlap, invoke, and misfire policies
 - Execution limits and ValidFrom/ValidTo ranges
-- Per-event timezone + DST handling policies
+- Per-event time zones (LOCAL, UTC, fixed offsets, IANA names) with DST policies
 - Business calendar controls (weekdays-only, holiday list, blackout windows)
 - Deterministic hash/jitter syntax (`H`, `H/step`, `H(min-max)/step`)
 - Schedule previews, previous-occurrence and range queries, and human-readable descriptions
@@ -195,8 +26,33 @@ an owned external output root and clean them with the bounded link-fixture helpe
 - Explicit graceful shutdown API with timeout policies (wait/cancel/force)
 - Optional pooled `imThread` dispatch mode for burst-heavy workloads
 
+## Installation
 
-# Recommended scheduler usage
+Clone with submodules, because the Delphi scheduler needs `lib/MaxLogicFoundation`:
+
+```bash
+git clone --recursive https://github.com/MaxLogic/maxCron.git
+```
+
+Add the repository folder to your project's unit search path, or add these units
+to the project:
+
+- `maxCron.pas`, `maxCron.Plan.pas`
+- `maxCron.Internal.DeadlineQueue.pas`, `maxCron.Internal.Platform.pas`,
+  `maxCron.Internal.Text.pas`, `maxCron.Internal.TimeZone.pas`,
+  `maxCron.Internal.TZif.pas`
+
+Keep `maxCron.inc` and `maxCron.Internal.TimeZoneNames.inc` beside them. For
+Delphi, also add `lib/MaxLogicFoundation` to the search path. Free Pascal builds
+use only the RTL; see [Free Pascal (FPC)](#free-pascal-fpc).
+
+Your code needs only `uses maxCron`. Code that only parses plans or computes
+occurrences can use `maxCron.Plan`, which depends only on the RTL.
+
+## Quick start
+
+A VCL form owns a scheduler and registers a few events:
+
 ```delphi
 procedure TForm1.FormCreate(Sender: TObject);
 var
@@ -228,13 +84,827 @@ begin
 end;
 ```
 
+Callbacks run on the main thread by default (`imMainThread`), which needs a
+message pump. A console program or service has none, so select a worker-thread
+invoke mode:
+
+```delphi
+program ConsoleCron;
+{$APPTYPE CONSOLE}
+uses
+  System.SysUtils, maxCron;
+
+var
+  lCron: TmaxCron;
+begin
+  lCron := TmaxCron.Create(ctPortable);
+  try
+    lCron.DefaultInvokeMode := imThread;
+    lCron.Add('nightly', '0 2 * * *',
+      procedure(aEvent: IMaxCronEvent)
+      begin
+        Writeln(FormatDateTime('hh:nn:ss', Now), ' nightly job');
+      end).Run;
+    lCron.AddInterval('poll', 500,
+      procedure(aEvent: IMaxCronEvent)
+      begin
+        Writeln(FormatDateTime('hh:nn:ss.zzz', Now), ' poll');
+      end).Run;
+    Readln;
+    lCron.Shutdown(5000, spWait);
+  finally
+    lCron.Free;
+  end;
+end.
+```
+
 Important usage notes:
 
 - `Add(...)` registers an event but does not start it. Call `Run` when the event is fully configured.
 - In the default `cdMaxCron` dialect, 5 fields mean `Minute Hour DayOfMonth Month DayOfWeek`.
 - If we want a seconds-first Quartz expression, set `Dialect := cdQuartzSecondsFirst` (or `DefaultDialect`) before assigning the plan.
+- Callbacks off the main thread must not touch the UI directly.
+- Free the scheduler from outside its own callbacks. The full rules are in the
+  [usage contract](#usage-contract-required).
 
-## Timer backend selection
+## Cron format
+
+Traditional (inherited from Unix) cron format consists of five fields separated by white spaces:
+
+```
+<Minute> <Hour> <Day_of_the_Month> <Month_of_the_Year> <Day_of_the_Week>
+```
+
+The default `cdMaxCron` dialect accepts up to three more fields after these five:
+a sixth `<Year>`, a seventh `<Seconds>` and an eighth `<ExecutionLimit>`:
+
+```
+<Minute> <Hour> <Day_of_the_Month> <Month_of_the_Year> <Day_of_the_Week> <Year> <Seconds> <ExecutionLimit>
+```
+
+Field ranges and defaults:
+
+```
+* * * * * * 0 0
+| | | | | | | |
+| | | | | | | +-- ExecutionLimit    (range 0-4294967295. Default 0 = unlimited)
+| | | | | | +---- Seconds           (range 0 - 59. Default 0)
+| | | | | +------ Year              (range: 1900-3000)
+| | | | +-------- Day of the Week   (range: 0-7, 0/7 standing for Sunday; 1=Monday..6=Saturday)
+| | | +---------- Month of the Year (range: 1-12)
+| | +------------ Day of the Month  (range: 1-31)
+| +-------------- Hour              (range: 0-23)
++---------------- Minute            (range: 0-59)
+```
+
+Any of these 8 fields may be an asterisk (*). This means the entire range of possible values (each minute, each hour, etc.).
+
+### Cron dialects
+
+maxCron parses three cron dialects. The default is `cdMaxCron`.
+
+- `cdStandard` (5-field): `<Minute> <Hour> <DayOfMonth> <Month> <DayOfWeek>`
+- `cdMaxCron` (5-8 field): `<Minute> <Hour> <DayOfMonth> <Month> <DayOfWeek> [Year] [Second] [ExecutionLimit]`
+- `cdQuartzSecondsFirst` (6/7-field): `<Second> <Minute> <Hour> <DayOfMonth> <Month> <DayOfWeek> [Year]`
+
+Important: Quartz-style expressions are **seconds-first**. If we use `?`, `W`, `LW`, `#`, or any 6/7-field seconds-first plan, set `Dialect := cdQuartzSecondsFirst`. Parsing those expressions in minute-first dialects (`cdStandard`/`cdMaxCron`) will shift fields and produce different results.
+Quartz also uses **1-7** for Day-of-Week numbering (`1=Sun .. 7=Sat`). In `cdStandard`/`cdMaxCron` we use `0` or `7` for Sunday and `1..6` for Monday..Saturday.
+
+DefaultDialect applies when we create new events; we can override per event:
+
+```delphi
+CronScheduler.DefaultDialect := cdStandard;
+NewSchedule := CronScheduler.Add('QuartzStyle');
+NewSchedule.Dialect := cdQuartzSecondsFirst;
+NewSchedule.EventPlan := '0 15 10 ? * 2#3';
+```
+
+For `cdMaxCron`, prefer either:
+
+- 5-field plans for minute-level schedules, or
+- full 8-field plans when we want to be explicit about `Year`, `Second`, and `ExecutionLimit`.
+
+That keeps examples readable and avoids confusing minute-first maxCron plans with Quartz seconds-first syntax.
+
+Any field may contain a list of values separated by commas, (e.g. 1,3,7) or a range of values (two integers separated by a hyphen, e.g. 1-5).
+
+After an asterisk (*) or a range of values, you can use character / to specify that values are repeated over and over with a certain interval between them. For example, you can write "0-23/2" in Hour field to specify that some action should be performed every two hours (it will have the same effect as "0,2,4,6,8,10,12,14,16,18,20,22"); value "*/4" in Minute field means that the action should be performed every 4 minutes, "1-30/3" means the same as "1,4,7,10,13,16,19,22,25,28".
+
+In Month and Day of Week fields, you can use names of months or days of weeks abbreviated to first three letters ("Jan,Feb,...,Dec" or "Mon,Tue,...,Sun") instead of their numeric values.
+
+Numbers use decimal digits only; leading zeros are allowed, while hex (`0x1F`,
+`$1F`) and signs (`+5`) are rejected. A month or weekday name must be a whole
+value or range endpoint, such as `JAN-MAR` or `MON#2`. Steps and the ordinal
+after `#` must be numbers.
+
+Wrapped ranges in seconds, minutes, hours and months continue through the field minimum.
+Steps count continuously from the range start: `22-2` means hours 22,23,0,1,2;
+`22-2/2` means 22,0,2; `22-2/3` means 22,1. Month names work too:
+`NOV-FEB` means November through February; `NOV-FEB/2` means November and January.
+Day-of-week wraps use the same continuous step rule, in every dialect:
+`4-2/2` means Thursday, Saturday and Monday; `1-7/4` means Monday and Friday
+in `cdMaxCron` and `cdStandard`. In Quartz numbering, the corresponding ranges
+are `5-3/2` and `2-1/4`. Without a step, `FRI-MON` selects Friday through Monday.
+Day-of-month, year and `H(...)` ranges do not wrap.
+
+In `cdMaxCron` and `cdStandard`, Sunday may be written as `0` or `7`.
+For a range ending in `7`, starts `1` through `6` run forward through Sunday:
+`1-7` is Monday through Sunday, and `1-7/4` is Monday and Friday.
+`0-7` spans all seven days; `0-7/2` is Sunday, Tuesday, Thursday and Saturday,
+`0-7/3` is Sunday, Wednesday and Saturday, and steps of 7 or more select Sunday only.
+`7-7` and `SUN-SUN` select Sunday only. A range starting at `7` otherwise starts
+at Sunday, so `7-2/2` is Sunday and Tuesday. Lists union the selected days.
+Day names use the dialect's numbers before range expansion: `SUN-7` therefore
+also spans the week, while `0-SUN` is Sunday only in these zero-based dialects.
+
+Quartz numbering remains `1` = Sunday through `7` = Saturday; `0` is invalid.
+`1-7` spans the week and `1-7/2` selects Sunday, Tuesday, Thursday and Saturday.
+For any Quartz start `a` from 1 through 7, `a-7/s` steps forward from `a`
+through Saturday, without restarting the step; `7-7` is Saturday only.
+In either numbering, other ranges advance from the start to the endpoint,
+crossing Sunday when needed, and count the step continuously from the start.
+An omitted step means 1. Singleton values and `n/s` without a dash keep their meaning.
+Steps larger than a range span select only its start, in every field. This also
+applies to `*/n`, `n/k` and stepped hash ranges; a hash range starts at its seeded
+value. For example, weekday `1-1/2147483647` selects Monday only.
+
+Additional syntax:
+
+- Quartz-style modifiers for Day-of-Month and Day-of-Week:
+  - DOM: `L` (last day), `W` (nearest weekday), `LW` (last weekday).
+    Offsets `L-n` (n days before the last day), `LW-n` (n weekdays before the last weekday),
+    and `L-nW` (nearest weekday to the last day minus n days) accept n from 0 to 30.
+    Nearest-weekday adjustments stay within the month. If the target falls before the month,
+    that month has no match. `L-0` equals `L`; `LW-0` and `L-0W` match `LW`.
+    For example, `L-2` is February 26 in 2027, `LW-2` is May 27 in 2026,
+    and `L-30W` is August 3 in 2026. Large `LW-n` offsets can have no match in any month.
+  - DOW: `?` (no specific value), `nL` (last weekday in month), `n#k` (nth weekday, k=1..5).
+  - A modifier must be the field's only value: lists such as `L,15` or
+    `1#2,3#1` are rejected.
+- `?` is accepted for Quartz compatibility and matches any value.
+- Macros: `@yearly`/`@annually`, `@monthly`, `@weekly`, `@daily`/`@midnight`, `@hourly`, `@reboot` (runs once on the next scheduler tick; `@reboot` is supported only in `cdMaxCron`; `@weekly` uses Sunday in each dialect: `0` in `cdStandard`/`cdMaxCron`, `1` in `cdQuartzSecondsFirst`).
+- Comments and whitespace: trailing `# comment` is ignored; extra spaces/tabs and spaces after commas are accepted.
+
+Examples in the default `cdMaxCron` dialect. Plans that restrict both day of
+month and day of week use the default `dmAnd` matching, so both must match (see
+[day matching](#day-of-month-and-day-of-week-matching)):
+
+```
+* * * * * *                         Each minute
+
+59 23 31 12 5 *                     One minute before the end of the year, if December 31 is a Friday
+
+59 23 31 DEC Fri *                  Same as above (different notation)
+
+45 17 7 6 * *                       Every year, on June 7th at 17:45
+
+45 17 7 6 * 2001,2002               On June 7th at 17:45, in 2001 and 2002 only
+
+0,15,30,45 0,6,12,18 1,15,31 * 1-5 *  At 00:00, 00:15, 00:30, 00:45, 06:00, 06:15, 06:30,
+                                    06:45, 12:00, 12:15, 12:30, 12:45, 18:00, 18:15,
+                                    18:30, 18:45, on the 1st, 15th or 31st of each month, but not on weekends
+
+*/15 */6 1,15,31 * 1-5 *            Same as above (different notation)
+
+0 12 * * 1-5 *                       At midday on weekdays
+0 12 * * Mon-Fri *                   Same as above (different notation)
+
+* * * 1,3,5,7,9,11 * *              Each minute in January, March, May, July, September, and November
+
+1,2,3,5,20-25,30-35,59 23 31 12 * * On the last day of the year, at 23:01, 23:02, 23:03, 23:05,
+                                    23:20, 23:21, 23:22, 23:23, 23:24, 23:25, 23:30,
+                                    23:31, 23:32, 23:33, 23:34, 23:35, 23:59
+
+0 9 1-7 * 1 *                       First Monday of each month, at 9 a.m.
+
+0 0 1 * * *                         At midnight, on the first day of each month
+
+* 0-11 * * *                        Each minute before midday
+
+* * * 1,2,3 * *                     Each minute in January, February or March
+
+* * * Jan,Feb,Mar * *               Same as above (different notation)
+
+0 0 * * * *                         Daily at midnight
+
+0 0 * * 3 *                         Each Wednesday at midnight
+
+0 0 * * * * *                       Every second of the minute after midnight: 60 runs a day
+
+0 0 * * * * 15,30                   Daily, 15 and 30 seconds after midnight
+
+0 0 * * * * * 3                     Every second from midnight, at most 3 runs in total
+```
+
+The first five fields are required. You can omit any of the last three: a
+missing Year means every year, a missing Seconds field means second 0 (not every
+second), and a missing ExecutionLimit means unlimited. `0 12 * * 1-5` is the same
+plan as `0 12 * * 1-5 * 0 0`. Plans with fewer than five fields are rejected.
+
+### Hash / jitter tokens
+
+`H` picks deterministic values from a stable hash seed (event name).
+
+```delphi
+NewSchedule := CronScheduler.Add('ShardA');
+NewSchedule.EventPlan := 'H * * * * * 0 0';         // hashed minute
+
+NewSchedule := CronScheduler.Add('ShardB');
+NewSchedule.EventPlan := 'H(0-29)/5 * * * * * 0 0'; // hashed start + step
+```
+
+Supported forms:
+- `H`
+- `H/step`
+- `H(min-max)`
+- `H(min-max)/step`
+
+For unnamed events, maxCron uses the immutable event `Id` as the hash seed fallback.
+
+In `cdQuartzSecondsFirst`, Day-of-Week hash ranges use Quartz numbering (`1..7`), so `H(1-7)` is valid.
+
+### Day-of-month and day-of-week matching
+
+When **both** Day-of-Month and Day-of-Week are restricted (not `*`), classic crontab typically uses **OR** semantics.
+maxCron supports both:
+
+```delphi
+CronScheduler.DefaultDayMatchMode := dmAnd; // legacy (both must match)
+CronScheduler.DefaultDayMatchMode := dmOr;  // crontab-style (either may match)
+
+NewSchedule.DayMatchMode := dmDefault; // use scheduler default
+NewSchedule.DayMatchMode := dmAnd;
+NewSchedule.DayMatchMode := dmOr;
+```
+For standard cron-like behavior in tools, we should set `DayMatchMode := dmOr`.
+
+When we change `DayMatchMode` on an enabled event, or change scheduler `DefaultDayMatchMode` for enabled `dmDefault` events, maxCron recalculates `NextSchedule` immediately.
+
+## Interval events
+
+Use `AddInterval('poll', 100, Callback)` or `Add('poll', '@every 100ms', Callback)`
+for monotonic intervals from 1 to 4,294,967,295 milliseconds. Events start disabled;
+call `Run` or set `Enabled := True`. `Run` restarts the phase and counters.
+
+The grammar is `@every <integer>ms|s|m|h [fixed-rate|fixed-delay] [limit N]`.
+Keywords are case-insensitive, whitespace before the unit is allowed, and trailing
+`# comments` work. Zero limits mean unlimited. For example,
+`@every 1h fixed-delay limit 3` runs at most three callbacks. Interval parse,
+canonical format, and description helpers live in `maxCron.Plan`;
+`TCronSchedulePlan.Parse`, `Describe`, and `MakePreview` accept cron plans only.
+
+Fixed rate is the default: deadlines retain their original phase. The
+misfire policies skip overdue intervals, fire the latest occurrence once, or
+catch up in bounded batches, paced by one interval. An occurrence less than one
+interval late is on time, including under `mpSkip`. Fixed delay schedules the next
+start one full interval after the final callback attempt finishes. Use
+`AddInterval(..., ivFixedDelay)` or the plan keyword. Callback errors, rejected
+dispatches, and overlap skips complete through the same re-arm path. Stop, delete,
+or shutdown cancellation ends the event. Overlap, retry, execution-limit,
+and global callback-cap policies also apply to intervals.
+
+Query `IMaxCronIntervalEvent` with `Supports` for the read-only `IsInterval`,
+`IntervalMs`, and `IntervalMode` properties. Change intervals through `EventPlan`.
+`NextSchedule` projects the monotonic deadline onto local wall time and is zero
+while a fixed-delay callback is in flight or the event is disabled. `LastExecution`
+projects the fired occurrence, rather than the callback completion. Plans and
+projected deadlines round-trip through the schedule store. A restored
+future deadline is clamped to one interval; past deadlines follow the misfire policy.
+
+`ValidFrom` and `ValidTo` apply. Time zones, DST, dialect, day matching, weekdays,
+excluded dates, blackout windows, and cron jitter have no scheduling effect on
+intervals; their values are retained and can be changed without restarting the phase.
+Wall-clock changes do not move interval deadlines. Elapsed time across system
+sleep follows the platform's monotonic clock; QPC sleep behavior is unverified.
+
+For millisecond intervals use `ctPortable` with `imTTask`, or `imThread` with
+`MAXCRON_THREAD_DISPATCH_POOL=1`. `imMainThread` and `ctVcl` add message-queue
+latency. The default invoke mode is `imMainThread`, which needs a message pump in
+console hosts too. Typical wait resolution is about 1 ms with high-resolution
+timers, 1-2 ms with the timer-period fallback, and 15.6 ms with system defaults.
+Shorter intervals follow their misfire policy or arrive in catch-up bursts.
+Windows power throttling and background/minimized applications can coarsen waits;
+the scheduler does not promise hard real-time precision. The accepted 1 ms minimum
+interval does not guarantee delivery of every occurrence, even with high-resolution
+waits. The interval benchmark observed missed occurrences under load at 1 ms;
+10 ms and 100 ms runs had no missed occurrences on the measured host. The
+measurements are in [DEVELOPMENT.md](DEVELOPMENT.md#linux-x86_64-benchmark).
+
+## Event options
+
+Each event created by `Add` or `AddInterval` can override these settings before `Run`.
+
+### Validity window (ValidFrom / ValidTo)
+
+`ValidFrom` and `ValidTo` limit an event to a time window. This event runs every
+second hour on Sundays in January, May and October, during 2027 only:
+
+```delphi
+NewSchedule := CronScheduler.Add('Campaign', '0 */2 * 1,5,10 SUN', OnScheduleTrigger);
+NewSchedule.ValidFrom := EncodeDate(2027, 1, 1);
+NewSchedule.ValidTo := EncodeDateTime(2027, 12, 31, 23, 59, 59, 999);
+NewSchedule.Run;
+```
+
+`ValidFrom` and `ValidTo` are both inclusive for cron and interval events; `0`
+means unbounded. An occurrence exactly at either bound is eligible, including a
+single-point window where both bounds are equal. Searches remain strictly after
+their base time. Validity comparisons read `TDateTime` at the nearest millisecond,
+with ties to even. Cron bounds use system-local time, including for named-zone
+events; calendar exclusions and DST policies still apply. These bounds also
+apply to shifted spring-gap occurrences and to each eligible repeated-hour instance.
+
+### Invoke mode
+
+Each event can override how its callback is invoked:
+
+```delphi
+CronScheduler.DefaultInvokeMode := imMainThread; // default
+
+NewSchedule := CronScheduler.Add('BackgroundJob', '* * * * * * * 0');
+NewSchedule.InvokeMode := imMaxAsync; // or imTTask / imThread / imMainThread
+NewSchedule.Run;
+```
+
+If we assign `imDefault` to `CronScheduler.DefaultInvokeMode`, maxCron normalizes it to `imMainThread`.
+
+Callbacks that run off the VCL main thread must not touch the UI directly.
+
+Important: `imMainThread` dispatch relies on a live main-thread message pump.
+In service/console/non-VCL hosts (or any host without pumping), queued callbacks may never run.
+For those hosts we should use `imMaxAsync`, `imTTask`, or `imThread`.
+
+If dispatch startup fails (for example, task/thread launch raises, a queued main-thread callback fails before execution acquire, or a serialized-chain continuation launch fails), maxCron rolls back overlap state and execution reservations so future ticks continue normally and `ExecutionLimit` is not consumed by failed launches.
+
+#### Pooled `imThread` dispatch (burst optimization)
+
+For `imThread`, maxCron can reuse runtime worker threads instead of creating one anonymous thread per fire:
+
+```bash
+export MAXCRON_THREAD_DISPATCH_POOL=1
+```
+
+```cmd
+set MAXCRON_THREAD_DISPATCH_POOL=1
+```
+
+Enabled values: `1` or `true` (case-insensitive). Any other value keeps the legacy thread-per-fire path.
+
+### Overlap handling
+
+When a schedule fires again while a previous execution is still running:
+
+```delphi
+NewSchedule.OverlapMode := omAllowOverlap;        // default
+NewSchedule.OverlapMode := omSkipIfRunning;       // drop overlapping fires
+NewSchedule.OverlapMode := omSerialize;           // queue and run 1-by-1
+NewSchedule.OverlapMode := omSerializeCoalesce;   // serialize, but keep backlog <= 1
+```
+
+`NumOfExecutionsPerformed` counts actual callback executions (after overlap rules), not just schedule hits.
+`ExecutionLimit` caps actual executions (after overlap rules); skipped/coalesced overlaps do not consume the limit.
+
+### Misfire handling
+
+When the scheduler is delayed or the machine sleeps, we can control how missed occurrences are handled:
+
+```delphi
+CronScheduler.DefaultMisfirePolicy := TmaxCronMisfirePolicy.mpCatchUpAll; // default
+CronScheduler.DefaultMisfireCatchUpLimit := 1; // max catch-up per tick (min 1)
+
+NewSchedule.MisfirePolicy := TmaxCronMisfirePolicy.mpFireOnceNow; // per-event override
+```
+
+Policies:
+- `mpSkip`: fire occurrences processed in their due second (less than one second late); skip occurrences one second or more late and advance to the next time after `now`.
+- `mpFireOnceNow`: execute once, then advance to the next time after `now`.
+- `mpCatchUpAll`: execute missed occurrences sequentially, bounded per tick by `DefaultMisfireCatchUpLimit`.
+
+If we assign `mpDefault` to `CronScheduler.DefaultMisfirePolicy`, maxCron normalizes it to `mpCatchUpAll`.
+
+When exclusions (weekdays/holidays/blackout) create long filtered ranges, maxCron advances the search cursor in larger steps and keeps the event enabled until a true terminal condition is reached.
+
+### Retry/backoff and dead-letter hooks
+
+Each event can retry callback failures and emit a dead-letter callback after retries are exhausted:
+
+```delphi
+NewSchedule.RetryMaxAttempts := 3;         // retries after the first attempt
+NewSchedule.RetryInitialDelayMs := 50;     // initial delay before first retry
+NewSchedule.RetryBackoffMultiplier := 2.0; // exponential factor
+NewSchedule.RetryMaxDelayMs := 2000;       // cap per-retry delay
+
+NewSchedule.OnDeadLetterProc :=
+  procedure(Sender: IMaxCronEvent; const aErrorText: string; const aAttemptCount: Integer)
+  begin
+    // log, alert, or enqueue for manual handling
+  end;
+```
+
+### Time zones and DST
+
+Each event can evaluate cron time in its own timezone:
+
+```delphi
+NewSchedule.TimeZoneId := 'LOCAL';      // default
+NewSchedule.TimeZoneId := 'UTC';
+NewSchedule.TimeZoneId := 'UTC+02:30';  // fixed offset
+NewSchedule.TimeZoneId := 'Europe/Warsaw'; // IANA zone name
+```
+
+On Windows 8 or later, named zones use the OS time zone database through a built-in
+CLDR name table, with no data files required. At every whole second, offsets equal
+Windows' own conversion. A transition stored at 23:59:59.999 takes effect at the
+following midnight. Zone data is cached per UTC year on first use; restart the
+process after a Windows time zone update. Delphi and FPC named zones use the same
+provider. FPC LOCAL uses Windows' conversion for the active system zone, including
+its automatic daylight saving setting. Outside UTC years 1602-9998, the offset at
+the nearest edge continues unchanged.
+
+Set `MAXCRON_TZDIR` before assigning a name to select TZif files on Windows or
+other platforms. Other platforms otherwise use `TZDIR`, then `/usr/share/zoneinfo`.
+TZif versions 1-4 and compatible later versions are supported. No TZif database
+is bundled for application use. The reader supports signed and extended POSIX
+footer rule times when both rule-local transitions stay at least 2 local days from the year boundaries and both DST and standard parts last at least 28 days throughout a 400-year Gregorian cycle. Fixed-offset and RFC all-year-DST footers are also supported; unsupported footer rules fail when setting the zone and preserve its previous value.
+Leap-second (`right/`) files are rejected.
+
+On Linux, LOCAL resolves the host zone in this order.
+
+1. If `TZ` is unset, read `/etc/localtime`, following symlinks. A missing,
+   unreadable or invalid file selects UTC.
+2. If `TZ` is set, strip one leading colon. An empty result selects UTC.
+3. For a value beginning with `/`, try that absolute path as a TZif file.
+   Otherwise, for a valid zone name, try its exact, case-sensitive path under
+   the first nonempty setting among `MAXCRON_TZDIR` and `TZDIR`, defaulting to
+   `/usr/share/zoneinfo`.
+4. If no usable TZif file was found for the set value, try it as a POSIX TZ
+   rule. If that fails, use UTC.
+
+The next use after the one-second recheck interval looks at the current
+settings and compares the selected file's bytes. This detects in-place file
+updates and changes to the `/etc/localtime` symlink. LOCAL uses the same gap
+and overlap rules as named zones.
+
+glibc may use `posixrules` for a value such as `EST5EDT` when no matching
+zone file exists. maxCron falls back to UTC for a DST rule without transition
+rules and for a TZif footer or POSIX rule rejected by its validator when no
+usable rule remains. The file lookup accepts only valid zone names for
+relative values, excluding paths such as `../x`.
+
+The built-in name table is derived from Unicode CLDR 49 data, copyright
+2001-2026 Unicode, Inc., under the Unicode License v3. The full notice is retained
+in `maxCron.Internal.TimeZoneNames.inc`.
+Names match ASCII case-insensitively; the returned name uses the table spelling
+on Windows or the file spelling for TZif. Aliases such as `US/Eastern`,
+`Asia/Calcutta` and `Etc/UTC` are accepted and kept. Unknown names raise on assignment,
+report the cause and leave the previous zone intact. Resolved rules are immutable
+and cached; restart the process to pick up data-file changes.
+
+DST behavior is configurable per event:
+
+```delphi
+NewSchedule.DstSpringPolicy := dspSkip;              // default
+NewSchedule.DstSpringPolicy := dspRunAtNextValidTime;
+
+NewSchedule.DstFallPolicy := dfpRunOnce;             // default
+NewSchedule.DstFallPolicy := dfpRunTwice;
+NewSchedule.DstFallPolicy := dfpRunOncePreferFirstInstance;
+NewSchedule.DstFallPolicy := dfpRunOncePreferSecondInstance;
+```
+
+Cron occurrences are selected and dispatched by their UTC instants. During a repeated
+hour, `dfpRunOnce` and `dfpRunOncePreferFirstInstance` select the earlier instance,
+`dfpRunOncePreferSecondInstance` selects the later one, and `dfpRunTwice` selects
+both in UTC order. Each occurrence runs at its own instance, including when a
+schedule starts, resumes, resets or is restored during the host's repeated hour.
+`UTC` and fixed-offset schedules keep their UTC firing times across host DST changes.
+Misfire lateness is measured in UTC, so repeated wall times cannot hide an overdue occurrence.
+
+For both LOCAL and named zones, `dspSkip` omits nonexistent local times.
+`dspRunAtNextValidTime` runs a gap occurrence at the transition instant, the first
+valid local time: a missing 02:30:30 shifts to 03:00:00. Several occurrences shifted
+to that instant fire once. Eligible period ranges keep dense searches bounded
+across 30-minute and two-hour changes.
+
+`NextSchedule`, `LastExecution` and persisted schedule values remain host-local
+display times. Repeated instances can therefore share one displayed value.
+On Windows, LOCAL uses native conversion rules on both compilers and picks up
+a host-zone change on the next scheduler pass. On Linux, LOCAL picks up a
+host-zone change on the first use after the one-second recheck interval has
+elapsed, and uses cached TZif rules until then. UTC, fixed-offset and named occurrences retain
+their UTC dues. Interval deadlines remain monotonic.
+
+### Business calendar exclusions
+
+We can apply common exclusion filters per event:
+
+```delphi
+NewSchedule.WeekdaysOnly := True;                              // skip Sat/Sun
+NewSchedule.ExcludedDatesCsv := '2031-01-02,2031-01-03';      // YYYY-MM-DD list
+NewSchedule.BlackoutStartTime := EncodeTime(9, 0, 0, 0);      // skip 09:00..
+NewSchedule.BlackoutEndTime := EncodeTime(17, 0, 0, 0);       // ..until 17:00
+```
+
+These exclusions are applied after cron matching and before callback dispatch.
+
+Blackout windows include the start time and exclude the end time: `[09:00, 17:00)` skips 09:00 and permits 17:00. Windows can cross midnight, such as `[22:00, 06:00)`. Equal start and end times disable the window. Times are interpreted at the nearest millisecond, ties to even.
+
+## Querying plans without a scheduler
+
+`TCronSchedulePlan` and `TPlan` live in `maxCron.Plan`, which depends only on the RTL.
+
+### Building plans with TPlan
+
+`TPlan` is a record with one string property per field (`Minute`, `Hour`,
+`DayOfTheMonth`, `Month`, `DayOfTheWeek`, `Year`, `Second`, `ExecutionLimit`).
+`Reset` sets every field to its default, and `Text` builds the cron string for
+the selected dialect. Assigning `Text` splits a plan back into fields.
+
+```delphi
+var
+  lPlan: TPlan;
+begin
+  lPlan.Reset;
+  lPlan.Dialect := cdMaxCron; // or cdStandard / cdQuartzSecondsFirst
+  lPlan.Second := '30';
+  // lPlan.Text is now '* * * * * * 30 0': every minute at second 30
+  CronScheduler.Add('EventFromTPlan', lPlan.Text, OnScheduleTrigger).Run;
+end;
+```
+
+### Upcoming occurrences
+
+We can fetch the next N fire times from a parsed plan:
+
+```delphi
+var
+  Plan: TCronSchedulePlan;
+  Dates: TDates;
+  Count: Integer;
+begin
+  Plan := TCronSchedulePlan.Create;
+  try
+    Plan.Parse('*/5 * * * * * 0 0');
+    Count := Plan.GetNextOccurrences(10, Now, Dates);
+    // Dates[0..Count-1] are our upcoming occurrences.
+  finally
+    Plan.Free;
+  end;
+end;
+```
+
+### Previous occurrences and range queries
+
+`TCronSchedulePlan` also searches backwards and queries a time window:
+
+```delphi
+var
+  lPlan: TCronSchedulePlan;
+  lDates: TDates;
+  lPrevious, lStart, lEnd: TDateTime;
+  lCount: Integer;
+begin
+  lPlan := TCronSchedulePlan.Create;
+  try
+    lPlan.Parse('*/15 * * * *');
+    lStart := EncodeDateTime(2026, 11, 15, 10, 0, 0, 0);
+    lEnd := IncHour(lStart, 1);
+    if lPlan.FindPreviousScheduleDate(IncMinute(lStart, 7), lPrevious) then
+      Writeln(DateTimeToStr(lPrevious)); // 10:00
+    lCount := lPlan.GetPreviousOccurrences(3, IncMinute(lStart, 7), lDates);
+    // Newest first: 10:00, 09:45, 09:30.
+    lCount := lPlan.GetOccurrencesBetween(lStart, lEnd, lDates, 2);
+    // Oldest first: 10:00, 10:15. Fetch the next page after the last result.
+    if lCount > 0 then
+      lCount := lPlan.GetOccurrencesBetween(IncSecond(lDates[lCount - 1], 1), lEnd, lDates, 2);
+    lCount := lPlan.CountBetween(lStart, lEnd); // 4
+    if lPlan.HasOccurrenceBetween(lStart, lEnd) then
+      Writeln(lCount);
+  finally
+    lPlan.Free;
+  end;
+end;
+```
+
+The example uses `System.DateUtils` and `System.SysUtils`, plus either `maxCron`
+or the RTL-only `maxCron.Plan` unit. Previous searches are strictly before the
+base time. Ranges include the start and exclude the end: `[start, end)`.
+Comparisons read TDateTime inputs at the millisecond nearest to the exact stored
+Double, ties to even, using the library conversion helper on Win32 and Win64.
+Occurrences are whole seconds:
+previous at `10:15:00.000` excludes that occurrence, while `10:15:00.001`
+includes it. A range starting at `10:00:00.001` begins with `10:15`.
+
+Queries stay within 1900-01-01 through 3000-12-31. A failed previous search sets
+its output to zero. Nonpositive counts or limits return empty results; empty
+or reversed windows return zero and `HasOccurrenceBetween` returns False.
+`GetOccurrencesBetween` and `CountBetween` default to `cCronQueryDefaultLimit`
+(10,000). Lists truncate at the limit; counts saturate there. Pass a larger
+limit, up to `High(Integer)`, to count more, with one next-search per occurrence.
+
+Plan queries ignore `ExecutionLimit` and use naive wall-clock time. Event
+timezone, DST policy, weekdays-only rules, excluded dates, blackout and event
+validity windows are not applied.
+
+### Human-readable descriptions
+
+We can generate a basic, deterministic description for logging or UI:
+
+```delphi
+var
+  Plan: TCronSchedulePlan;
+  Desc: string;
+begin
+  Plan := TCronSchedulePlan.Create;
+  try
+    Plan.Parse('*/5 * * * * * 0 0');
+    Desc := Plan.Describe; // "Every 5 minutes"
+  finally
+    Plan.Free;
+  end;
+end;
+```
+
+## Scheduler lifecycle
+
+### Usage contract (required)
+
+An invalid cron expression raises `Exception` with a parser diagnostic such as
+`Invalid cron token`, `Invalid cron step` or `Cron value out of range`; malformed
+numbers raise the same `Exception`, never an RTL `EConvertError`. The
+`Add(name, plan, callback)` overloads are atomic: if the plan is invalid, no
+event is added.
+
+For safe production use we should follow these lifecycle rules:
+
+- `Add(...)` only registers the event. New events start disabled; call `Run` (preferred) or set `Enabled := True` after configuration.
+- `IMaxCronEvent` is an interface handle. Event registration lifetime is managed by `TmaxCron`.
+- Every event has an immutable `Id` assigned by `TmaxCron` when we call `Add(...)`.
+- Event names are optional. If provided, they are case-insensitive unique and immutable after `Add(...)`.
+- We can remove schedules by handle (`Delete(Event)`), by id (`Delete(Event.Id)`), or by name (`Delete('EventName')`).
+- `Delete('EventName')` applies to named events only. Unnamed events should be removed by handle or id (or `Clear`).
+- For stable inspection, use `Snapshot` to get an array copy of registered events.
+  There is no index-based access (see [migration](#migration-from-the-index-api)).
+- We should free `TmaxCron` only from outside its callback context.
+- We should avoid long-blocking callbacks during shutdown; if callbacks can block, we should first stop upstream work and let callbacks drain before destroying the scheduler.
+
+If we follow this contract, maxCron stays on the intended ownership and shutdown path.
+
+Snapshot/list example:
+
+```delphi
+var
+  Events: TArray<IMaxCronEvent>;
+begin
+  Events := CronScheduler.Snapshot;
+  if Length(Events) > 0 then
+    CronScheduler.Delete(Events[0].Id);
+end;
+```
+
+### Global dispatch caps
+
+We can cap aggregate callback throughput across all events:
+
+```delphi
+CronScheduler.GlobalMaxConcurrentCallbacks := 32; // 0 = disabled
+CronScheduler.GlobalMaxDispatchPerSecond := 200;  // 0 = disabled
+```
+
+Environment alternatives (read at scheduler creation):
+- `MAXCRON_GLOBAL_MAX_CONCURRENT`
+- `MAXCRON_GLOBAL_MAX_DISPATCH_PER_SECOND`
+
+Integer environment settings accept decimal digits after trimming surrounding whitespace.
+An empty value counts as unset and uses the default.
+
+### Graceful shutdown API
+
+`Shutdown` lets us stop new dispatch and optionally drain running callbacks:
+
+```delphi
+if not CronScheduler.Shutdown(5000, spWait) then
+  // timeout reached before full drain
+```
+
+Policies:
+- `spWait`: stop new work and wait for in-flight callbacks up to timeout.
+- `spCancel`: clear schedules first, then wait for in-flight callbacks up to timeout.
+- `spForce`: clear schedules and return immediately (reports whether work was still running).
+
+After shutdown starts, `Add(...)` raises and timer-driven ticks are ignored.
+
+Do not call `TmaxCron.Free` from one of its own callbacks: that re-entrant
+shutdown would deadlock, so it raises an exception instead. Free the scheduler
+from outside callback context.
+
+### Persistent schedule save/restore
+
+We can plug in persistent storage for scheduler state:
+
+```delphi
+type
+  TMyScheduleStore = class(TInterfacedObject, IMaxCronScheduleStore)
+  public
+    procedure Save(const aEvents: TArray<TMaxCronPersistedEvent>);
+    function TryLoad(out aEvents: TArray<TMaxCronPersistedEvent>): Boolean;
+  end;
+
+CronScheduler.ScheduleStore := TMyScheduleStore.Create;
+CronScheduler.SaveScheduleState;
+CronScheduler.RestoreScheduleState(True); // replace existing events
+```
+
+Restore validates and installs an enabled event's saved due before deciding
+whether it can run. An eligible overdue cron or interval occurrence follows its
+misfire policy even when the plan has ended or `ValidTo` has passed since that
+occurrence. Execution limits and inclusive validity bounds still apply to the
+saved due. Missing or invalid saved dues use a fresh schedule search.
+
+Persistence captures event configuration and state metadata. Callback handlers are
+not serialized. Attach them with the restore binder before restored events start:
+
+```delphi
+CronScheduler.RestoreScheduleState(True,
+  procedure(const aEvent: IMaxCronEvent; const aState: TMaxCronPersistedEvent)
+  begin
+    aEvent.OnScheduleProc := MyScheduleProc;
+  end);
+```
+
+#### Restart catch-up
+
+`SaveScheduleState` stores `CompletedThrough`, a UTC checkpoint floored to
+milliseconds. Every policy instance at or before it has reached a final outcome:
+the callback returned, retries exhausted, or a policy deliberately suppressed it.
+Restore resumes after this checkpoint under the configured plan and policies.
+The binder can change the plan before this search.
+
+Delivery is at least once. A crash after a callback starts and before a later
+save becomes durable can replay that occurrence. Out-of-order completions can
+also repeat later occurrences behind an unfinished earlier callback.
+**Handlers must be idempotent**: check the target state or use a durable business
+operation identifier before applying side effects. A save from inside a callback
+does not cover that callback yet.
+
+Save periodically, write the store atomically, and save after
+`Shutdown(timeout, spWait)` at exit. Save before `spCancel` or `spForce`, which
+clear events. Misfire and overlap suppression, execution limits, validity bounds,
+reported dispatch-start failures and a search-limit fallback can deliberately
+discard work. Callbacks assigned after restore can miss a timer pass; use the
+binder for restart catch-up.
+
+Store implementations should persist `CompletedThrough` and read a missing
+field as 0. Zero, negative or NaN checkpoints use the `NextSchedule`
+restore path. Old stored data loads unchanged. Restoring legacy data and saving again
+before a tick keeps the checkpoint absent; only a final scheduling outcome can
+certify its pending work. UTC checkpoints distinguish both
+instances of a repeated local hour. A future checkpoint after a clock correction
+waits for the next cron occurrence after it.
+
+For cron events, `mpSkip` skips occurrences at least one second late,
+`mpFireOnceNow` fires once, and `mpCatchUpAll` processes all missed occurrences,
+at most `DefaultMisfireCatchUpLimit` per pass. The default limit is 1 and
+there is no total catch-up cap. Dense plans after long downtime may need a larger
+limit or `mpFireOnceNow`. Interval events use their usual misfire rules;
+fixed-rate resumes at checkpoint plus interval, and fixed-delay uses the last
+settled completion plus interval. Future interval checkpoints are clamped to one
+interval ahead of the current clock.
+
+In persisted state, `Enabled` means "should still run". Automatic disabling from
+plan exhaustion, `ValidTo`, or an execution limit is saved as `True` while tickets
+remain unsettled. An explicit `Stop` or `Enabled := False` is always saved as
+`False`. Once the tickets settle, an exhausted event saves `False` again.
+The saved execution count covers the settled prefix: executions still behind
+an unsettled ticket are excluded, including later callbacks that finished out of
+order. Replay can therefore repeat counted but unfinished work while execution
+limits and validity bounds continue to apply.
+
+**Clock corrections during a save.** Each `SaveScheduleState` call captures one clock pair for every event, reading
+MONO0, UTC1, UTC2 and MONO2. It validates the UTC change against elapsed
+monotonic time, then projects unfinished interval deadlines with UTC1/MONO2.
+The saved checkpoint is at most that earliest projected due minus one interval;
+cron checkpoints stay at least 1 ms before each unfinished UTC occurrence.
+The stored checkpoint can move backwards and replay completed work.
+Saved interval `NextSchedule` uses that same pair, including legacy records with
+no checkpoint. `LastExecution` retains its recorded history without another clock
+read. Rejected captures bypass the live interval getters and use the shared fallback.
+
+The detectable correction window is between UTC1 and UTC2. Any correction after
+the UTC2 read is outside that guarantee, including between UTC2 and MONO2,
+between events being serialized, and after persistence. Interval restore
+translates the saved UTC deadline to the restart monotonic clock and clamps a
+future deadline to one interval; a rollback after UTC2 can therefore miss
+interval occurrences after restart. Cron occurrences retain their UTC identity.
+
+After eight rejected clock samples, the whole save uses absent checkpoints and
+conservative legacy deadlines. If a coherent sample has no positive safe
+checkpoint, the store receives 0 and the earliest unfinished saved deadline.
+These fallbacks can replay additional work.
+
+## Timers and precision
+
+### Timer backend selection
 
 By default `TmaxCron` uses `ctAuto`:
 
@@ -248,7 +918,38 @@ CronScheduler := TmaxCron.Create(ctVcl);
 CronScheduler := TmaxCron.Create(ctPortable);
 ```
 
-`ctVcl` must be created on the VCL main thread. Creating `ctVcl` from a worker thread now raises an exception.
+`ctVcl` must be created on the VCL main thread; creating it on a worker thread raises an exception.
+
+### Cron timer precision
+
+Each scheduler owns one timing thread. Cron passes run once per wall-clock second,
+aligned just after the second boundary, using a precise local wall clock on Windows.
+`LastExecution` and `NextSchedule` retain their scheduled wall-clock values.
+Cron dispatch interprets these `TDateTime` carriers at the nearest millisecond,
+with ties to even. The precise clock stays in integer microseconds through due
+and misfire decisions; a pass less than one second late fires under `mpSkip`,
+including 999.6-999.999 ms late. Run/reset and late-pass searches use the whole
+second containing the precise instant, so a pass just before an occurrence
+does not skip it. The `TCronInstantUs` type and `CronDateTimeToMs`,
+`CronDateTimeToInstantUs`, `CronMsToDateTime`, `CronSecondToDateTime`,
+`CronInstantFloorSecond`, `CronInstantUsToDateTime`, `CronFloorDiv` and
+`CronCeilDiv` helpers are available from `maxCron.Plan` and `maxCron`.
+`CronInstantUsToDateTime` floors to milliseconds for display or persistence.
+`ctPortable` delivers ticks on the timing thread; `ctVcl` posts coalesced ticks to
+the main thread through `TThread.ForceQueue` and requires a message pump. Main-thread
+load and callback dispatch add latency. The default callback mode is `imMainThread`;
+a console application must pump queued work or select `imTTask`/`imThread`.
+
+On Windows, `MAXCRON_TIMER_RESOLUTION` is read when creating the scheduler: `high` (default)
+uses a high-resolution waitable timer, `period` requests 1 ms timer resolution only
+for the final 20 ms of each wait, and `default` uses the system wait resolution.
+If a high-resolution timer is unavailable, maxCron falls back to `period`.
+`ActiveTimerResolution` reports `trHighResolution`, `trTimerPeriod`, or
+`trSystemDefault`. Timer-period requests can affect the whole system on older
+Windows versions. Every wait is bounded to one second so clock jumps are noticed.
+Power throttling, battery operation, and background/minimized process policies may
+coarsen waits; the published measurements do not cover those environments. QPC
+behavior across system sleep remains platform-defined and unverified here.
 
 ## Scheduler engine selection (scan / heap / shadow / auto)
 
@@ -423,523 +1124,101 @@ export MAXCRON_AUTO_DIAG_LOG_INTERVAL=10
 
 `MAXCRON_AUTO_DIAG_LOG_INTERVAL` is read during scheduler creation. When it is greater than `0`, maxCron emits a diagnostics line every N auto-controller ticks via `OutputDebugString`. `0` keeps logging disabled.
 
-High-N benchmark coverage (`TestHeavyStressMixed.EngineBenchmark_ScanVsHeap_HighN`) uses 1200 far-future events and 40 ticks:
+## Platforms
 
-- `scan`: 48,000 candidate visits (`1200 * 40`).
-- `heap`: 1,200 candidate visits (single rebuild, then no due pops).
+| Platform | Compiler | Timers | Status |
+| --- | --- | --- | --- |
+| Windows x64/x86 | Delphi 12 | High-resolution waits | Supported |
+| Windows x64 | FPC trunk 3.3.1 | High-resolution waits | Supported |
+| Linux x86_64 | Delphi 12 Linux64 | Millisecond waits | Supported |
+| Linux x86_64 | FPC trunk 3.3.1 | Millisecond waits | Supported |
+| Linux aarch64 | FPC trunk 3.3.1 | Millisecond waits | Supported, tested under qemu-user |
 
-This benchmark demonstrates the expected behavior: heap mode keeps tick work growth bounded by due events (`k`) instead of total events (`n`) on sparse schedules.
+`ctVcl`, `maxCronHlpDlg`, the Windows zone provider and
+`MAXCRON_TIMER_RESOLUTION` are Windows-only. Other Delphi targets are untested.
 
-Additional benchmark scenarios (stress runner):
+### Linux setup
 
-- `TestHeavyStressMixed.EngineBenchmark_AutoVsScan_SparseHighN`
-  - Scenario: sparse high-cardinality workload (`auto` vs `scan`).
-  - Expected: `auto` should reduce candidate work significantly versus `scan` after adaptive promotion.
-- `TestHeavyStressMixed.EngineBenchmark_AutoSwitchBudget_AdversarialChurn`
-  - Scenario: adversarial oscillation pressure (`auto` with budget disabled vs enabled).
-  - Expected: budget-enabled run should show lower switch count, fewer rebuilds, and lower candidate work; elapsed time should improve or remain competitive.
+- Delphi 12 needs the Linux64 SDK on Windows. Cross-compile there and run the
+  binary on the Linux target.
+- FPC programs must list `cthreads` first in the program's `uses` clause,
+  followed by `cwstring` for Unicode conversions.
+- Install `tzdata` on the Linux target for LOCAL and named zones.
 
-Run these scenarios as part of the complete stress roster:
+### Free Pascal (FPC)
 
-```cmd
-set MAXCRON_STRESS=1
-tests\maxCronStressTests.exe
+Windows x64 and Linux x86_64/aarch64 are supported with FPC trunk 3.3.1, built from
+`https://gitlab.com/freepascal.org/fpc/source` main commit
+`47b0238476dd4eb2d8f7ff4158626fd8cc379ebc` (2026-11-26). FPC 3.2.x lacks the
+anonymous-method support required here. `maxCron.inc` rejects older versions and
+targets outside Windows x64 and Linux x86_64/aarch64.
+
+On Windows, build from source with the official FPC 3.2.2 x86_64-win64
+bootstrap and its `make`. Replace `<bootstrap-compiler>` and `<fpc-root>` with
+your compiler and installation paths.
+
+```bat
+make clean all install "PP=<bootstrap-compiler>" "INSTALL_PREFIX=<fpc-root>" OS_TARGET=win64 CPU_TARGET=x86_64
 ```
 
-### Standalone benchmark runner (CSV + Markdown)
+The compiler is `<fpc-root>\bin\x86_64-win64\fpc.exe`. Invoke it with the
+configuration and units from the same installation.
 
-For machine-to-machine and run-to-run tracking, we can run a standalone non-DUnit benchmark executable:
-
-```bash
-./build-and-run-benchmarks.sh --iterations=9 --warmup=2 --out-dir=benchmarks/results
+```bat
+"<fpc-root>\bin\x86_64-win64\fpc.exe" -n "@<fpc-root>\bin\x86_64-win64\fpc.cfg" "-FD<fpc-root>\bin\x86_64-win64" "-Fu<fpc-root>\units\x86_64-win64\*" "-Fu<maxCron folder>" "<your program>"
 ```
 
-Direct Windows invocation:
+On Linux, use the same compiler revision with the units for your target and
+follow [Linux setup](#linux-setup).
 
-```cmd
-benchmarks\maxCronBenchmarks.exe --iterations=9 --warmup=2 --out-dir=benchmarks\results
+The units set `delphiunicode`, `anonymousfunctions` and `functionreferences`
+through `maxCron.inc`, with real constants kept at Double precision.
+Add the same library units listed under Installation,
+including `maxCron.Internal.Text.pas`. MaxLogicFoundation is not needed on FPC.
+Plan text stays Unicode.
+
+On FPC, `imMaxAsync` runs on the RTL `System.Threading` pool, as does `imTTask`.
+The tested FPC build has an RTL pool shutdown race that can double-free a worker
+at process exit under `heaptrc`; a program using only `TTask.Run` reproduces it.
+If you check leaks with `heaptrc`, expect this report from programs that use
+`imMaxAsync` or `imTTask`; it comes from the RTL pool, not from maxCron.
+
+The tested FPC trunk includes the fix for FPC issue #42105 (`474f4bbf`,
+2026-11-22). maxCron's `LOCAL` is independent of `TTimeZone.Local` and uses
+Windows conversion rules on Windows and maxCron's TZif resolver on Linux.
+
+FPC exception messages are AnsiString, so characters unavailable in the Windows
+code page can be replaced in messages.
+
+The tested compiler can report an internal `EListError` for a non-capturing
+anonymous procedure literal passed directly to an overloaded `Add` call. A
+literal capturing only `Self` can bind to the method-pointer overload. Use a
+typed `TmaxCronNotifyProc` local variable before calling `Add`:
+
+```pascal
+lCallback := procedure(aSender: IMaxCronEvent) begin HandleSchedule(aSender); end;
+lEvent := lCron.Add('job', '* * * * *', lCallback);
 ```
 
-Compare a fresh run against a baseline CSV (run-to-run deltas in console + Markdown):
-
-```cmd
-benchmarks\maxCronBenchmarks.exe --iterations=3 --warmup=0 --compare=benchmarks\results\maxcron-benchmarks-20260223-214451.csv --out-dir=benchmarks\results --quiet
-```
-
-Output files:
-
-- `maxcron-benchmarks-*.csv` (raw per-iteration metrics)
-- `maxcron-benchmarks-*.md` (scenario means and comparison deltas)
-
-The runner includes these scenarios:
-
-- `sparse_high_n_scan` (`MAXCRON_ENGINE=scan`)
-- `sparse_high_n_heap` (`MAXCRON_ENGINE=heap`)
-- `sparse_high_n_auto` (`MAXCRON_ENGINE=auto`, sparse-tuned controller)
-- `adversarial_auto_no_budget` (`MAXCRON_ENGINE=auto`, budget disabled)
-- `adversarial_auto_budget` (`MAXCRON_ENGINE=auto`, budget enabled)
-
-Interpretation rules:
-
-- Sparse workloads: expect `heap` and `auto` to reduce candidate visits versus `scan`.
-- Adversarial churn: expect `budget` mode to reduce switch/rebuild/visited metrics versus no-budget mode.
-- Timing summaries include mean/median/p95/stddev to expose both central tendency and jitter.
-- Elapsed time is environment-sensitive; use it with the structural work metrics (`visited`, `rebuilds`, `switches`) for robust conclusions.
-
-### Real-time idle CPU and firing latency
-
-The additive `idle` and `latency` modes exercise the portable timer in a console
-process with `imThread` callbacks. The default `ticks` mode and its reports retain
-their existing format. Select the engine with `MAXCRON_ENGINE`; leave adaptive
-settings unset to measure the default controller. Run each configuration in a
-fresh process, outside a debugger, while other CPU work is low.
-
-For a Delphi 12 Win64 Release build with outputs outside the checkout:
-
-```powershell
-$buildDir = '<build-root>\benchmarks'
-$runDir = '<run-root>'
-$delphiRoot = '<delphi-root>'
-New-Item -ItemType Directory -Force -Path "$buildDir\dcc64", $runDir | Out-Null
-& "$delphiRoot\bin\dcc64.exe" -B -Q `
-  '-DRELEASE;MAXCRON_TESTS' '-NSSystem;Winapi;System.Win;Vcl' `
-  "-Ulib\MaxLogicFoundation;$delphiRoot\lib\win64\release" `
-  '-Ilib\MaxLogicFoundation' "-E$buildDir" "-N0$buildDir\dcc64" `
-  benchmarks\maxCronBenchmarks.dpr
-$env:MAXCRON_ENGINE = 'scan' # repeat with heap and auto
-& "$buildDir\maxCronBenchmarks.exe" --mode=idle --events=1000 --seconds=30 `
-  --iterations=3 "--csv=$runDir\idle-1000-scan.csv"
-# Repeat with --events=10000, and each engine.
-& "$buildDir\maxCronBenchmarks.exe" --mode=latency --fires=60 `
-  --iterations=3 "--csv=$runDir\latency-scan.csv"
-```
-
-Adjust the compiler path to the installed Delphi version. The existing benchmark
-build wrapper also supports these options. Real-time modes explicitly start the
-portable timer because `MAXCRON_TESTS` disables automatic timer startup in this
-project. Idle mode warms up for 35 seconds before its CPU window, beyond the 30-second
-Windows startup-worker retirement observed during profiling. Compare it with a
-baseline using the same warm-up and timed window. The Phase 0 results below used
-a two-second warm-up; rerun the baseline for comparisons with this protocol.
-Latency mode warms up for two seconds; `--warmup` applies to `ticks` only.
-`--seconds` defaults to 60, `--events` to 1000 and `--fires` to 60. `--iterations`
-still defaults to 9. `--compare` accepts only the historical `ticks` CSV format.
-
-Idle timing excludes event creation and shutdown, measures process user+kernel
-CPU over a monotonic elapsed window, and keeps all events enabled with a due date
-of 2099-01-01. `cpu_one_core_pct` is relative to one logical CPU. Divide by the
-machine's logical CPU count for its share of whole-machine CPU. A zero means no
-increment resolved by the counter during that window.
-
-Latency schedules explicitly dated one-shot events, one per due second. Each
-callback captures its own immutable due time before the portable timer starts,
-so worker arrival order and schedule advancement cannot change attribution.
-Delays above one second stay unfolded. Raw `*-fires-N.csv` files retain each due
-and callback local timestamp. Median averages the middle pair and p95 uses
-nearest rank. The mode fails if setup expires an occurrence or it cannot collect
-the requested callbacks. Avoid DST transitions or clock changes during measurement.
-This measures scheduler and dispatch latency together. Each run has `--fires`
-one-shot events rather than one recurring event.
-
-#### Linux x86_64 benchmark
-
-Build the Linux binary on Windows with
-`tests\linux\Build-DelphiLinux64.ps1 -Projects benchmarks\maxCronBenchmarks.dpr`
-and run the resulting ELF binary on Linux. For interval mode on Linux, pass
-`--seconds=60` to measure a 60-second window. Use `--fires=N` to request a fixed
-callback count.
-
-Interval lateness is the signed difference between callback arrival and the
-scheduler's recorded due time. Each due time is rounded to the nearest slot
-from the run start, with half-period ties rounded forward. Missing nominal
-slots count as misses. Extra callbacks for a covered slot and callbacks due
-outside the nominal slots count as duplicates. The `cIntervalMedianBounds`
-table sets a 1.5 ms inclusive median bound for 10 ms and 100 ms intervals.
-A bounded row passes with zero misses, zero duplicates, and a median within
-the bound. Periods without a bound, including 1 ms, leave `passed` blank.
-An empty duration run still writes its CSV row and exits with code 1.
-
-Delphi 12 Linux64 Release on WSL2 (Ubuntu 26.04), THREADRIPPER, 2026-11-24.
-Before timing, Windows reported 17% total CPU and WSL load averages of
-1.83, 2.05, and 2.82 across 64 logical CPUs. Other work was active on the host.
-
-| Measurement | Scan | Heap | Auto |
-| --- | ---: | ---: | ---: |
-| Cron lateness median / p95 / max (ms) | 0.973 / 1.489 / 1.567 | 0.995 / 1.489 / 1.602 | 1.049 / 1.513 / 1.623 |
-| 1 ms interval median lateness (ms) / missed | 0.499 / 23,885 | 0.502 / 23,410 | 0.497 / 22,815 |
-| Idle median CPU (ms per 30 s / % of one core) | 106.147 / 0.354% | 3.697 / 0.012% | 3.722 / 0.012% |
-
-Cron values pool three iterations of 60 callbacks per engine. Every callback
-arrived inside its due second. The historical 1 ms figures use arrival slots
-to estimate lateness. They are informational and pool three 60-second runs
-with 180,000 nominal slots per engine. Idle used 10,000 far-future events and
-five alternating fresh processes per engine, each with a 35-second warmup and
-a 30-second CPU window.
-
-The 10 ms and 100 ms intervals were re-measured on the same host on 2026-11-25
-with Delphi 12 Linux64 Release on WSL2. Windows CPU was 12-15% before launch.
-WSL 1-, 5-, and 15-minute load averages moved from 2.21, 3.68, and 3.55 before
-the first run to 1.60, 2.09, and 2.70 after the last run, across 64 logical CPUs.
-Another lane ran `qemu-aarch64` at nice 15 during the measurement.
-
-| Due-time lateness, median / p95 / max (ms) | Scan | Heap | Auto |
-| --- | ---: | ---: | ---: |
-| 10 ms interval | 0.728 / 1.186 / 5.061 | 0.699 / 1.152 / 1.985 | 0.705 / 1.149 / 3.109 |
-| 100 ms interval | 0.728 / 1.179 / 2.217 | 0.7515 / 1.207 / 2.094 | 0.747 / 1.192 / 2.321 |
-
-Each cell pools three 60-second runs per engine. Every iteration had zero
-misses and duplicates and passed its 1.5 ms median bound.
-
-#### Historical Win64 baseline
-
-Baseline on the maintainer's workstation, 2026-11-15, Delphi 12 Win64 Release, base `024b89b`.
-AMD Ryzen Threadripper PRO 3975WX, 32 cores / 64 logical CPUs, Windows 11.
-Three fresh runs per row, 30-second idle windows. CPU columns show median and
-min-max across runs. Background jobs were active; the retained run records include
-pre-run and during-run CPU load. These figures are a shared-machine reference.
-
-| Events | Engine | CPU ms median (min-max), 30 s | One-core CPU % median | Effective engine |
-| --- | --- | --- | --- | --- |
-| 1000 | scan | 0.000 (0.000-0.000) | 0.000000 | scan |
-| 1000 | heap | 0.000 (0.000-0.000) | 0.000000 | heap |
-| 1000 | auto | 0.000 (0.000-0.000) | 0.000000 | heap |
-| 10000 | scan | 62.500 (31.250-93.750) | 0.208314 | scan |
-| 10000 | heap | 0.000 (0.000-0.000) | 0.000000 | heap |
-| 10000 | auto | 15.625 (15.625-46.875) | 0.052081 | heap |
-
-Once-per-second latency, scan engine, three fresh runs of 60 one-shot events
-and callbacks. Revised occurrence attribution supersedes the initial baseline:
-
-| Run | Fires | Median ms | p95 ms | Max ms |
-| --- | --- | --- | --- | --- |
-| 1 | 60 | 279.500 | 977.000 | 1002.999 |
-| 2 | 60 | 290.500 | 976.999 | 1009.001 |
-| 3 | 60 | 321.000 | 561.000 | 578.000 |
-
-The one-second timer is not aligned to the wall-clock second. Each fresh process
-can therefore have a different latency phase. Its fixed-delay cadence can also
-accumulate delay beyond one second. Use raw distributions and repeated
-runs when evaluating a timer change. Pooled median/p95/max: 295.500/963.000/1009.001 ms;
-2/180 callbacks exceeded one second. During these latency runs, whole-host
-CPU min/median/max was 5.952/12.518/33.716 percent.
-These measurements do not set a latency SLA.
-
-### Structural perf gate (stable local signal)
-
-Use structural ratios from benchmark CSVs to gate regressions without relying on wall-clock timing:
-
-```bash
-./scripts/check-benchmark-metrics.sh benchmarks/results/maxcron-benchmarks-*.csv
-```
-
-The script checks:
-
-- sparse high-N `heap/scan` visited ratio
-- sparse high-N `auto/scan` visited ratio
-- adversarial `budget/no-budget` switch/rebuild/visited ratios
-- sparse high-N `heap/scan` elapsed `p95` and `p99` ratios
-- sparse high-N `auto/scan` elapsed `p95` and `p99` ratios
-- adversarial `budget/no-budget` elapsed `p95` and `p99` ratios
-
-Thresholds are configurable by env vars:
-
-- `MAXCRON_GATE_SPARSE_HEAP_VISITED_RATIO` (default `0.25`)
-- `MAXCRON_GATE_SPARSE_AUTO_VISITED_RATIO` (default `0.25`)
-- `MAXCRON_GATE_BUDGET_SWITCH_RATIO` (default `1.05`)
-- `MAXCRON_GATE_BUDGET_REBUILD_RATIO` (default `1.05`)
-- `MAXCRON_GATE_BUDGET_VISITED_RATIO` (default `1.05`)
-- `MAXCRON_GATE_SPARSE_HEAP_ELAPSED_P95_RATIO` (default `1.15`)
-- `MAXCRON_GATE_SPARSE_HEAP_ELAPSED_P99_RATIO` (default `1.20`)
-- `MAXCRON_GATE_SPARSE_AUTO_ELAPSED_P95_RATIO` (default `1.15`)
-- `MAXCRON_GATE_SPARSE_AUTO_ELAPSED_P99_RATIO` (default `1.20`)
-- `MAXCRON_GATE_BUDGET_ELAPSED_P95_RATIO` (default `1.10`)
-- `MAXCRON_GATE_BUDGET_ELAPSED_P99_RATIO` (default `1.15`)
-
-### One-command local perf gate
-
-For on-demand local verification, we can run build + benchmark + optional baseline compare + structural gate in one command:
-
-```bash
-./scripts/perf-gate-local.sh --iterations=3 --warmup=1 --out-dir=benchmarks/results --baseline=benchmarks/results/maxcron-benchmarks-20260223-214451.csv
-```
-
-This script:
-
-- builds `benchmarks/maxCronBenchmarks.exe`
-- runs the benchmark with our selected options
-- resolves generated CSV/Markdown artifact paths
-- runs `scripts/check-benchmark-metrics.sh` against the generated CSV
-
-### Local trend report generator
-
-To inspect run-to-run behavior over recent benchmark history:
-
-```bash
-./scripts/generate-benchmark-trend-report.sh --input-dir=benchmarks/results --limit=5 --output=benchmarks/results/trend-latest.md
-```
-
-The generated markdown includes per-scenario mean metrics and elapsed/visited deltas versus the previous included run.
-
-### Reference benchmark run
-
-The reference run on `2026-02-23` used 15 iterations and 2 warmup iterations.
-
-```cmd
-benchmarks\maxCronBenchmarks.exe --iterations=15 --warmup=2 --out-dir=benchmarks\results --quiet
-```
-
-Reference report: `benchmarks/results/maxcron-benchmarks-20260223-214451.md`
-
-Key results:
-
-| Comparison | Result |
-| --- | --- |
-| Sparse high-N (`heap` vs `scan`) visited reduction | `98.96%` |
-| Sparse high-N (`heap` vs `scan`) elapsed speedup | `141.69x` |
-| Sparse high-N (`auto` vs `scan`) visited reduction | `97.92%` |
-| Sparse high-N (`auto` vs `scan`) elapsed speedup | `47.10x` |
-| Adversarial churn (`budget` vs `no-budget`) switch reduction | `96.67%` |
-| Adversarial churn (`budget` vs `no-budget`) rebuild reduction | `96.67%` |
-| Adversarial churn (`budget` vs `no-budget`) visited reduction | `32.22%` |
-| Adversarial churn (`budget` vs `no-budget`) elapsed speedup | `1.04x` |
-
-Conclusion from this run:
-
-- `heap` is the strongest choice for sparse high-cardinality workloads.
-- `auto` also delivers strong sparse-workload gains while preserving adaptive behavior.
-- Switch-budget controls materially reduce oscillation overhead under adversarial churn and can improve elapsed time.
-
-## How a job is executed (per-event)
-
-Each event can override how its callback is invoked:
-
-```delphi
-CronScheduler.DefaultInvokeMode := imMainThread; // default
-
-NewSchedule := CronScheduler.Add('BackgroundJob', '* * * * * * * 0');
-NewSchedule.InvokeMode := imMaxAsync; // or imTTask / imThread / imMainThread
-NewSchedule.Run;
-```
-
-If we assign `imDefault` to `CronScheduler.DefaultInvokeMode`, maxCron normalizes it to `imMainThread`.
-
-Note: if we execute off the VCL main thread, we must not touch UI directly.
-
-Important: `imMainThread` dispatch relies on a live main-thread message pump.
-In service/console/non-VCL hosts (or any host without pumping), queued callbacks may never run.
-For those hosts we should use `imMaxAsync`, `imTTask`, or `imThread`.
-
-If dispatch startup fails (for example, task/thread launch raises, a queued main-thread callback fails before execution acquire, or a serialized-chain continuation launch fails), maxCron rolls back overlap state and execution reservations so future ticks continue normally and `ExecutionLimit` is not consumed by failed launches.
-Our dispatch-start rollback regressions also include repeated serialized retry runs to keep this recovery path stable under tight tick timing.
-
-### Pooled `imThread` dispatch (burst optimization)
-
-For `imThread`, maxCron can reuse runtime worker threads instead of creating one anonymous thread per fire:
-
-```bash
-export MAXCRON_THREAD_DISPATCH_POOL=1
-```
-
-```cmd
-set MAXCRON_THREAD_DISPATCH_POOL=1
-```
-
-Enabled values: `1` or `true` (case-insensitive). Any other value keeps the legacy thread-per-fire path.
-
-### Retry/backoff + dead-letter hooks
-
-Each event can retry callback failures and emit a dead-letter callback after retries are exhausted:
-
-```delphi
-NewSchedule.RetryMaxAttempts := 3;         // retries after the first attempt
-NewSchedule.RetryInitialDelayMs := 50;     // initial delay before first retry
-NewSchedule.RetryBackoffMultiplier := 2.0; // exponential factor
-NewSchedule.RetryMaxDelayMs := 2000;       // cap per-retry delay
-
-NewSchedule.OnDeadLetterProc :=
-  procedure(Sender: IMaxCronEvent; const aErrorText: string; const aAttemptCount: Integer)
-  begin
-    // log, alert, or enqueue for manual handling
-  end;
-```
-
-### Persistent schedule save/restore
-
-We can plug in persistent storage for scheduler state:
-
-```delphi
-type
-  TMyScheduleStore = class(TInterfacedObject, IMaxCronScheduleStore)
-  public
-    procedure Save(const aEvents: TArray<TMaxCronPersistedEvent>);
-    function TryLoad(out aEvents: TArray<TMaxCronPersistedEvent>): Boolean;
-  end;
-
-CronScheduler.ScheduleStore := TMyScheduleStore.Create;
-CronScheduler.SaveScheduleState;
-CronScheduler.RestoreScheduleState(True); // replace existing events
-```
-
-Restore validates and installs an enabled event's saved due before deciding
-whether it can run. An eligible overdue cron or interval occurrence follows its
-misfire policy even when the plan has ended or `ValidTo` has passed since that
-occurrence. Execution limits and inclusive validity bounds still apply to the
-saved due. Missing or invalid saved dues use a fresh schedule search.
-
-Persistence captures event configuration and state metadata. Callback handlers are
-not serialized. Attach them with the restore binder before restored events start:
-
-```delphi
-CronScheduler.RestoreScheduleState(True,
-  procedure(const aEvent: IMaxCronEvent; const aState: TMaxCronPersistedEvent)
-  begin
-    aEvent.OnScheduleProc := MyScheduleProc;
-  end);
-```
-
-#### Restart catch-up
-
-`SaveScheduleState` stores `CompletedThrough`, a UTC checkpoint floored to
-milliseconds. Every policy instance at or before it has reached a final outcome:
-the callback returned, retries exhausted, or a policy deliberately suppressed it.
-Restore resumes after this checkpoint under the configured plan and policies.
-The binder can change the plan before this search.
-
-For cron events, `mpSkip` skips occurrences at least one second late,
-`mpFireOnceNow` fires once, and `mpCatchUpAll` processes all missed occurrences,
-at most `DefaultMisfireCatchUpLimit` per pass. The default limit remains 1 and
-there is no total catch-up cap. Dense plans after long downtime may need a larger
-limit or `mpFireOnceNow`. Interval events use their existing misfire rules;
-fixed-rate resumes at checkpoint plus interval, and fixed-delay uses the last
-settled completion plus interval. Future interval checkpoints are clamped to one
-interval ahead of the current clock.
-
-Each `SaveScheduleState` call captures one clock pair for every event, reading
-MONO0, UTC1, UTC2 and MONO2. It validates the UTC change against elapsed
-monotonic time, then projects unfinished interval deadlines with UTC1/MONO2.
-The saved checkpoint is at most that earliest projected due minus one interval;
-cron checkpoints stay at least 1 ms before each unfinished UTC occurrence.
-The stored checkpoint can move backwards and replay completed work.
-Saved interval `NextSchedule` uses that same pair, including legacy records with
-no checkpoint. `LastExecution` retains its recorded history without another clock
-read. Rejected captures bypass the live interval getters and use the shared fallback.
-
-The detectable correction window is between UTC1 and UTC2. Any correction after
-the UTC2 read is outside that guarantee, including between UTC2 and MONO2,
-between events being serialized, and after persistence. Interval restore
-translates the saved UTC deadline to the restart monotonic clock and clamps a
-future deadline to one interval; a rollback after UTC2 can therefore miss
-interval occurrences after restart. Cron occurrences retain their UTC identity.
-
-After eight rejected clock samples, the whole save uses absent checkpoints and
-conservative legacy deadlines. If a coherent sample has no positive safe
-checkpoint, the store receives 0 and the earliest unfinished saved deadline.
-These fallbacks can replay additional work.
-
-Delivery is at least once. A crash after a callback starts and before a later
-save becomes durable can replay that occurrence. Out-of-order completions can
-also repeat later occurrences behind an unfinished earlier callback.
-**Handlers must be idempotent**: check the target state or use a durable business
-operation identifier before applying side effects. A save from inside a callback
-does not cover that callback yet.
-
-In persisted state, `Enabled` means "should still run". Automatic disabling from
-plan exhaustion, `ValidTo`, or an execution limit is saved as `True` while tickets
-remain unsettled. An explicit `Stop` or `Enabled := False` is always saved as
-`False`. Once the tickets settle, an exhausted event saves `False` again.
-The saved execution count covers the settled prefix: executions still behind
-an unsettled ticket are excluded, including later callbacks that finished out of
-order. Replay can therefore repeat counted but unfinished work while execution
-limits and validity bounds continue to apply.
-
-Store implementations should persist `CompletedThrough` and read a missing
-field as 0. Zero, negative or NaN checkpoints use the existing `NextSchedule`
-restore path. Old stored data loads unchanged. Restoring legacy data and saving again
-before a tick keeps the checkpoint absent; only a final scheduling outcome can
-certify its pending work. UTC checkpoints distinguish both
-instances of a repeated local hour. A future checkpoint after a clock correction
-waits for the next cron occurrence after it.
-
-Save periodically, write the store atomically, and save after
-`Shutdown(timeout, spWait)` at exit. Save before `spCancel` or `spForce`, which
-clear events. Misfire and overlap suppression, execution limits, validity bounds,
-reported dispatch-start failures and a search-limit fallback can deliberately
-discard work. Callbacks assigned after restore can miss a timer pass; use the
-binder for restart catch-up.
-
-### Global dispatch caps
-
-We can cap aggregate callback throughput across all events:
-
-```delphi
-CronScheduler.GlobalMaxConcurrentCallbacks := 32; // 0 = disabled
-CronScheduler.GlobalMaxDispatchPerSecond := 200;  // 0 = disabled
-```
-
-Environment alternatives (read at scheduler creation):
-- `MAXCRON_GLOBAL_MAX_CONCURRENT`
-- `MAXCRON_GLOBAL_MAX_DISPATCH_PER_SECOND`
-
-Integer environment settings accept decimal digits after trimming surrounding whitespace.
-An empty value counts as unset and uses the default.
-
-### Graceful shutdown API
-
-`Shutdown` lets us stop new dispatch and optionally drain running callbacks:
-
-```delphi
-if not CronScheduler.Shutdown(5000, spWait) then
-  // timeout reached before full drain
-```
-
-Policies:
-- `spWait`: stop new work and wait for in-flight callbacks up to timeout.
-- `spCancel`: clear schedules first, then wait for in-flight callbacks up to timeout.
-- `spForce`: clear schedules and return immediately (reports whether work was still running).
-
-After shutdown starts, `Add(...)` raises and timer-driven ticks are ignored.
-
-Safety note: we must not call `TmaxCron.Free` from one of its own callbacks.
-That re-entrant shutdown path is now rejected with an exception to prevent deadlocks.
-Free the scheduler from outside callback context.
-
-## Usage contract (required)
-
-Invalid cron expressions raise `Exception` with the parser's existing diagnostic
-messages, such as `Invalid cron token`, `Invalid cron step` and
-`Cron value out of range`. Malformed integer operands no longer leak RTL
-`EConvertError`. Modifier lists remain unsupported.
-
-For safe production use we should follow these lifecycle rules:
-
-- `Add(...)` only registers the event. New events start disabled; call `Run` (preferred) or set `Enabled := True` after configuration.
-- `IMaxCronEvent` is an interface handle. Event registration lifetime is managed by `TmaxCron`.
-- Every event has an immutable `Id` assigned by `TmaxCron` when we call `Add(...)`.
-- Event names are optional. If provided, they are case-insensitive unique and immutable after `Add(...)`.
-- We can remove schedules by handle (`Delete(Event)`), by id (`Delete(Event.Id)`), or by name (`Delete('EventName')`).
-- `Delete('EventName')` applies to named events only. Unnamed events should be removed by handle or id (or `Clear`).
-- `Count`, `Events[]`, `Delete(Index)`, and `IndexOf` are no longer part of the public API.
-- For stable inspection, use `Snapshot` to get an array copy of registered events.
-- We should free `TmaxCron` only from outside its callback context.
-- We should avoid long-blocking callbacks during shutdown; if callbacks can block, we should first stop upstream work and let callbacks drain before destroying the scheduler.
-
-If we follow this contract, maxCron stays on the intended ownership and shutdown path.
-
-Snapshot/list example:
-
-```delphi
-var
-  Events: TArray<IMaxCronEvent>;
-begin
-  Events := CronScheduler.Snapshot;
-  if Length(Events) > 0 then
-    CronScheduler.Delete(Events[0].Id);
-end;
-```
-
-## Migration from index API
-
-If we used older index-based calls, migrate as follows:
+## Upgrading
+
+### From 2.3.x
+
+- Add the new units listed under [Installation](#installation), or add the
+  repository folder to the search path.
+- Cron numbers are decimal only: `$A`, `0xA` and `+10` are rejected. Month and
+  weekday names must be whole values or range endpoints.
+- Day-of-week ranges `0-7` and stepped ranges that wrap across Sunday select
+  different days than before, and `ValidFrom` is now inclusive for cron events.
+  The `Changed` section of [CHANGELOG.md](CHANGELOG.md) lists every behavior change.
+- Calculation types moved to `maxCron.Plan`. They keep their type identity and
+  short RTTI names, but their unit-qualified RTTI names now use `maxCron.Plan`
+  (for example, `TCronSchedulePlan.UnitName`). Update reflection that looks up
+  the old qualified names.
+
+### Migration from the index API
+
+Versions before 2.3.0 exposed index-based access. Migrate as follows:
 
 - `CronScheduler.Count` -> `Length(CronScheduler.Snapshot)`
 - `CronScheduler.Events[i]` -> `CronScheduler.Snapshot[i]`
@@ -948,910 +1227,7 @@ If we used older index-based calls, migrate as follows:
 
 Prefer storing event handles (`IMaxCronEvent`) or immutable `Id` values in our app code, instead of relying on collection positions.
 
-## Overlap handling (per-event)
+## Development
 
-When a schedule fires again while a previous execution is still running:
-
-```delphi
-NewSchedule.OverlapMode := omAllowOverlap;        // default
-NewSchedule.OverlapMode := omSkipIfRunning;       // drop overlapping fires
-NewSchedule.OverlapMode := omSerialize;           // queue and run 1-by-1
-NewSchedule.OverlapMode := omSerializeCoalesce;   // serialize, but keep backlog <= 1
-```
-
-`NumOfExecutionsPerformed` counts actual callback executions (after overlap rules), not just schedule hits.
-`ExecutionLimit` caps actual executions (after overlap rules); skipped/coalesced overlaps do not consume the limit.
-
-## Misfire handling (per-event)
-
-When the scheduler is delayed or the machine sleeps, we can control how missed occurrences are handled:
-
-```delphi
-CronScheduler.DefaultMisfirePolicy := TmaxCronMisfirePolicy.mpCatchUpAll; // default
-CronScheduler.DefaultMisfireCatchUpLimit := 1; // max catch-up per tick (min 1)
-
-NewSchedule.MisfirePolicy := TmaxCronMisfirePolicy.mpFireOnceNow; // per-event override
-```
-
-Policies:
-- `mpSkip`: fire occurrences processed in their due second (less than one second late); skip occurrences one second or more late and advance to the next time after `now`.
-- `mpFireOnceNow`: execute once, then advance to the next time after `now`.
-- `mpCatchUpAll`: execute missed occurrences sequentially, bounded per tick by `DefaultMisfireCatchUpLimit`.
-
-If we assign `mpDefault` to `CronScheduler.DefaultMisfirePolicy`, maxCron normalizes it to `mpCatchUpAll`.
-
-When exclusions (weekdays/holidays/blackout) create long filtered ranges, maxCron advances the search cursor in larger steps and keeps the event enabled until a true terminal condition is reached.
-
-## Timezone + DST policies (per-event)
-
-Each event can evaluate cron time in its own timezone:
-
-```delphi
-NewSchedule.TimeZoneId := 'LOCAL';      // default
-NewSchedule.TimeZoneId := 'UTC';
-NewSchedule.TimeZoneId := 'UTC+02:30';  // fixed offset
-NewSchedule.TimeZoneId := 'Europe/Warsaw'; // IANA zone name
-```
-
-On Windows 8 or later, named zones use the OS time zone database through a built-in
-CLDR name table, with no data files required. At every whole second, offsets equal
-Windows' own conversion. A transition stored at 23:59:59.999 takes effect at the
-following midnight. Zone data is cached per UTC year on first use; restart the
-process after a Windows time zone update. Delphi and FPC named zones use the same
-provider. FPC LOCAL uses Windows' conversion for the active system zone, including
-its automatic daylight saving setting. Outside UTC years 1602-9998, the offset at
-the nearest edge continues unchanged.
-
-Set `MAXCRON_TZDIR` before assigning a name to select TZif files on Windows or
-other platforms. Other platforms otherwise use `TZDIR`, then `/usr/share/zoneinfo`.
-TZif versions 1-4 and compatible later versions are supported. No TZif database
-is bundled for application use. The reader supports signed and extended POSIX
-footer rule times when both rule-local transitions stay at least 2 local days from the year boundaries and both DST and standard parts last at least 28 days throughout a 400-year Gregorian cycle. Fixed-offset and RFC all-year-DST footers are also supported; unsupported footer rules fail when setting the zone and preserve its previous value.
-Leap-second (`right/`) files are rejected.
-
-On Linux, LOCAL resolves the host zone in this order.
-
-1. If `TZ` is unset, read `/etc/localtime`, following symlinks. A missing,
-   unreadable or invalid file selects UTC.
-2. If `TZ` is set, strip one leading colon. An empty result selects UTC.
-3. For a value beginning with `/`, try that absolute path as a TZif file.
-   Otherwise, for a valid zone name, try its exact, case-sensitive path under
-   the first nonempty setting among `MAXCRON_TZDIR` and `TZDIR`, defaulting to
-   `/usr/share/zoneinfo`.
-4. If no usable TZif file was found for the set value, try it as a POSIX TZ
-   rule. If that fails, use UTC.
-
-The next use after the one-second recheck interval looks at the current
-settings and compares the selected file's bytes. This detects in-place file
-updates and changes to the `/etc/localtime` symlink. LOCAL uses the same gap
-and overlap rules as named zones.
-
-glibc may use `posixrules` for a value such as `EST5EDT` when no matching
-zone file exists. maxCron falls back to UTC for a DST rule without transition
-rules and for a TZif footer or POSIX rule rejected by its validator when no
-usable rule remains. The file lookup accepts only valid zone names for
-relative values, excluding paths such as `../x`.
-
-The built-in name table is derived from Unicode CLDR 49 data, copyright
-2001-2026 Unicode, Inc., under the Unicode License v3. The full notice is retained
-in `maxCron.Internal.TimeZoneNames.inc`. To regenerate it from a verified CLDR
-archive, run `scripts/Update-CronZoneNames.ps1 -CldrCommon <path-to-common>`;
-keep the archive's `LICENSE` beside `common/`.
-Names match ASCII case-insensitively; the returned name uses the table spelling
-on Windows or the file spelling for TZif. Aliases such as `US/Eastern`,
-`Asia/Calcutta` and `Etc/UTC` are accepted and kept. Unknown names raise on assignment,
-report the cause and leave the previous zone intact. Resolved rules are immutable
-and cached; restart the process to pick up data-file changes.
-
-DST behavior is configurable per event:
-
-```delphi
-NewSchedule.DstSpringPolicy := dspSkip;              // default
-NewSchedule.DstSpringPolicy := dspRunAtNextValidTime;
-
-NewSchedule.DstFallPolicy := dfpRunOnce;             // default
-NewSchedule.DstFallPolicy := dfpRunTwice;
-NewSchedule.DstFallPolicy := dfpRunOncePreferFirstInstance;
-NewSchedule.DstFallPolicy := dfpRunOncePreferSecondInstance;
-```
-
-Cron occurrences are selected and dispatched by their UTC instants. During a repeated
-hour, `dfpRunOnce` and `dfpRunOncePreferFirstInstance` select the earlier instance,
-`dfpRunOncePreferSecondInstance` selects the later one, and `dfpRunTwice` selects
-both in UTC order. Each occurrence runs at its own instance, including when a
-schedule starts, resumes, resets or is restored during the host's repeated hour.
-`UTC` and fixed-offset schedules keep their UTC firing times across host DST changes.
-Misfire lateness is measured in UTC, so repeated wall times cannot hide an overdue occurrence.
-
-For both LOCAL and named zones, `dspSkip` omits nonexistent local times.
-`dspRunAtNextValidTime` runs a gap occurrence at the transition instant, the first
-valid local time: a missing 02:30:30 shifts to 03:00:00. Several occurrences shifted
-to that instant fire once. Eligible period ranges keep dense searches bounded
-across 30-minute and two-hour changes.
-
-`NextSchedule`, `LastExecution` and persisted schedule values remain host-local
-display times. Repeated instances can therefore share one displayed value.
-On Windows, LOCAL uses native conversion rules on both compilers and picks up
-a host-zone change on the next scheduler pass. On Linux, LOCAL picks up a
-host-zone change on the first use after the one-second recheck interval has
-elapsed, and uses cached TZif rules until then. UTC, fixed-offset and named occurrences retain
-their UTC dues. Interval deadlines remain monotonic.
-
-## Business calendar exclusions
-
-We can apply common exclusion filters per event:
-
-```delphi
-NewSchedule.WeekdaysOnly := True;                              // skip Sat/Sun
-NewSchedule.ExcludedDatesCsv := '2031-01-02,2031-01-03';      // YYYY-MM-DD list
-NewSchedule.BlackoutStartTime := EncodeTime(9, 0, 0, 0);      // skip 09:00..
-NewSchedule.BlackoutEndTime := EncodeTime(17, 0, 0, 0);       // ..until 17:00
-```
-
-These exclusions are applied after cron matching and before callback dispatch.
-
-Blackout windows include the start time and exclude the end time: `[09:00, 17:00)` skips 09:00 and permits 17:00. Windows can cross midnight, such as `[22:00, 06:00)`. Equal start and end times disable the window. Times are interpreted at the nearest millisecond, ties to even.
-
-## Hash / jitter tokens
-
-`H` picks deterministic values from a stable hash seed (event name).
-
-```delphi
-NewSchedule := CronScheduler.Add('ShardA');
-NewSchedule.EventPlan := 'H * * * * * 0 0';         // hashed minute
-
-NewSchedule := CronScheduler.Add('ShardB');
-NewSchedule.EventPlan := 'H(0-29)/5 * * * * * 0 0'; // hashed start + step
-```
-
-Supported forms:
-- `H`
-- `H/step`
-- `H(min-max)`
-- `H(min-max)/step`
-
-For unnamed events, maxCron uses the immutable event `Id` as the hash seed fallback.
-
-In `cdQuartzSecondsFirst`, Day-of-Week hash ranges use Quartz numbering (`1..7`), so `H(1-7)` is valid.
-
-## DOM / DOW matching
-
-When **both** Day-of-Month and Day-of-Week are restricted (not `*`), classic crontab typically uses **OR** semantics.
-maxCron supports both:
-
-```delphi
-CronScheduler.DefaultDayMatchMode := dmAnd; // legacy (both must match)
-CronScheduler.DefaultDayMatchMode := dmOr;  // crontab-style (either may match)
-
-NewSchedule.DayMatchMode := dmDefault; // use scheduler default
-NewSchedule.DayMatchMode := dmAnd;
-NewSchedule.DayMatchMode := dmOr;
-```
-For standard cron-like behavior in tools, we should set `DayMatchMode := dmOr`.
-
-When we change `DayMatchMode` on an enabled event, or change scheduler `DefaultDayMatchMode` for enabled `dmDefault` events, maxCron recalculates `NextSchedule` immediately.
-
-## Unit tests
-
-DUnitX tests live under `tests/` (runner: `tests/maxCronTests.dpr`).
-
-### Linux gate
-
-Run `./build-and-run-tests-linux.sh <lane>` from the repository root. The
-certified default runs on x86_64 WSL had the following counts.
-
-| Lane | What it runs | Tests passed |
-| --- | --- | ---: |
-| `delphi` | Delphi Linux64 unit and stress suites | 563 |
-| `fpc` | Native FPC x86_64 suite and both smokes | 445 |
-| `fpc-aarch64` | FPC aarch64 suite and both smokes under qemu-user | 445 |
-
-The `delphi` lane builds on Windows from WSL and runs in Linux. Set
-`MAXCRON_ROSTER_OUT` to choose its Linux output root. `MAXCRON_BUILD_ROOT`,
-`MAXCRON_DCCLINUX64` and `MAXCRON_LINUX_SDK` are Windows paths for the build
-root, compiler and SDK. DUnitX's leak counter is inactive on Linux, so the
-`delphi` lane cannot detect memory leaks. The Windows Delphi gates and the
-FPC heaptrc entries provide leak coverage.
-
-Set `MAXCRON_FPC` to the Linux x86_64 FPC 3.3.1 driver, with `fpc.cfg` beside
-it. `MAXCRON_FPC_OUT` chooses the Linux output root for both FPC lanes.
-Both `MAXCRON_ROSTER_OUT` and `MAXCRON_FPC_OUT` require absolute Linux paths.
-The gate exits with code 2 for a relative output root. The default is
-`~/dev-artifacts/runs/maxCron`.
-
-The `fpc-aarch64` lane also needs `ppcrossa64` and aarch64 RTL units from the
-same FPC installation, `qemu-aarch64` on `PATH` and `aarch64-linux-gnu-`
-binutils. `MAXCRON_AARCH64_SYSROOT` defaults to `/usr/aarch64-linux-gnu`.
-The gate looks for both GCC startup objects in the sysroot's `lib` directory
-first, then in installed cross GCC directories. On Ubuntu 26.04 they come
-from `libgcc-15-dev-arm64-cross`. Emulated runners get four times the normal
-timeout.
-
-`MAXCRON_LONG_TESTS=1` selects the long suite for `delphi` and `fpc` and is
-rejected by `fpc-aarch64`. The certified long runs passed 531 Delphi tests and
-445 FPC tests. Each ran the full 2000-2040 glibc LOCAL comparison with
-467,273,250 checks and zero mismatches.
-
-`MAXCRON_DEBUG_SAFETY=1` selects a Delphi Debug build or enables FPC runtime
-checks. The lanes pass through `MAXCRON_STRESS`.
-`MAXCRON_LINUX_TIMEOUT_SECONDS` overrides each runner's timeout directly.
-`MAXCRON_LINUX_PREBUILT` trusts the supplied lane layout and runs it without
-rebuilding. Use it only with binaries produced by a gate run of the same commit,
-and verify their hashes before running. For a default `delphi` run, point it
-at the directory containing `unit` and `stress`. For `fpc`, use the directory
-containing `tests`, `smoke` and `smoke-heaptrc`.
-Tests that cannot run on Linux are listed in `tests/linux/LinuxExcluded.txt`.
-
-### Windows gates
-
-The `build-and-run-tests.bat` and `build-and-run-tests-stress.bat` gates (and
-their WSL `.sh` wrappers) require Delphi 12 (23.0) and DelphiAIKit. They build
-the demo and all three test runners for Win32, then run the tests, forwarding
-arguments and returning nonzero on a missing tool, build error, or test failure.
-Set `DAK_EXE` to the absolute Windows path of `DelphiAIKit.exe` for the process
-running the gate; otherwise the scripts search `PATH`, then
-`..\..\DelphiAiKit\bin\DelphiAIKit.exe` relative to the scripts. An invalid
-explicit override fails immediately. No persistent environment setting is needed.
-For a `DAK_EXE` override exported inside WSL, add `DAK_EXE/w` to `WSLENV` so it
-reaches Windows. The Delphi projects select the binary output paths. Roster gate
-logs go under `<build-root>\roster-gates` when `MAXCRON_BUILD_ROOT` is set, or
-`%TEMP%\maxCron-roster-gates` otherwise. `MAXCRON_ROSTER_OUT` takes precedence.
-Release is the default. `MAXCRON_DEBUG_SAFETY=1` selects Debug.
-Default gates keep all curated UTC/DST regressions and the repeated-hour restore
-reviewer cases, plus deterministic matrix samples (seed `20261118`).
-
-Run `./build-and-run-tests-long.sh` (or `build-and-run-tests-long.bat`) whenever
-time-zone, search, restore or dispatch code changes, and before qualifying a
-release that includes such changes. It rebuilds the same unit runner with
-`MAXCRON_LONG_TESTS`: full fake/TZif host matrices on scan, heap and shadow,
-all 1,584 deferred validity rows, full restore matrices, every-second fast/walk
-equivalence and minute-by-minute probe/mapping/consumer walks. No test is skipped.
-Default Windows RTL checks cover every host transition in 2000-2040 at
-T-1 s, T and T+1 s, gap edges, both repeated-hour instances and one UTC
-sample per day (seed `20261118`). The full probe-over-RTL comparison for
-2000-2040 runs unchanged in long qualification.
-
-Use `./build-and-run-tests-long.sh fpc` for the equivalent FPC qualification,
-and set `MAXCRON_LONG_PLATFORM=Win64` for Delphi Win64 (Win32 is the default).
-The Delphi long gate uses `<build-root>\long` when `MAXCRON_BUILD_ROOT` is set,
-or `%TEMP%\maxCron-long` otherwise. `MAXCRON_LONG_OUT` takes precedence. Long and
-default binaries use separate outputs.
-
-Every test runner checks complete executed identities, including case names,
-against its checked-in manifest. `tests/rosters/` contains separate Delphi
-unit, stress, VCL and long rosters, FPC default and long rosters, an explicit
-FPC-only list, and both FPC smoke rosters. `tests/LongTests.txt` is the
-compatibility copy of the Delphi long roster. Missing, renamed, extra,
-duplicated or filtered tests fail. Source hashes also reject stale test sources,
-including `TestFpcShims.pas`, included `.inc` vectors, and every checked-in
-corpus or fixture under `tests/data`. The dependency set is conservative across
-the runners, so changing any of those inputs requires an explicit refresh:
-
-```powershell
-$env:MAXCRON_FPC = '<fpc-root>\bin\x86_64-win64\fpc.exe'
-./tests/Export-TestRosters.ps1 -Compiler '<Delphi bin>/dcc64.exe' `
-  -DUnitXSource '<DUnitX>/Source' -OutputRoot '<external discovery output>'
-```
-
-The exporter uses native DUnitX discovery, native FPC registration and the real
-smoke checks; gates never regenerate manifests. Review identity changes before
-accepting them. The FPC gate also checks the union of its Delphi shared list and
-explicit FPC-only list. Combined gate manifests also pin every child run, with
-entry prefixes distinguishing the normal and heap smoke identities. The Delphi
-default wrappers execute the child roster declared by their combined manifest.
-Run binaries from the checkout, or set `MAXCRON_TEST_ROOT`
-to it when using external build outputs. Test selectors are rejected; Delphi
-default runners still accept quiet console formatting.
-`tests/RosterContract.Tests.ps1` runs native membership regressions through all
-default/long wrappers, runners and smokes, for shared and FPC-only fixture
-families, including controls with current source hashes and unchanged expected
-names. It requires `ScratchRoot`, `Compiler` and `DUnitXSource` parameters.
-Before the full matrix, run the setup preflight:
-
-```powershell
-python -X utf8=0 tests/roster_contract_regression.py --repository . `
-  --scratch '<fresh external output>' --compiler '<Delphi bin>/dcc64.exe' `
-  --dunitx '<DUnitX>/Source' --setup-only --contract-variant enabled
-```
-
-Repeat with `--contract-variant disabled` and a different fresh output directory.
-Each preflight discovers the roster, runs two positive controls, checks WSL
-startup and script syntax, and compiles all 72 distinct native fixture forms
-with Delphi Win32/Win64 and FPC.
-The disabled variant removes roster guards only in negative-case copies;
-discovery and positive controls keep the contract enabled. The preflight writes
-`setup.json` and subprocess receipts. Both preflights must pass before the full
-RED and GREEN matrix runs; compilation failure is infrastructure failure.
-
-`tests/roster_source_regression.py` additionally changes every include/data input
-in an owned copy and checks stale rejection through the native and wrapper
-manifest loaders. Build failures abort the membership matrix; they never count
-as rejected test selections.
-FPC continues to use fresh directories under `MAXCRON_FPC_OUT`.
-Long qualification accepts no test-selection arguments (apart from the `fpc`
-routing token). Empty, partial, ignored or failed runs return nonzero; Delphi
-and FPC check execution against their complete discovered/generated rosters.
-
-Roster contract violations use reserved exit code 5 and one fixed
-`ROSTER_REJECTED reason=... detail=...` verdict. Only the roster comparison
-helpers can originate that result. Build, generator, parity and runner phases
-record their native completion codes; infrastructure failures never count as
-roster rejection. The matrix requires the expected verdict reason and owner,
-with every preceding phase successful. It refreshes unchanged source stamps
-on every route under a non-UTF-8 locale, preserving UTF-8 BOM identities.
-`tests/RosterHarness.Tests.ps1` covers the native compiler, generator and parity
-failure reproductions, plus the table of compiler, linker, generator, parity,
-runner and roster-helper failures (nonzero exit, crash, timeout and misleading
-output).
-
-The roster contract guards against accidental false success, including stale or
-incomplete test inventories and failed tools. Test definitions, native runners
-and gate scripts are trusted project code. Deliberately modifying a runner or
-helper to forge or replay a verdict is outside this threat model.
-
-#### Test exit codes and propagation
-
-These tables describe a successfully started wrapper or native program. The
-paired Windows `.sh` and `.bat` entry points use the same gate and exit codes.
-
-| Entry point | Success | Ordinary test or infrastructure failure | Roster violation | Timeout |
-| --- | ---: | --- | ---: | ---: |
-| Delphi default `build-and-run-tests.bat` / `.sh` | 0 | 3, including a native runner returning 1 or 2 | 5 | 124 |
-| Linux `build-and-run-tests-linux.sh` (`delphi`, `fpc`, `fpc-aarch64`) | 0 | 1 for test or heap failure, 2 for configuration, 3 for build or infrastructure | 5 | 124 |
-| Delphi stress `build-and-run-tests-stress.bat` / `.sh` | 0 | 3, including a native runner returning 1 or 2 | 5 | 124 |
-| Delphi long `build-and-run-tests-long.bat` / `.sh` | 0 | 3, including build failure, native runner error 2, or invalid helper output | 5 | 124 |
-| FPC gate `build-and-run-tests-fpc.bat` / `.sh` | 0 | 1 for test/heap/result failure; 2 for tool/output configuration; 3 for build, generator or parity infrastructure failure | 5 | 124 |
-| FPC long `build-and-run-tests-long.bat fpc` / `.sh fpc` | 0 | The same FPC 1/2/3 meanings; preflight infrastructure failure is 3 | 5 | 124 |
-| FPC smoke binaries, normal and heap variants | 0 | Native 2 for a caught test/runtime/result exception; 1 is the retained final unsuccessful-result guard. The FPC gate maps either to 1 | 5 | No internal watchdog; the FPC gate supervises them and returns 124 |
-
-A shell, OS loader, or PowerShell startup failure before orchestration can
-return its platform status instead (for example Windows 9009 or shell 126/127).
-The WSL launcher rejects unsupported argument quoting/newlines with 2. Such
-bootstrap failures have no roster verdict and never qualify as roster rejection.
-
-| Native phase or result | Native completion | How the wrapper propagates it |
-| --- | --- | --- |
-| Tool/version/CPU/target query | 0 or the tool's native status | Recorded in its tool receipt; invalid tool/configuration maps to FPC 2; a supervised deadline returns 124 |
-| Build, including compiler/linker | 0 or the tool's actual nonzero exit | Recorded in the build receipt. Failure maps to Delphi 3 or FPC 3, even if the tool itself returned 5 |
-| FPC registry generator | 0; parser/generation errors normally 3; a crash retains its actual native status | Recorded in the generator receipt. A non-timeout failure maps to FPC 3; native 124 propagates as 124. Generator output cannot originate roster status 5 |
-| Parity helper | 0; roster violation 5; ordinary exception 3; a crash retains its native status | Recorded in the parity receipt. Explicit roster verdict plus native 5 propagates 5; another failure maps to FPC 3, except timeout status 124 which propagates |
-| Delphi native unit/stress/VCL runner | 0; caught ordinary test/runtime/result error 2; retained final unsuccessful-result guard 1; roster violation 5 | Recorded in the runner receipt. Native 1/2 or a crash maps to Delphi wrapper 3; a verified roster 5 propagates 5, and timeout 124 propagates 124 |
-| FPC native test runner | 0; caught ordinary test/runtime/result error 2; retained final unsuccessful-result guard 1; roster violation 5 | Recorded in the runner receipt. Native 1/2 or a crash maps to FPC gate 1; a verified roster 5 propagates 5, and timeout 124 propagates 124 |
-| Roster/source/execution check | 0 or typed roster violation 5; non-contract exceptions remain native 2 or PowerShell helper 3 | Only this comparison code originates 5, immediately preceded by its check receipt and accompanied by one fixed verdict. A wrapper propagates 5 only after checking that result; arbitrary native 5 without the verdict is infrastructure failure |
-| Ordinary test failure | Usually native 2 through the current result checker; final unsuccessful-result guards retain 1 | Delphi wrappers return 3; the FPC gate returns 1. It is not a roster verdict |
-| Other infrastructure failure | The producer's nonzero status is retained in its phase receipt | Delphi orchestration maps it to 3; FPC uses the current configuration/build/test stage's 2/3/1. No roster status is synthesized |
-| Phase deadline | The killed process's actual native exit remains in the receipt, which can be 0 if it exited but left a child holding a pipe | The supervising wrapper returns 124; enclosing wrappers preserve 124. Timeout never becomes 5 |
-
-For example, Delphi native runner 2 becomes Delphi wrapper 3. A generator
-returning 37 remains 37 in its receipt and becomes FPC wrapper 3. A genuine
-parity violation returns native 5 with its verdict and becomes wrapper 5. Child
-124 is preserved by runner/helper propagation; compiler/query nonzero statuses
-still use the build/configuration mapping unless the supervising deadline
-itself expired.
-
-#### Production phase deadlines
-
-Deadlines cover both process completion and draining redirected output, using
-a monotonic clock. Every supervised Windows child starts suspended and joins
-a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` before it can execute.
-On expiry the gate terminates the job, including descendants whose parents
-have exited, allows up to 10 seconds to confirm the job is empty, and allows
-up to 5 seconds to finish its asynchronous stdout/stderr reads. It records
-the native status and returns 124. Incomplete termination or stream draining
-is recorded as `ROSTER_TIMEOUT_INCOMPLETE` and still returns 124, never success
-or roster status 5. Directly launching a native executable supplies no internal
-watchdog; use the wrappers for supervision.
-
-Windows Job Objects do not own processes inside the WSL virtual machine.
-Terminating `wsl.exe` stops the foreground Linux probe, but a detached Linux
-process can survive. The `.sh` routes delegate builds and tests to the
-supervised Windows wrappers; this timeout guarantee covers their Windows
-children. Linux work added to those routes needs its own Linux deadline and
-cleanup. Killing the WSL client alone is not a guarantee for detached Linux
-descendants.
-
-| Phase | Deadline |
-| --- | --- |
-| Compiler version/CPU/target queries | 2 minutes each |
-| Build, including compiler/linker | 30 minutes each |
-| Registry generator, parity and ordinary roster/preflight helpers | 10 minutes each |
-| Default Delphi/FPC test runner | 2 hours each |
-| FPC smoke or heap smoke | 10 minutes each |
-| Exhaustive Delphi/FPC long test runner | 48 hours each |
-| Enclosing Delphi default/stress three-runner gate | 8 hours |
-
-These are hang limits, not timing acceptance thresholds. The default unit
-wrapper must still finish within 10 minutes on the qualification machine. The
-48-hour long-run cap is deliberately conservative: the earlier long Win32 run
-was cancelled after hours, so a completed full-run baseline is not yet available.
-
-The maxCron syntax corpus is stored in `tests/data/cron-valid.txt`.
-
-Our upstream-derived cron corpus used by tests is stored in `tests/data/cron-utils-unix-5field.txt`.
-Negative corpus (expected to fail parse) is stored in `tests/data/cron-invalid.txt`.
-
-Optional runners:
-- `tests/maxCronVclTests.dpr` (GUI/VCL message pump; tests `ctVcl` / `ctAuto` behavior)
-- `tests/maxCronStressTests.dpr` (heavier concurrency stress tests; ~30s)
-- `tests/run-long-soak.sh` (cross-mode logical soak harness with report artifact output)
-
-### Oracle fuzz and chaos fixtures
-
-We can run the deterministic cron fuzz-oracle fixture (dialect/day-match combinations with brute-force oracle comparison):
-
-```bash
-tests/maxCronTests.exe --consolemode:quiet
-```
-
-Replay knobs:
-- `MAXCRON_FUZZ_SEED` (default `137031`)
-- `MAXCRON_FUZZ_CASES` (default `36` per dialect/day-match combination)
-- `MAXCRON_FUZZ_OCCURRENCES` (default `6`)
-- `MAXCRON_FUZZ_SCAN_SECONDS` (default `604800`, existing forward oracle)
-- `MAXCRON_FUZZ_SCAN_DAYS` (default `3700`, day-pruned query oracle)
-
-The fixture also runs `PreviousOccurrences_MatchBruteForceOracle`,
-`ModifierPlans_NextAndPrevious_MatchBruteForceOracle`,
-`Between_MatchBruteForceOracle` and `Properties_NextPreviousRelations`.
-These cover previous/range queries, independent DOM/DOW modifier rules,
-hashed fields and restricted years. Each uses its own seed offset (1 through 4),
-leaving the existing forward oracle's random stream unchanged.
-
-We can run async-boundary chaos coverage (queue-acquire injection, dispatch-start failure, callback exceptions, cancellation races):
-
-```bash
-tests/maxCronTests.exe --consolemode:quiet
-```
-
-### Long soak harness (24h logical window)
-
-The long-soak harness drives a mixed workload across `scan`, `heap`, and `auto` and writes a report artifact under `tests/__recovery/soak-reports/`.
-
-```bash
-MAXCRON_LONG_SOAK_HOURS=24 ./tests/run-long-soak.sh --modes=scan,heap,auto --cm:Quiet
-```
-
-Useful options:
-- `--modes=scan,heap,auto` to select engines.
-- `--hours=N` to override the logical soak window (defaults to `MAXCRON_LONG_SOAK_HOURS` or `24`).
-
-The harness executes the complete default rosters, including
-`TestLongSoak24h.EngineModes_LogicalSoak_NoMisses`, which validates:
-- no callback loss/duplication envelope violations per mode,
-- auto-mode switch envelope bounds,
-- report artifact generation with full console output and exit code.
-
-### Debug-safety lane
-
-Use `MAXCRON_DEBUG_SAFETY=1` to run the canonical test scripts in `Debug` configuration (range/overflow/assert checks and leak diagnostics enabled by our test runners):
-
-```bash
-MAXCRON_DEBUG_SAFETY=1 ./build-and-run-tests.sh -cm:Quiet
-MAXCRON_DEBUG_SAFETY=1 ./build-and-run-tests-stress.sh -cm:Quiet
-```
-
-`Add(name, plan, callback)` overloads are atomic: if `plan` is invalid, no partial event is kept in the scheduler.
-Queued main-thread pre-acquire failure regressions use `SetMaxCronBeforeQueuedAcquireHook`; injected failures roll back state and exit the queued path without rethrowing through `CheckSynchronize`.
-
-# Using the TPlan helper:
-TPlan is a small record that lets us set parts in a friendly way and then convert them to a cron string.
-```Delphi
-  var plan: TPlan;
-
-  plan.Reset;
-  plan.Dialect := cdMaxCron; // or cdStandard / cdQuartzSecondsFirst
-  // you can access any of the fields just like that:
-  plan.Second := '30';
-  // now create a new event using our new plan
-  NewSchedule := CronScheduler.Add('EventFromTPlan', plan.Text, OnScheduleTrigger).Run;
-```
-
-# Preview upcoming occurrences
-
-We can fetch the next N fire times from a parsed plan:
-
-```delphi
-var
-  Plan: TCronSchedulePlan;
-  Dates: TDates;
-  Count: Integer;
-begin
-  Plan := TCronSchedulePlan.Create;
-  try
-    Plan.Parse('*/5 * * * * * 0 0');
-    Count := Plan.GetNextOccurrences(10, Now, Dates);
-    // Dates[0..Count-1] are our upcoming occurrences.
-  finally
-    Plan.Free;
-  end;
-end;
-```
-
-## Previous occurrences and range queries
-
-`TCronSchedulePlan` also searches backwards and queries a time window:
-
-```delphi
-var
-  lPlan: TCronSchedulePlan;
-  lDates: TDates;
-  lPrevious, lStart, lEnd: TDateTime;
-  lCount: Integer;
-begin
-  lPlan := TCronSchedulePlan.Create;
-  try
-    lPlan.Parse('*/15 * * * *');
-    lStart := EncodeDateTime(2026, 11, 15, 10, 0, 0, 0);
-    lEnd := IncHour(lStart, 1);
-    if lPlan.FindPreviousScheduleDate(IncMinute(lStart, 7), lPrevious) then
-      Writeln(DateTimeToStr(lPrevious)); // 10:00
-    lCount := lPlan.GetPreviousOccurrences(3, IncMinute(lStart, 7), lDates);
-    // Newest first: 10:00, 09:45, 09:30.
-    lCount := lPlan.GetOccurrencesBetween(lStart, lEnd, lDates, 2);
-    // Oldest first: 10:00, 10:15. Fetch the next page after the last result.
-    if lCount > 0 then
-      lCount := lPlan.GetOccurrencesBetween(IncSecond(lDates[lCount - 1], 1), lEnd, lDates, 2);
-    lCount := lPlan.CountBetween(lStart, lEnd); // 4
-    if lPlan.HasOccurrenceBetween(lStart, lEnd) then
-      Writeln(lCount);
-  finally
-    lPlan.Free;
-  end;
-end;
-```
-
-The example uses `System.DateUtils` and `System.SysUtils`, plus either `maxCron`
-or the RTL-only `maxCron.Plan` unit. Previous searches are strictly before the
-base time. Ranges include the start and exclude the end: `[start, end)`.
-Comparisons read TDateTime inputs at the millisecond nearest to the exact stored
-Double, ties to even, using the library conversion helper on Win32 and Win64.
-Occurrences are whole seconds:
-previous at `10:15:00.000` excludes that occurrence, while `10:15:00.001`
-includes it. A range starting at `10:00:00.001` begins with `10:15`.
-
-Queries stay within 1900-01-01 through 3000-12-31. A failed previous search sets
-its output to zero. Nonpositive counts or limits return empty results; empty
-or reversed windows return zero and `HasOccurrenceBetween` returns False.
-`GetOccurrencesBetween` and `CountBetween` default to `cCronQueryDefaultLimit`
-(10,000). Lists truncate at the limit; counts saturate there. Pass a larger
-limit, up to `High(Integer)`, to count more, with one next-search per occurrence.
-
-Plan queries ignore `ExecutionLimit` and use naive wall-clock time. Event
-timezone, DST policy, weekdays-only rules, excluded dates, blackout and event
-validity windows are not applied.
-
-
-## Human-readable descriptions
-
-We can generate a basic, deterministic description for logging or UI:
-
-```delphi
-var
-  Plan: TCronSchedulePlan;
-  Desc: string;
-begin
-  Plan := TCronSchedulePlan.Create;
-  try
-    Plan.Parse('*/5 * * * * * 0 0');
-    Desc := Plan.Describe; // "Every 5 minutes"
-  finally
-    Plan.Free;
-  end;
-end;
-```
-
-# From / To valid range
-
-Example how to use From / To valid range. The event will fire for one year, every sunday, every second hour, but only on 1,5 and 10 month in the year.
-
-`ValidFrom` and `ValidTo` are both inclusive for cron and interval events; `0`
-means unbounded. An occurrence exactly at either bound is eligible, including a
-single-point window where both bounds are equal. Searches remain strictly after
-their base time. Validity comparisons read `TDateTime` at the nearest millisecond,
-with ties to even. Cron bounds use system-local time, including for named-zone
-events; calendar exclusions and DST policies still apply. These bounds also
-apply to shifted spring-gap occurrences and to each eligible repeated-hour instance.
-
-```Delphi
-
-  // start time is in 50 seconds
-  startDate := now() + 1 / 24 / 60 / 60 * 50;
-  // and stop 5 minutes afterwards
-  StopDate := startDate + 1 / 24 / 60 * 5;
-  log('Ranged Event start date: ' + showDate(startDate));
-  log('Ranged Event stop date: ' + showDate(StopDate));
-  NewSchedule := CronScheduler.Add('RangedSchedule');
-  NewSchedule.EventPlan := '0 0 */2 * 1,5,10 7 *';
-  NewSchedule.OnScheduleEvent := OnScheduleTrigger;
-  NewSchedule.ValidFrom := startDate;
-  NewSchedule.ValidTo := StopDate;
-  NewSchedule.Run;
-```
-
-# Cron Format
-
-Numbers in cron expressions use decimal digits only, with leading zeros allowed.
-Month and weekday names must occupy a whole value position, such as `JAN-MAR` or
-`MON#2`. Steps and the ordinal after `#` require numbers.
-
-Cron format is a simple, yet powerful and flexible way to define time and frequency of various actions.
-
-Traditional (inherited from Unix) cron format consists of five fields separated by white spaces:
-
-```
-<Minute> <Hour> <Day_of_the_Month> <Month_of_the_Year> <Day_of_the_Week>
-```
-
-maxCron can use both traditional and "enhanced" version of cron format, which has an additional (6th) field: <Year>:
-
-```
-<Minute> <Hour> <Day_of_the_Month> <Month_of_the_Year> <Day_of_the_Week> <Year>
-```
-
-Moreover, maxCron has a unique feature and uses two additional fields: 7th <Seconds> and an 8th field <ExecutionLimit>:
-
-```
-<Minute> <Hour> <Day_of_the_Month> <Month_of_the_Year> <Day_of_the_Week> <Year> <Seconds> <ExecutionLimit>
-```
-
-The following graph shows what the format that maxCron uses consists of:
-
-```
-* * * * * * 0 0
-| | | | | | | |
-| | | | | | | +-- ExecutionLimit    (range 0 - 0xffffffff. Default 0 = unlimited)
-| | | | | | +---- Seconds           (range 0 - 59. Default 0)
-| | | | | +------ Year              (range: 1900-3000)
-| | | | +-------- Day of the Week   (range: 0-7, 0/7 standing for Sunday; 1=Monday..6=Saturday)
-| | | +---------- Month of the Year (range: 1-12)
-| | +------------ Day of the Month  (range: 1-31)
-| +-------------- Hour              (range: 0-23)
-+---------------- Minute            (range: 0-59)
-```
-
-Any of these 8 fields may be an asterisk (*). This means the entire range of possible values (each minute, each hour, etc.).
-
-## Cron dialects
-
-We can parse multiple cron dialects. The default remains `cdMaxCron` (current behavior).
-
-- `cdStandard` (5-field): `<Minute> <Hour> <DayOfMonth> <Month> <DayOfWeek>`
-- `cdMaxCron` (5-8 field): `<Minute> <Hour> <DayOfMonth> <Month> <DayOfWeek> [Year] [Second] [ExecutionLimit]`
-- `cdQuartzSecondsFirst` (6/7-field): `<Second> <Minute> <Hour> <DayOfMonth> <Month> <DayOfWeek> [Year]`
-
-Important: Quartz-style expressions are **seconds-first**. If we use `?`, `W`, `LW`, `#`, or any 6/7-field seconds-first plan, set `Dialect := cdQuartzSecondsFirst`. Parsing those expressions in minute-first dialects (`cdStandard`/`cdMaxCron`) will shift fields and produce different results.
-Quartz also uses **1-7** for Day-of-Week numbering (`1=Sun .. 7=Sat`). In `cdStandard`/`cdMaxCron` we use `0` or `7` for Sunday and `1..6` for Monday..Saturday.
-
-DefaultDialect applies when we create new events; we can override per event:
-
-```delphi
-CronScheduler.DefaultDialect := cdStandard;
-NewSchedule := CronScheduler.Add('QuartzStyle');
-NewSchedule.Dialect := cdQuartzSecondsFirst;
-NewSchedule.EventPlan := '0 15 10 ? * 2#3';
-```
-
-For `cdMaxCron`, prefer either:
-
-- 5-field plans for minute-level schedules, or
-- full 8-field plans when we want to be explicit about `Year`, `Second`, and `ExecutionLimit`.
-
-That keeps examples readable and avoids confusing minute-first maxCron plans with Quartz seconds-first syntax.
-
-Any field may contain a list of values separated by commas, (e.g. 1,3,7) or a range of values (two integers separated by a hyphen, e.g. 1-5).
-
-After an asterisk (*) or a range of values, you can use character / to specify that values are repeated over and over with a certain interval between them. For example, you can write "0-23/2" in Hour field to specify that some action should be performed every two hours (it will have the same effect as "0,2,4,6,8,10,12,14,16,18,20,22"); value "*/4" in Minute field means that the action should be performed every 4 minutes, "1-30/3" means the same as "1,4,7,10,13,16,19,22,25,28".
-
-In Month and Day of Week fields, you can use names of months or days of weeks abbreviated to first three letters ("Jan,Feb,...,Dec" or "Mon,Tue,...,Sun") instead of their numeric values.
-
-Wrapped ranges in seconds, minutes, hours and months continue through the field minimum.
-Steps count continuously from the range start: `22-2` means hours 22,23,0,1,2;
-`22-2/2` means 22,0,2; `22-2/3` means 22,1. Month names work too:
-`NOV-FEB` means November through February; `NOV-FEB/2` means November and January.
-Day-of-week wraps use the same continuous step rule, in every dialect:
-`4-2/2` means Thursday, Saturday and Monday; `1-7/4` means Monday and Friday
-in `cdMaxCron` and `cdStandard`. In Quartz numbering, the corresponding ranges
-are `5-3/2` and `2-1/4`. Unstepped wraps such as `FRI-MON` are unchanged.
-Day-of-month, year and `H(...)` ranges do not wrap.
-
-In `cdMaxCron` and `cdStandard`, Sunday may be written as `0` or `7`.
-For a range ending in `7`, starts `1` through `6` run forward through Sunday:
-`1-7` is Monday through Sunday, and `1-7/4` is Monday and Friday.
-`0-7` spans all seven days; `0-7/2` is Sunday, Tuesday, Thursday and Saturday,
-`0-7/3` is Sunday, Wednesday and Saturday, and steps of 7 or more select Sunday only.
-`7-7` and `SUN-SUN` select Sunday only. A range starting at `7` otherwise starts
-at Sunday, so `7-2/2` is Sunday and Tuesday. Lists union the selected days.
-Day names use the dialect's numbers before range expansion: `SUN-7` therefore
-also spans the week, while `0-SUN` is Sunday only in these zero-based dialects.
-
-Quartz numbering remains `1` = Sunday through `7` = Saturday; `0` is invalid.
-`1-7` spans the week and `1-7/2` selects Sunday, Tuesday, Thursday and Saturday.
-For any Quartz start `a` from 1 through 7, `a-7/s` steps forward from `a`
-through Saturday, without restarting the step; `7-7` is Saturday only.
-In either numbering, other ranges advance from the start to the endpoint,
-crossing Sunday when needed, and count the step continuously from the start.
-An omitted step means 1. Singleton values and `n/s` without a dash keep their meaning.
-Steps larger than a range span select only its start, in every field. This also
-applies to `*/n`, `n/k` and stepped hash ranges; a hash range starts at its seeded
-value. For example, weekday `1-1/2147483647` selects Monday only.
-
-
-
-Additional syntax we support:
-
-- Quartz-style modifiers for Day-of-Month and Day-of-Week:
-  - DOM: `L` (last day), `W` (nearest weekday), `LW` (last weekday).
-    Offsets `L-n` (n days before the last day), `LW-n` (n weekdays before the last weekday),
-    and `L-nW` (nearest weekday to the last day minus n days) accept n from 0 to 30.
-    Plans containing a newly recognised day-of-month form and an invalid later field now report the later field's error.
-    Nearest-weekday adjustments stay within the month. If the target falls before the month,
-    that month has no match. `L-0` equals `L`; `LW-0` and `L-0W` match `LW`.
-    For example, `L-2` is February 26 in 2027, `LW-2` is May 27 in 2026,
-    and `L-30W` is August 3 in 2026. Large `LW-n` offsets can have no match in any month.
-  - DOW: `?` (no specific value), `nL` (last weekday in month), `n#k` (nth weekday, k=1..5).
-- Note: we accept `?` for Quartz compatibility and treat it as "any" when matching schedules.
-- Macros: `@yearly`/`@annually`, `@monthly`, `@weekly`, `@daily`/`@midnight`, `@hourly`, `@reboot` (runs once on the next scheduler tick; `@reboot` is supported only in `cdMaxCron`; `@weekly` uses Sunday in each dialect: `0` in `cdStandard`/`cdMaxCron`, `1` in `cdQuartzSecondsFirst`).
-- Comments and whitespace: trailing `# comment` is ignored; extra spaces/tabs and spaces after commas are accepted.
-
-Examples:
-
-```
-* * * * * *                         Each minute
-
-
-59 23 31 12 5 *                     One minute  before the end of year if the last day of the year is Friday
-
-59 23 31 DEC Fri *                  Same as above (different notation)
-
-45 17 7 6 * *                       Every  year, on June 7th at 17:45
-
-45 17 7 6 * 2001,2002               Once a   year, on June 7th at 17:45, if the year is 2001 or  2002
-
-0,15,30,45 0,6,12,18 1,15,31 * 1-5 *  At 00:00, 00:15, 00:30, 00:45, 06:00, 06:15, 06:30,
-                                    06:45, 12:00, 12:15, 12:30, 12:45, 18:00, 18:15,
-                                    18:30, 18:45, on 1st, 15th or  31st of each  month, but not on weekends
-
-*/15 */6 1,15,31 * 1-5 *            Same as above (different notation)
-
-0 12 * * 1-5 *                       At midday on weekdays
-0 12 * * Mon-Fri *                   Same as above (different notation)
-
-* * * 1,3,5,7,9,11 * *              Each minute in January,  March,  May, July, September, and November
-
-1,2,3,5,20-25,30-35,59 23 31 12 * * On the  last day of year, at 23:01, 23:02, 23:03, 23:05,
-                                    23:20, 23:21, 23:22, 23:23, 23:24, 23:25, 23:30,
-                                    23:31, 23:32, 23:33, 23:34, 23:35, 23:59
-
-0 9 1-7 * 1 *                       First Monday of each month, at 9 a.m.
-
-0 0 1 * * *                         At midnight, on the first day of each month
-
-* 0-11 * * *                        Each minute before midday
-
-* * * 1,2,3 * *                     Each minute in January, February or March
-
-* * * Jan,Feb,Mar * *               Same as above (different notation)
-
-0 0 * * * *                         Daily at midnight
-
-0 0 * * 3 *                         Each Wednesday at midnight
-
-0 0 * * * * *                       Daily at midnight every second. That is 60 executions
-
-0 0 * * * * 15,30                   Daily 15 and 30 second after midnight
-
-0 0 * * * * * 3                     Daily at midnight every second. But limited to 3 executions
-```
-
-Crontab notation may be abridged by omitting the rightmost asterisks.
-Please note that omitting the Seconds field does not mean that the task will be executed every second. maxCron uses a default of 0 for Seconds.
-
-Examples:
-
-
-| Full notation | Abridged notation |
-| ------------- | ----------------- |
-| * * * * * * |   |
-| 59 23 31 12 5 2003                   | 59 23 31 12 5 2003 |
-| 59 23 31 12 5 *                      | 59 23 31 12 5 |
-| 45 17 7 6 * *                        | 45 17 7 6 |
-| 0,15,30,45 0,6,12,18 1,15,31 * * *   | 0,15,30,45 0,6,12,18 1,15,31 |
-| 0 12 * * 1-5 *                       | 0 12 * * 1-5 |
-| * * * 1,3,5,7,9,11 * *               | * * * 1,3,5,7,9,11 |
-| 1,2,3,5,20-25,30-35,59 23 31 12 * *  | 1,2,3,5,20-25,30-35,59 23 31 12 |
-| 0 9 1-7 * 1 *                        | 0 9 1-7 * 1 |
-| 0 0 1 * * *                          | 0 0 1 |
-| * 0-11 * * * *                       | * 0-11 |
-| * * * 1,2,3 * *                      | * * * 1,2,3 |
-| 0 0 * * * *                          | 0 0 |
-| 0 0 * * 3 *                          | 0 0 * * 3 |
-
-### Cron timer precision
-
-Each scheduler owns one timing thread. Cron passes run once per wall-clock second,
-aligned just after the second boundary, using a precise local wall clock on Windows.
-`LastExecution` and `NextSchedule` retain their scheduled wall-clock values.
-Cron dispatch interprets these `TDateTime` carriers at the nearest millisecond,
-with ties to even. The precise clock stays in integer microseconds through due
-and misfire decisions; a pass less than one second late fires under `mpSkip`,
-including 999.6-999.999 ms late. Run/reset and late-pass searches use the whole
-second containing the precise instant, so a pass just before an occurrence
-does not skip it. The additive `TCronInstantUs` type and `CronDateTimeToMs`,
-`CronDateTimeToInstantUs`, `CronMsToDateTime`, `CronSecondToDateTime`,
-`CronInstantFloorSecond`, `CronInstantUsToDateTime`, `CronFloorDiv` and
-`CronCeilDiv` helpers are available from `maxCron.Plan` and `maxCron`.
-`CronInstantUsToDateTime` floors to milliseconds for display or persistence.
-`ctPortable` delivers ticks on the timing thread; `ctVcl` posts coalesced ticks to
-the main thread through `TThread.ForceQueue` and requires a message pump. Main-thread
-load and callback dispatch add latency. The default callback mode is `imMainThread`;
-a console application must pump queued work or select `imTTask`/`imThread`.
-
-On Windows, `MAXCRON_TIMER_RESOLUTION` is read when creating the scheduler: `high` (default)
-uses a high-resolution waitable timer, `period` requests 1 ms timer resolution only
-for the final 20 ms of each wait, and `default` uses the system wait resolution.
-If a high-resolution timer is unavailable, maxCron falls back to `period`.
-`ActiveTimerResolution` reports `trHighResolution`, `trTimerPeriod`, or
-`trSystemDefault`. Timer-period requests can affect the whole system on older
-Windows versions. Every wait is bounded to one second so clock jumps are noticed.
-Power throttling, battery operation, and background/minimized process policies may
-coarsen waits; this host's measurements do not qualify those environments. QPC
-behavior across system sleep remains platform-defined and unverified here.
-
-The library timer no longer depends on `Vcl.ExtCtrls` or `MaxLogic.PortableTimer`.
-Under `MAXCRON_TESTS`, `StartTimerForTests` selects the maximum sleep duration,
-clamped to 1..1000 ms. Explicit `TickAt` calls remain direct cron passes using the millisecond carrier rule;
-`TickAtUs` accepts exact wall-clock microseconds.
-
-## Interval events
-
-Use `AddInterval('poll', 100, Callback)` or `Add('poll', '@every 100ms', Callback)`
-for monotonic intervals from 1 to 4,294,967,295 milliseconds. Events start disabled;
-call `Run` or set `Enabled := True`. `Run` restarts the phase and counters.
-
-The grammar is `@every <integer>ms|s|m|h [fixed-rate|fixed-delay] [limit N]`.
-Keywords are case-insensitive, whitespace before the unit is allowed, and trailing
-`# comments` work. Zero limits mean unlimited. For example,
-`@every 1h fixed-delay limit 3` runs at most three callbacks. Interval parse,
-canonical format, and description helpers live in `maxCron.Plan`;
-`TCronSchedulePlan.Parse`, `Describe`, and `MakePreview` remain cron-only.
-
-Fixed rate is the default: deadlines retain their original phase. The existing
-misfire policies skip overdue intervals, fire the latest occurrence once, or
-catch up in bounded batches, paced by one interval. An occurrence less than one
-interval late is on time, including under `mpSkip`. Fixed delay schedules the next
-start one full interval after the final callback attempt finishes. Use
-`AddInterval(..., ivFixedDelay)` or the plan keyword. Callback errors, rejected
-dispatches, and overlap skips complete through the same re-arm path. Stop, delete,
-or shutdown cancellation ends the event. Existing overlap, retry, execution-limit,
-and global callback-cap policies also apply to intervals.
-
-Query `IMaxCronIntervalEvent` with `Supports` for the read-only `IsInterval`,
-`IntervalMs`, and `IntervalMode` properties. Change intervals through `EventPlan`.
-`NextSchedule` projects the monotonic deadline onto local wall time and is zero
-while a fixed-delay callback is in flight or the event is disabled. `LastExecution`
-projects the fired occurrence, rather than the callback completion. Plans and
-projected deadlines round-trip through the existing schedule store. A restored
-future deadline is clamped to one interval; past deadlines follow the misfire policy.
-
-`ValidFrom` and `ValidTo` apply. Time zones, DST, dialect, day matching, weekdays,
-excluded dates, blackout windows, and cron jitter have no scheduling effect on
-intervals; their values are retained and can be changed without restarting the phase.
-Wall-clock changes do not move interval deadlines. Elapsed time across system
-sleep follows the platform's monotonic clock; QPC sleep behavior is unverified.
-
-For millisecond intervals use `ctPortable` with `imTTask`, or `imThread` with
-`MAXCRON_THREAD_DISPATCH_POOL=1`. `imMainThread` and `ctVcl` add message-queue
-latency. The default invoke mode is `imMainThread`, which needs a message pump in
-console hosts too. Typical wait resolution is about 1 ms with high-resolution
-timers, 1-2 ms with the timer-period fallback, and 15.6 ms with system defaults.
-Shorter intervals follow their misfire policy or arrive in catch-up bursts.
-Windows power throttling and background/minimized applications can coarsen waits;
-the scheduler does not promise hard real-time precision. The accepted 1 ms minimum
-interval does not guarantee delivery of every occurrence, even with high-resolution
-waits. The interval benchmark observed missed occurrences under load at 1 ms;
-10 ms and 100 ms runs had no missed occurrences on the measured host.
-
-Consumers listing units explicitly must include `maxCron.Internal.DeadlineQueue.pas`.
-Run `--mode=interval --interval-ms=10 --fires=500` with a Release build to measure
-interval lateness and process CPU. See the [Linux x86_64 benchmark](#linux-x86_64-benchmark)
-for due-slot accounting and pass criteria.
+Building, testing and benchmarking maxCron itself is described in [DEVELOPMENT.md](DEVELOPMENT.md).
+Release notes are in [CHANGELOG.md](CHANGELOG.md).
